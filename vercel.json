@@ -26,6 +26,12 @@
       "has": [{ "type": "host", "value": "huskekurv.vercel.app" }],
       "destination": "https://huskis.no/:path*",
       "statusCode": 308
+    },
+    {
+      "source": "/oauth/consent",
+      "has": [{ "type": "query", "key": "authorization_id", "value": "(?<authorization_id>.*)" }],
+      "destination": "https://www.slaids.no/oauth/consent?authorization_id=:authorization_id",
+      "permanent": false
     }
   ],
   "headers": [

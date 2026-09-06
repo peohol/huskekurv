@@ -73,6 +73,37 @@ peker til `huskis.no`, som da ikke fant den. Med 308-en kan ingen bruker
 lenger STARTE en auth-flyt på et alternativt domene, og hele flyten skjer på
 ett origin med én lokal tilstand.
 
+## Én videresending som ikke kanoniserer: `/oauth/consent`
+
+Supabase-prosjektet er delt med Slaids, og Supabase bygger adressen til
+OAuth-samtykkesiden av **Site URL + Authorization Path** — altså
+`https://huskis.no/oauth/consent?authorization_id=…`, siden Site URL er
+Huskis'. Huskis har ingen slik side; Slaids har. Derfor har `vercel.json` én
+regel til, som ikke er en kanonisering:
+
+```json
+{
+  "source": "/oauth/consent",
+  "has": [{ "type": "query", "key": "authorization_id", "value": "(?<authorization_id>.*)" }],
+  "destination": "https://www.slaids.no/oauth/consent?authorization_id=:authorization_id",
+  "permanent": false
+}
+```
+
+- Gjelder KUN pathen `/oauth/consent`, og bare når `authorization_id` er med —
+  den er hele forespørselen, og uten den er det ingenting å samtykke til.
+  Parameteren settes eksplisitt inn i målet, så den kommer fram uansett hva
+  plattformen gjør med spørrestrenger på egen hånd.
+- **307** (`permanent: false`), ikke 308: videresendingen skal aldri caches som
+  permanent i nettleseren.
+- Ikke bundet til en host, for det er nettopp `huskis.no` den skal gjelde på;
+  de alternative domenene har allerede svart 308 til `huskis.no` før den slår
+  inn. `tests/canonical-origin.test.js` holder den adskilt fra
+  kanoniseringsreglene, som fortsatt hver er bundet til nøyaktig én host.
+- Ryker den, slutter Slaids' OAuth-samtykke å virke, og ingenting i Huskis
+  endres. Site URL flyttes ikke — det er den som holder Huskis' egne
+  auth-lenker hjemme.
+
 ## To separate e-postsystemer
 
 Huskis sender e-post fra to helt uavhengige systemer — ikke bland dem sammen:

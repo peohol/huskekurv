@@ -91,8 +91,31 @@ check('vercel.json: ingen regel redirecter huskis.no selv (evig løkke)',
   !byHost.has('huskis.no'), [...byHost.keys()]);
 check('vercel.json: preview-deployenes egne verter er urørt',
   ![...byHost.keys()].some((h) => /-peohols-projects\.vercel\.app$/.test(h)), [...byHost.keys()]);
-check('vercel.json: hver redirect-regel er bundet til nøyaktig én host',
-  redirects.every((r) => ruleHost(r) !== null), redirects.map((r) => r.has));
+// Kanoniseringsreglene flytter HELE pathen (`/:path*`), og hver av dem er bundet
+// til nøyaktig én host — en regel uten host-vilkår ville flyttet huskis.no selv.
+const canonicalising = redirects.filter((r) => r.source === '/:path*');
+check('vercel.json: hver kanoniseringsregel er bundet til nøyaktig én host',
+  canonicalising.every((r) => ruleHost(r) !== null), canonicalising.map((r) => r.has));
+
+// Den ene regelen som IKKE kanoniserer: Supabase sender Slaids' OAuth-samtykke
+// til Site URL (huskis.no) + /oauth/consent, og Huskis sender forespørselen
+// videre til Slaids med authorization_id i behold (docs/domains-and-urls.md).
+// Den er bundet til den ene pathen og til query-parameteren — aldri til en host,
+// for det er nettopp huskis.no den skal gjelde på — og aldri til `/:path*`.
+const handoffs = redirects.filter((r) => r.source !== '/:path*');
+check('vercel.json: den eneste regelen utenom kanoniseringen er OAuth-samtykket → Slaids',
+  handoffs.length === 1 && handoffs[0].source === '/oauth/consent', handoffs.map((r) => r.source));
+const consent = handoffs[0] || {};
+const consentHas = Array.isArray(consent.has) ? consent.has : [];
+check('vercel.json: /oauth/consent videresendes bare når authorization_id er med',
+  consentHas.length === 1 && consentHas[0].type === 'query' && consentHas[0].key === 'authorization_id'
+    && /^\(\?<authorization_id>/.test(String(consentHas[0].value)), consent.has);
+check('vercel.json: /oauth/consent → Slaids\' samtykkeside med authorization_id i behold',
+  consent.destination === 'https://www.slaids.no/oauth/consent?authorization_id=:authorization_id',
+  consent.destination);
+check('vercel.json: /oauth/consent-videresendingen er midlertidig (307), aldri cachet som permanent',
+  consent.permanent === false && consent.statusCode === undefined,
+  { permanent: consent.permanent, statusCode: consent.statusCode });
 
 /* ================= B) Guarden i index.html ================= */
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
