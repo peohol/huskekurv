@@ -342,8 +342,23 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   klipper ved padding-boksen, så en klipping på platen selv ville latt den
   fjerde linjen stå synlig i bunnpolstringen. Hele kortet er klikkflate og
   dra-sone, så det har pekehånd og `:focus-visible`-ring.
+- `.seg` + `.seg-btn`: den GENERELLE segmenterte pillen. `.main-tabs` over er
+  den store bruken av formen; `.seg` er den samme flaten i liten størrelse, og
+  søkets scopevelger (`Alt | Lister | Notater`) er første kaller. Samme aktive
+  flate (kortflate + tyngre skrift + skygge) og samme `tablist`-semantikk med
+  piltaster. Trenger noe annet et to- eller tredelt valg, er det denne som
+  gjenbrukes — ikke en ny knapperad.
 - `.trashcan`: ALLE søppelkasse-knapper — hvit avrundet beholder, antall i grå
-  sirkel (`.trashcan-count`), **skjult (`hidden`) når tom**.
+  sirkel (`.trashcan-count`), **skjult (`hidden`) når tom**. ARKIVET
+  ([`notater-plan.md`](notater-plan.md)) er den SAMME knappen med arkivikonet:
+  ingen egen knappestil for en knapp som gjør det samme et annet sted.
+- `.link-row` + `.link-open` + `.link-remove`: raden i koblingsmodalen —
+  `[typeikon] navn + kontekststi` med en ✕ til høyre. Den er bygget som
+  søkeresultatraden (navnet i sin helhet, aldri kappet med ellipsis; stien
+  dempet under), fordi det er nøyaktig samme oppgave: kjenne igjen ETT objekt
+  blant flere med samme navn. Et mål som ikke lenger er tilgjengelig får
+  `.is-gone` og en avskrudd knapp — raden skal kunne ses og fjernes, ikke
+  forsvinne.
 - `.corner-controls` + `.corner-btn`: toppkontrollgruppen i øvre høyre hjørne
   (varsler, kalender, søk, drakt, konto). ÉN fast flex-gruppe med
   flate-mønsteret på hver knapp;

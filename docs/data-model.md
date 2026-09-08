@@ -35,12 +35,15 @@ state = {
   ideas: [ { id, text, cat, isCat, collapsed, trashed } ],  // KONTOENS idéer, flatt — se docs/ideer.md
   // NOTATER (docs/notater-plan.md): kontoens andre hoveddel, Bokhylle > Notatbok > Notat
   // (identifikatorene heter fortsatt note_projects/note_folders — se planen)
-  noteProjects: [ { id, name, trashed, collapsed, folders: [ { id, project, name, trashed } ] } ],
-  notes: [ { id, project, folder, title, doc, trashed } ], // folder = null → fritt notat i bokhyllen
+  noteProjects: [ { id, name, trashed, archived, collapsed, folders: [ { id, project, name, trashed, archived } ] } ],
+  notes: [ { id, project, folder, title, doc, trashed, archived } ], // folder = null → fritt notat i bokhyllen
+  // KOBLINGER mellom de to hoveddelene (docs/notater-plan.md), flatt: én rad
+  // per relasjon, med (type, id) på hver side. Ingen mutable felter.
+  links: [ { id, noteType, noteId, listType, listId } ],
   activeProject: <projId>, activeFolder: <folderId|null>,  // aktiv posisjon i Notater (per enhet)
   activeFolders: { projId: folderId|null },                // per enhet: sist aktive notatbok per bokhylle
   _tomb: { universes:{}, groups:{}, cards:{}, items:{}, ideas:{},
-           noteProjects:{}, noteFolders:{}, notes:{} },    // gravsteiner: id → ts (permanent slettet)
+           noteProjects:{}, noteFolders:{}, notes:{}, links:{} }, // gravsteiner: id → ts (permanent slettet)
   _base: { universes:[], groups:[], cards:[], items:[] }, // synk-base: forrige serverkjente doc
   _baseV: 1,                                              // basens versjon (BASE_VERSION)
 }
@@ -79,6 +82,24 @@ innholdsregisteret som ÉN verdi — konfliktmodellen er altså per DOKUMENT.
 Notatene deles ikke, har ingen roller, låser eller kategorier, og
 `activeProject`/`activeFolder` huskes per enhet (og på kontoen, se under).
 Autoritativt: [`notater-plan.md`](notater-plan.md).
+
+**TO UAVHENGIGE TILSTANDER PÅ HVERT NOTATNIVÅ.** `trashed` er søppelkassen —
+den samme som på de fire listenivåene ([`trash.md`](trash.md)) — og `archived`
+er ARKIVET: objektet er levende innhold som bare er lagt til side. Begge rir på
+INNHOLDS-registeret (`ts`/`org`), og de kan stå samtidig: et arkivert notat kan
+legges i søppelkassen og komme tilbake til arkivet det lå i. Normalvisningen
+viser det som verken er det ene eller det andre; flaggene ARVES IKKE nedover
+(en bortlagt bokhylle skjuler notatbøkene og notatene sine uten å flagge dem,
+som en slettet mappe skjuler listene sine).
+
+**`links` står også utenfor hierarkiet.** En kobling er en RELASJON mellom ett
+objekt på notatsiden (`noteProject`/`noteFolder`/`note`) og ett på listesiden
+(`universe`/`group`/`card`) — mange-til-mange begge veier. Den flytter
+ingenting og eier ingenting: begge objektene beholder foreldrene sine. Raden har
+ingen mutable felter, så den finnes eller den finnes ikke; konflikter avgjøres
+av gravsteinene, ikke av et register. I databasen er hver side sin egen
+fremmednøkkel med `on delete cascade`, så en kobling til et objekt som slettes
+for godt forsvinner av seg selv — det finnes ingen hengende koblinger å rydde.
 
 **`ideas` står UTENFOR hierarkiet.** Idéene hører til kontoen, ikke til et
 område eller en mappe, så de har ingen forelder-peker — bare `cat` innen sin

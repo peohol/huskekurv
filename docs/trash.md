@@ -1,12 +1,12 @@
-# Søppelkasser (områder / mapper / lister / listepunkter / idéer)
+# Søppelkasser (områder / mapper / lister / listepunkter / idéer / notater)
 
 Les denne når oppgaven berører sletting, gjenoppretting, eller tømming på et
-hvilket som helst av de fire nivåene — eller for idéene.
+hvilket som helst av de fire nivåene — eller for idéene og notatene.
 
-Fem kasser, samme knapp (`.trashcan`: hvit beholder, søppelkasse-SVG + antall i
+Åtte kasser, samme knapp (`.trashcan`: hvit beholder, søppelkasse-SVG + antall i
 grå sirkel) og samme oppførsel; **alle vises kun når de har innhold** (`hidden`)
-— ELLER, for de fire hierarkinivåene, når et drag på det nivået pågår (se
-under):
+— ELLER, for hierarkinivåene og de tre notatnivåene, når et drag på det nivået
+pågår (se under):
 
 - **Områder**: nederst i nav-modalen, ved siden av «＋ [område-ikon]».
 - **Mapper**: i hvert OMRÅDE-KORT i nav-modalen (`.group-trash-btn`) — akkurat
@@ -14,6 +14,12 @@ under):
 - **Lister**: i toppmenyens listefunksjons-rad (per aktiv mappe).
 - **Listepunkter**: midtstilt nederst i hvert listekort (`ICONS.trash`, samme
   SVG som de statiske knappene — aldri emoji).
+- **Notater**: i notatfanens topplinje (`#note-trash-btn`), per aktiv
+  plassering — nøyaktig som liste-kassen står i den aktive mappen.
+- **Notatbøker**: i hvert BOKHYLLEKORT i notat-nav-modalen
+  (`.note-folder-trash-btn`) — som mappe-kassen i et områdekort.
+- **Bokhyller**: i notat-nav-modalens egen fot (`#note-project-trash-btn`) —
+  som område-kassen.
 - **Idéer**: i idémodalens fot (`#idea-trash-btn`) — én kasse for hele kontoen,
   siden idéene ikke ligger i noe hierarki ([`ideer.md`](ideer.md)). Den er den
   ene som **ikke er et slippmål**: idéer slettes med sletteknappen på raden, så
@@ -26,9 +32,10 @@ må finnes for at et drag skal kunne vise den fram — se under.
 
 ## Slett ved å DRA objektet i kassen
 
-**Dette er den ene slettegesten** på de fire hierarkinivåene, og den er lik på
-desktop og mobil (idéene er unntaket — se over: der er sletteknappen på raden
-den ene veien):
+**Dette er den ene slettegesten** på de fire hierarkinivåene og de tre
+notatnivåene, og den er lik på desktop og mobil (idéene er unntaket — se over:
+der er sletteknappen på raden den ene veien). Objektmenyens «Slett …» går til
+nøyaktig den samme funksjonen:
 
 1. Løft objektet (trykk-og-hold på touch, dra på mus — samme motor som all annen
    flytting, `docs/drag-and-drop.md`). Kassen for NIVÅET dukker opp med én gang
@@ -55,7 +62,13 @@ Detaljer som er lette å bryte:
   kjøres, så objektet ikke også blir omrokkert eller overført.
 - **Uten slette-rett vises ingen kasse.** `draggedCanBeTrashed()` bruker de
   samme capabilities som objektmenyens «Slett»-rad og feiler LUKKET — man kan
-  ikke sikte på noe serveren ville avvist.
+  ikke sikte på noe serveren ville avvist. Notatene har ingen lås å spørre om:
+  de hører til kontoen alene, så der armes kassen så snart objektet finnes.
+- **Kassen må ligge under board-ets ROT for å bli registrert som sone.** Både
+  liste-kassen og notat-kassen står i TOPPLINJA, utenfor selve board-et, så de
+  to board-ene har `document.body` som rot (selektorene er fortsatt scopet).
+  Ligger roten for trangt, måles sonen aldri, og slippet blir en helt vanlig
+  omrokkering uten et eneste signal.
 - **KATEGORIER har ingen kasse.** En kategori slettes ikke, den LØSES OPP
   (listepunktene blir stående), og det gjøres fra objektmenyen. Et kategori-drag
   armer derfor ingenting.
@@ -72,6 +85,55 @@ Detaljer som er lette å bryte:
   og pinner til bunnen hvis man sto der.
 
 Regresjonstest: `tests/dnd-trash.test.js`.
+
+## Notatene har BÅDE et arkiv og en søppelkasse
+
+Notatsiden ([`notater-plan.md`](notater-plan.md)) har to bortleggingsmåter på
+alle tre nivåene — bokhylle, notatbok og notat:
+
+| | Hva det betyr | Vei tilbake | Vei videre |
+|---|---|---|---|
+| **Arkiver** (`archived`) | lagt til side; fortsatt levende innhold | «Hent ut av arkivet» | «Slett» → søppelkassen |
+| **Slett** (`trashed`) | i søppelkassen | «Gjenopprett» | hold-og-sveip → borte for godt |
+
+De to er UAVHENGIGE tilstander på den samme raden, begge på innholdsregisteret:
+et arkivert notat kan legges i søppelkassen og komme tilbake til arkivet det lå
+i. Arkivet er ikke destruktivt, så det har verken angre-toast, buffer eller
+hold-og-sveip — veien tilbake er arkivknappen som står rett ved siden av.
+
+**Arkivet låner søppelkassens modal.** Det er den samme `showTrashModal`, den
+samme raden og den samme foten — bare et annet ikon i hodet, en «Slett»-knapp
+ved siden av «Hent ut av arkivet» på hver rad, og en fot som legger ALT i
+søppelkassen i stedet for å slette for godt (og derfor ikke er rød). En egen
+arkivmodal ville vært en ny modaltype for nøyaktig den samme interaksjonen.
+
+**Flaggene arves ikke nedover.** Legges en bokhylle bort, forsvinner
+notatbøkene og notatene med henne uten å bli flagget — akkurat som listene
+forsvinner med en slettet mappe — og de kommer tilbake slik de sto. Derfor er
+hver kasse og hvert arkiv SCOPET til en levende forelder (notat-kassen til
+plasseringen man står i, notatbok-kassen til bokhyllen sin), så en
+gjenoppretting alltid gjør objektet synlig igjen. Et notat i en bortlagt
+notatbok blir heller ikke et fritt notat: det følger notatboken ut av
+visningen.
+
+**Tømmingen er det ene stedet hierarkiet er rekursivt**, og den følger
+databasens kaskader nøyaktig:
+
+- **Bokhylle** → gravstein på bokhyllen, notatbøkene OG notatene
+  (`notes.project_id` er `on delete cascade`; et notat uten bokhylle finnes
+  ikke).
+- **Notatbok** → gravstein på notatboken ALENE. Notatene blir frie notater i
+  bokhyllen (`notes.folder_id` er `on delete set null`), og en toast sier fra.
+  Et notat er et dokument brukeren har skrevet; notatboken er hylla det sto i,
+  og den skal ikke kunne rive med seg noe som aldri ble slettet.
+- **Notat** → gravstein på notatet.
+
+Koblingene til det som tømmes ([`notater-plan.md`](notater-plan.md)) går med i
+samme slengen — både lokalt og på serveren, der fremmednøklene kaskaderer dem
+bort med hver sin gravstein.
+
+Regresjonstest: `tests/notes-lifecycle-links.test.js` og
+`supabase/tests/test-note-links.sql`.
 
 ## Slette-animasjonen («pakk sammen og fly i søpla»)
 

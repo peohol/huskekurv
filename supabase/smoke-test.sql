@@ -54,7 +54,7 @@ declare
 begin
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes',
+    'note_projects', 'note_folders', 'notes', 'object_links',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs',
     'push_subscriptions', 'push_deliveries', 'device_sessions',
@@ -113,17 +113,26 @@ begin
     -- Notater (docs/notater-plan.md): Prosjekt > Mappe > Notat, kontoens egne
     -- rader. `folder_id` er null for et fritt notat rett i prosjektet.
     'note_projects:id', 'note_projects:owner_id', 'note_projects:name',
-    'note_projects:collapsed', 'note_projects:trashed',
+    'note_projects:collapsed', 'note_projects:trashed', 'note_projects:archived',
     'note_projects:ts', 'note_projects:org',
     'note_projects:pos', 'note_projects:pos_ts', 'note_projects:pos_org',
 
     'note_folders:id', 'note_folders:owner_id', 'note_folders:project_id',
-    'note_folders:name', 'note_folders:trashed', 'note_folders:ts', 'note_folders:org',
+    'note_folders:name', 'note_folders:trashed', 'note_folders:archived',
+    'note_folders:ts', 'note_folders:org',
     'note_folders:pos', 'note_folders:pos_ts', 'note_folders:pos_org',
 
     'notes:id', 'notes:owner_id', 'notes:project_id', 'notes:folder_id',
-    'notes:title', 'notes:body', 'notes:trashed', 'notes:ts', 'notes:org',
+    'notes:title', 'notes:body', 'notes:trashed', 'notes:archived',
+    'notes:ts', 'notes:org',
     'notes:pos', 'notes:pos_ts', 'notes:pos_org',
+
+    -- Koblinger Lister <-> Notater: én fremmednøkkel per koblingsbar type,
+    -- nøyaktig én satt per side (docs/notater-plan.md).
+    'object_links:id', 'object_links:owner_id',
+    'object_links:note_project_id', 'object_links:note_folder_id', 'object_links:note_id',
+    'object_links:universe_id', 'object_links:group_id', 'object_links:card_id',
+    'object_links:ts', 'object_links:org',
 
     'memberships:id', 'memberships:user_id', 'memberships:universe_id',
     'memberships:group_id', 'memberships:role', 'memberships:pos',
@@ -206,7 +215,7 @@ declare
 begin
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes',
+    'note_projects', 'note_folders', 'notes', 'object_links',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs',
     'push_subscriptions', 'push_deliveries', 'device_sessions',
@@ -251,6 +260,8 @@ begin
     'note_folders:note_folders_update', 'note_folders:note_folders_delete',
     'notes:notes_select', 'notes:notes_insert',
     'notes:notes_update', 'notes:notes_delete',
+    'object_links:object_links_select', 'object_links:object_links_insert',
+    'object_links:object_links_delete',
     'memberships:memberships_select', 'memberships:memberships_update',
     'memberships:memberships_delete',
     'share_invites:share_invites_select', 'share_invites:share_invites_delete',
@@ -416,7 +427,7 @@ begin
              coalesce(p.qual, '') || ' ' || coalesce(p.with_check, '') as txt
         from pg_policies p
        where p.schemaname = 'public'
-         and p.tablename in ('note_projects', 'note_folders', 'notes')
+         and p.tablename in ('note_projects', 'note_folders', 'notes', 'object_links')
     )
     select navn from uttrykk
      -- antall `auth.uid()` i det hele tatt  vs.  antall som står i et subselect
@@ -459,6 +470,7 @@ begin
     'note_projects:note_projects_insert_guard',
     'note_folders:note_folders_insert_guard', 'notes:notes_insert_guard',
     'notes:notes_parent_guard', 'note_folders:note_folders_cascade',
+    'object_links:object_links_tombstone', 'object_links:object_links_insert_guard',
     'universes:universes_owner_seed', 'groups:groups_owner_seed',
     'memberships:memberships_guard', 'memberships:memberships_last_owner_guard',
     'share_invites:on_share_invite_created'
@@ -492,6 +504,13 @@ begin
       feil := array_append(feil, 'authenticated mangler CRUD på public.' || t);
     end if;
   end loop;
+  -- object_links har ingen mutable felter: SELECT/INSERT/DELETE, aldri UPDATE.
+  if not has_table_privilege('authenticated', 'public.object_links', 'SELECT, INSERT, DELETE') then
+    feil := array_append(feil, 'authenticated mangler SELECT/INSERT/DELETE på public.object_links');
+  end if;
+  if has_table_privilege('authenticated', 'public.object_links', 'UPDATE') then
+    feil := array_append(feil, 'authenticated HAR UPDATE på public.object_links (skal være trukket tilbake)');
+  end if;
   if not has_table_privilege('authenticated', 'public.profiles', 'SELECT') then
     feil := array_append(feil, 'authenticated mangler SELECT på public.profiles');
   end if;
@@ -600,7 +619,7 @@ begin
   -- anon skal ikke se noe som helst.
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes',
+    'note_projects', 'note_folders', 'notes', 'object_links',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs', 'push_subscriptions', 'push_deliveries',
     'device_sessions', 'native_notif_devices'
@@ -633,7 +652,8 @@ begin
   end if;
   foreach t in array array[
     'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes', 'memberships', 'share_invites'
+    'note_projects', 'note_folders', 'notes', 'object_links',
+    'memberships', 'share_invites'
   ] loop
     select count(*) into n from pg_publication_tables
      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t;
@@ -645,7 +665,7 @@ begin
     perform set_config('huskis.smoke_feil',
       current_setting('huskis.smoke_feil', true) || array_to_string(feil, E'\n') || E'\n', false);
   else
-    raise notice '  ✓ alle ti tabellene er i supabase_realtime';
+    raise notice '  ✓ alle elleve tabellene er i supabase_realtime';
   end if;
 end $$;
 

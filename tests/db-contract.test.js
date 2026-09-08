@@ -65,10 +65,10 @@ check('fant TABLE-mappingen i app.js', !!tableMatch);
 const tabeller = tableMatch
   ? [...tableMatch[1].matchAll(/:\s*'([a-z_]+)'/g)].map((m) => m[1])
   : [];
-// Åtte radtyper: de fire hierarkinivåene, idéene (docs/ideer.md) og de tre
-// notatnivåene (docs/notater-plan.md) — de tre siste henger på kontoen, ikke i
-// hierarkiet.
-check('TABLE-mappingen har åtte radtyper', tabeller.length === 8, tabeller.join(', '));
+// Ni radtyper: de fire hierarkinivåene, idéene (docs/ideer.md), de tre
+// notatnivåene og koblingene mellom de to hoveddelene (docs/notater-plan.md).
+// Alt annet enn hierarkinivåene henger på kontoen, ikke i treet.
+check('TABLE-mappingen har ni radtyper', tabeller.length === 9, tabeller.join(', '));
 for (const t of tabeller) {
   check("smoke-testen sjekker tabellen «" + t + "»",
     new RegExp("'" + t + "'").test(smoke));
@@ -78,7 +78,7 @@ for (const t of tabeller) {
 const rtMatch = app.match(/\[([^\]]*)\]\.forEach\(\(t\) => \{\s*cloudChan\.on\('postgres_changes'/);
 check('fant realtime-tabellisten i app.js', !!rtMatch);
 const rtTabeller = rtMatch ? [...rtMatch[1].matchAll(/'([a-z_]+)'/g)].map((m) => m[1]) : [];
-check('realtime-listen har ti tabeller', rtTabeller.length === 10, rtTabeller.join(', '));
+check('realtime-listen har elleve tabeller', rtTabeller.length === 11, rtTabeller.join(', '));
 
 const rtSeksjon = smoke.slice(smoke.indexOf('8. Realtime-publikasjon'),
                               smoke.indexOf('9. Virker det?'));

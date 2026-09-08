@@ -408,9 +408,26 @@ eller telles med når rekkefølgen leses tilbake fra DOM-en
 ([`drag-and-drop.md`](drag-and-drop.md)). Den aktive plasseringen bærer
 `.is-active`.
 
-Det som IKKE finnes her, er med vilje (PR 1, [`notater-plan.md`](notater-plan.md)):
-ingen objektmeny, ingen deling, ingen låser, ingen kategorier og ingen
-søppelkasse. Arkiv, sletting og gjenoppretting kommer i PR 2.
+Bokhyllen, notatboken og notatkortet har den SAMME objektmenyen som resten av
+appen (`.obj-menu-btn` → `#obj-menu`), med de radene notatsiden faktisk har:
+
+| # | Rad | Gjelder |
+|---|---|---|
+| 1 | **Endre navn** | alle tre (i editoren peker den på tittelfeltet) |
+| 2 | **Flytt** ▸ | alle tre (opp/ned; notatsiden har ingen «Flytt til …») |
+| 3 | **Koblinger** | alle tre — åpner koblingsmodalen, med antallet som hint |
+| 4 | **Arkiver** / **Hent ut av arkivet** | alle tre |
+| 5 | **Slett …** | alle tre (til søppelkassen, i rødt og sist) |
+
+Notatet har menyen både på kortet og i editorens verktøylinje (`#note-menu-btn`),
+så et åpent notat ikke er en blindvei. Deling, låser og kategorier finnes
+fortsatt ikke her — notatene hører til kontoen alene
+([`notater-plan.md`](notater-plan.md)).
+
+**Kassene og arkivene** speiler listenes: notat-kassen og -arkivet står i
+notatfanens topplinje (per plassering), notatbokens i bokhyllekortet, og
+bokhyllens i modalens egen fot. Alle er `.trashcan` og vises kun når de har
+innhold — kassene også når et drag på nivået pågår ([`trash.md`](trash.md)).
 
 ## Konto-modalen (`#account-modal`, kontoknappen)
 

@@ -38,13 +38,16 @@ er hvilket state-tre man slår opp i (`boardScope` / `navScope` / `ideaScope` /
 | `boardCardBoard` | `#board .card` (lister) | `#board .board-col` | `.card-head` | `#trash-btn`, `#nav-crumb` |
 | `boardRowBoard` | `.items-container > .item`, `.items-container > .category`, `.cat-items > .item` | `.items-container`, `.cat-items` | `.item`, `.cat-head` | `.item-trash-btn` |
 | `ideaRowBoard` | de samme radene, i idémodalen | `.items-container`, `.cat-items` | `.item`, `.cat-head` | `.item-trash-btn` |
-| `notesCardBoard` | `#notes-board .note-card` (notater) | `#notes-board .board-col` | `.note-card` (hele kortet) | ingen |
-| `notesNavCardBoard` | `#notes-nav-board .card` (bokhyller) | `#notes-nav-board .board-col` | `.card-head` | ingen |
-| `notesNavRowBoard` | `#notes-nav-board .item` (notatbøker) | `#notes-nav-board .items-container` | `.item` | ingen |
+| `notesCardBoard` | `#notes-board .note-card` (notater) | `#notes-board .board-col` | `.note-card` (hele kortet) | `#note-trash-btn` |
+| `notesNavCardBoard` | `#notes-nav-board .card` (bokhyller) | `#notes-nav-board .board-col` | `.card-head` | `#note-project-trash-btn` |
+| `notesNavRowBoard` | `#notes-nav-board .item` (notatbøker) | `#notes-nav-board .items-container` | `.item` | `.note-folder-trash-btn` |
 
-**Notat-scopene er de enkleste.** Ingen kategorier, ingen låser, ingen
-ekstrahering og — i PR 1 — ingen søppelkasse, så det eneste et slipp kan bety er
-ny plass i rekka (og for en notatbok i tillegg en ny bokhylle). NOTATKORTET
+**Notat-scopene er de enkleste.** Ingen kategorier, ingen låser og ingen
+ekstrahering, så et slipp kan bety to ting: ny plass i rekka (for en notatbok i
+tillegg en ny bokhylle), eller SLETTING når det lander i kassen. Kassene er de
+samme sonene som på listesiden ([`trash.md`](trash.md)), og siden notatene hører
+til kontoen alene, er det ingen myndighet å spørre om — kassen armes så snart
+objektet finnes. NOTATKORTET
 er sin egen dra-sone i sin helhet: kortet har ingen indre kontroller å treffe, så
 klikk åpner editoren og klikk-og-hold løfter — dnd-kits egen aktiveringsterskel
 skiller de to, og klikk-vakten svelger klikket som ellers ville fulgt et slipp.
@@ -92,6 +95,13 @@ registeret — to board som registrerer det samme elementet kjemper om det.
 `boardRowBoard` har `board` som rot (element-kassene ligger inne i kortene), og
 nav-board-ene har HELE nav-modalen (område-kassen ligger i modalens egen fot,
 utenfor både `#nav-board` og modalens rullende kropp).
+
+`notesCardBoard` er det samme tilfellet som `boardCardBoard`: notat-kassen står
+i TOPPLINJA, så roten er `document.body` og selektorene er scopet til
+`#notes-board`. Notat-nav-board-ene har hele `#notes-nav-modal` (bokhylle-kassen
+ligger i modalens egen fot; notatbok-kassen inne i bokhyllekortet). Ligger roten
+for trangt, blir sonen aldri MÅLT, og et slipp i kassen leses som en helt
+vanlig omrokkering — uten et eneste signal om at noe gikk galt.
 
 **Dra-tilstandene males på `.dnd-surface`.** Hver dra-rot — nøyaktig de
 elementene `scope.root` peker på (`#board`, `#notes-board`, `#nav-board`,

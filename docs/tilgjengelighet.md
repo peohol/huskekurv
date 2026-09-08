@@ -158,6 +158,15 @@ alltid ja der: notatene er kontoens egne, det finnes ingen lås å spørre om).
 Bokhyllehodet er et trekkspill som områdekortets: `Enter`/`Mellomrom` åpner og
 lukker den, og `aria-expanded` sier hvilken tilstand den står i. Raden «Frie
 notater» er en vanlig `role="button"`-rad som fører til bokhyllens egen plass.
+
+Alle tre notatnivåene har den samme objektmenyen som resten av appen — samme
+knapp, samme `role="menu"` og samme piltaster — så «Arkiver», «Koblinger» og
+«Slett» nås uten en eneste ny gest. Notat-kassene og -arkivene er vanlige
+knapper med et navn som TELLER («3 slettede notater»), ikke bare et tall, og de
+er skjult når de er tomme: en knapp som ikke gjør noe skal heller ikke stå i
+tabbrekkefølgen. Koblingsmodalen er en vanlig modal med to lister av knapper —
+en kobling til et mål som ikke er tilgjengelig er en AVSKRUDD knapp med en
+forklaring, ikke en rad som forsvinner.
 Notatkortets håndtak er hele kortet — det er også dra-sonen — og `Enter`/
 `Mellomrom` åpner editoren, så `F2` er ikke bundet der: tittelen redigeres i
 editoren.
@@ -203,7 +212,12 @@ valglister: **antallet treff** må leses opp et sted (et visuelt skjult
 søket bærer ikonet typen visuelt og den aktive raden har en pilspiss ved siden
 av kanten og flaten. Typen er likevel ikke borte for skjermleseren: den ligger
 i et `.visually-hidden`-spenn i raden, siden ikonet er `aria-hidden`.
-Autoritativt for resten av søket: `sok-og-navigering.md`.
+
+**Scopevelgeren over lista er en `tablist`**, akkurat som hovedbryteren:
+`role="tablist"`/`role="tab"` med `aria-selected`, venstre/høyre piltast bytter,
+og bare den aktive knappen er i tabbrekkefølgen. Den aktive halvdelen bæres av
+flate og skriftvekt, ikke av farge alene. Autoritativt for resten av søket:
+`sok-og-navigering.md`.
 
 ## Lister man bare trykker i (hendelsesradene)
 
