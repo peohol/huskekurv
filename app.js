@@ -4800,7 +4800,7 @@
     // rebuild har satt inn ferske noder). Å sette den inn igjen ville gitt et
     // spøkelses-duplikat — vi lar den ligge død.
     if (el.isConnected && drag.origParent) drag.origParent.insertBefore(el, drag.origNext);
-    el.classList.remove('to-group', 'to-trash');
+    el.classList.remove('to-group', 'to-trash', 'to-archive');
   }
 
   // Ved slipp: gjenopprett hver liste til sin lagrede lukketilstand (momentant).
@@ -5264,10 +5264,68 @@
     const btn = dragTrashBtn();
     if (!btn) return;
     drag.trashArmed = true;
+    revealCan(btn);
+  }
+  // Fold ut EN kasse for draget: knappen selv (topplinja) eller raden rundt den
+  // (kort/områdekort/modalfot). `data-drag-revealed` husker at det var VI som
+  // avdekket den — se `hideRevealedTrash` og `disarmDragTrash`.
+  function revealCan(btn) {
     btn.classList.add('drag-trash');
     if (btn.hidden) { btn.hidden = false; btn.dataset.dragRevealed = '1'; }
     const wrap = btn.closest('.item-trash');
     if (wrap && wrap.hidden) { wrap.hidden = false; wrap.dataset.dragRevealed = '1'; }
+  }
+
+  /* ARKIVET ER NOTATSIDENS ANDRE KASSE, og under et drag oppfører det seg
+     NØYAKTIG som søppelkassen: det foldes ut i det draget starter (også når det
+     er tomt), lyser opp når man sikter på det, og arkiverer ved slipp. Derfor
+     deles maskineriet — `revealCan`, `disarmDragTrash` og `refreshTrashZones`
+     er felles, og bare TO ting er egne: hvilken knapp draget sikter mot, og hva
+     slippet betyr. Listesiden har ikke noe arkiv; der svarer
+     `dragArchiveBtn()` null, og ingenting armes.
+
+     Retten er den samme som slettingens (`draggedCanBeTrashed`): arkivering er
+     en svakere handling enn sletting, så den som ikke får slette, får heller
+     ikke arkivere ved å dra. */
+  function dragArchiveBtn() {
+    if (!drag.active) return null;
+    const S = dragScope();
+    if (S === notesScope) return noteArchiveBtn;
+    if (S !== notesNavScope) return null;
+    if (drag.kind === 'card') return noteProjectArchiveBtn;
+    const host = drag.trashHost;
+    return host && host.isConnected ? host.querySelector('.note-folder-archive-btn') : null;
+  }
+  function armDragArchive() {
+    drag.overArchive = false;
+    drag.archiveArmed = false;
+    if (!draggedCanBeTrashed()) return;
+    const btn = dragArchiveBtn();
+    if (!btn) return;
+    drag.archiveArmed = true;
+    revealCan(btn);
+  }
+  // Siktemarkering på arkivet + arkivfargen på dra-objektet — samme kantstyrte
+  // mønster som `setDragTrashTarget`, i FARGE og ikke i mer gjennomsikt.
+  function setDragArchiveTarget(on) {
+    on = !!on;
+    if (drag.overArchive === on) return;
+    drag.overArchive = on;
+    const btn = dragArchiveBtn();
+    if (btn) btn.classList.toggle('drop-target', on);
+    if (drag.el) drag.el.classList.toggle('to-archive', on);
+  }
+  // Selve arkiveringen et slipp i arkivet betyr — samme funksjon som menyens
+  // «Arkiver», og med den samme «hold kassen i synsfeltet»-oppfølgingen.
+  function dropIntoArchive(S, kind, id) {
+    if (S === notesScope) { setNoteArchived('note', id, true); keepTrashInView(noteArchiveBtn); return; }
+    if (S !== notesNavScope) return;
+    if (kind === 'card') { setNoteArchived('noteProject', id, true); keepTrashInView(noteProjectArchiveBtn); return; }
+    const f = findNoteFolder(id);
+    const proj = f && f.project;
+    setNoteArchived('noteFolder', id, true);
+    keepTrashInView(notesNavBoard && notesNavBoard.querySelector(
+      '.card[data-id="' + proj + '"] .note-folder-archive-btn'));
   }
   // Skjul igjen kassen (knappen og/eller raden rundt den) VI avdekket. Var den
   // synlig fra før — kassen har innhold — blir den stående: markøren
@@ -5309,7 +5367,7 @@
      nytt hver runde, og også om VERTEN: en container kan bli låst MENS draget
      pågår. Se de tre trinnene i `retargetDragTrash`. */
   function retargetDragTrash() {
-    if (!drag.trashArmed || drag.kind !== 'item') return;
+    if ((!drag.trashArmed && !drag.archiveArmed) || drag.kind !== 'item') return;
     const S = dragScope();
     // Avviser containeren raden (låst, virtuell, uten opprettelsesrett)? Samme
     // svar slippet ville gitt — `*RejectTarget` er autoriteten, her og der.
@@ -5338,16 +5396,22 @@
     // kantstyrt, så et flagg som ble nullstilt bak ryggen på den ville latt
     // objektet stå rødt.
     setDragTrashTarget(false);
+    setDragArchiveTarget(false);
     const forrige = dragTrashBtn();
+    const forrigeArkiv = dragArchiveBtn();
     const forrigeRad = forrige && forrige.closest('.item-trash');
     const lånt = anchorBorrow(() => {
-      if (forrige) forrige.classList.remove('drag-trash', 'drop-target');
+      [forrige, forrigeArkiv].forEach((b) => { if (b) b.classList.remove('drag-trash', 'drop-target'); });
       drag.trashHost = host;
       armDragTrash();
+      // Arkivet står i den SAMME raden som kassen (`.note-folder-cans`), så det
+      // bytter vert i samme åndedrag — ellers ville det blitt liggende igjen i
+      // bokhylla draget forlot.
+      armDragArchive();
       // Raden draget forlot forsvinner helt — den holder ingen plass. Kortet
       // krymper med en knapperad, men DRA-ANKERET absorberer det, så verken det
       // man svever over eller terskelen inn i det flytter seg.
-      hideRevealedTrash(forrige, forrigeRad);
+      hideRevealedTrash(forrige, forrigeArkiv, forrigeRad);
     }, [forrige, host]);
     // Er kassa tilbake i lista draget startet i, er layouten der den var, og
     // lånet gjøres opp (se blokken om lån ved `anchorBorrow`).
@@ -5384,14 +5448,19 @@
      ny-liste-placeholderen blinket inn og ut idet pekeren streifer kanten av
      knappen, og hvert blink flytter kortene under den. */
   const DRAG_TRASH_PAD = 12;
-  function pointerOnDragTrash(x, y) {
-    if (!drag.trashArmed) return false;
-    const btn = dragTrashBtn();
+  function pointerOnCan(x, y, btn) {
     if (!btn || btn.hidden || !btn.isConnected) return false;
     const r = btn.getBoundingClientRect();
     if (!r.width || !r.height) return false;
     return x >= r.left - DRAG_TRASH_PAD && x <= r.right + DRAG_TRASH_PAD &&
            y >= r.top - DRAG_TRASH_PAD && y <= r.bottom + DRAG_TRASH_PAD;
+  }
+  function pointerOnDragTrash(x, y) {
+    return !!drag.trashArmed && pointerOnCan(x, y, dragTrashBtn());
+  }
+  // Arkivet står ved siden av kassen og er nøyaktig like lite å treffe.
+  function pointerOnDragArchive(x, y) {
+    return !!drag.archiveArmed && pointerOnCan(x, y, dragArchiveBtn());
   }
   // Kalles fra finishDrag — altså på ALLE veier ut av et drag, også avbrudd.
   function disarmDragTrash() {
@@ -5402,8 +5471,13 @@
       el.hidden = true;
       delete el.dataset.dragRevealed;
     });
+    // Fargen på det som dras hører til siktet, ikke til objektet: den skal aldri
+    // bli liggende igjen etter et avbrutt drag.
+    if (drag.el) drag.el.classList.remove('to-trash', 'to-archive');
     drag.trashArmed = false;
     drag.overTrash = false;
+    drag.archiveArmed = false;
+    drag.overArchive = false;
   }
   // Siktemarkering på kassen + RØD bakgrunn på dra-objektet. Alt som dras er
   // allerede halvgjennomsiktig (se `[data-dnd-dragging]` i styles.css), så
@@ -8376,6 +8450,14 @@
   let dndRowPolicyBusy = false;
   let dndPolicyX = null, dndPolicyY = null;
   function dndRowPolicy(b, update) {
+    /* ET DRAG SOM ER OVER HAR INGEN POLITIKK. dnd-kit kan levere et `dragmove`/
+       `dragover` ETTER `dragend` — typisk når en avbrutt gest fortsatt har en
+       retur-animasjon på vei — og en runde der ville malt ekstraheringsmodus på
+       nytt: `is-extracting` og ny-liste-stripa ble stående på et board i hvile,
+       og NESTE drag startet i feil modus (MÅLT: en rad sluppet i en tom liste
+       landet ikke der). `finishDrag` har alt ryddet; da skal ingenting sette
+       det tilbake. */
+    if (!drag.active) return;
     if (dndRowPolicyBusy) return;
     dndRowPolicyBusy = true;
     try {
@@ -8415,18 +8497,23 @@
       // flyttet seg til et annet kort.
       retargetDragTrash();
       const påKassen = pointerOnDragTrash(drag.lastX, drag.lastY);
+      // Arkivet er den andre kassen i den samme raden (notatsiden). Sikter man
+      // på DEN, står plasseringen like stille: slippet arkiverer, det flytter
+      // ikke.
+      const påArkivet = pointerOnDragArchive(drag.lastX, drag.lastY);
       // Markeringen settes BEGGE veier her. Smetts `onDropTarget` fyrer bare når
       // MÅLET endrer seg, og i ringen rundt knappen er målet null hele tiden —
       // ingen ville da tatt markeringen av igjen, og kassen ble stående som om
       // den var klar til å ta imot mens raden lå nede ved ny-liste-stripa.
       setDragTrashTarget(påKassen);
+      setDragArchiveTarget(påArkivet);
       // Og stripa lover ingenting i ringen: der SLETTER slippet (`*CommitRow`).
       // Selve knappen ligger inne i kortet, altså inne i sonen — der er modusen
       // reorder uansett. Ringen er den lille biten som kan stikke utenfor
       // kortkanten. Modusen regnes ellers ut som vanlig: å fryse den her ville
       // utsatt byttet med hele kassens høyde, og ut-terskelen ned ville sluttet
       // å være den samme linja som opp.
-      setTrashHold(påKassen);
+      setTrashHold(påKassen || påArkivet);
       // ETT MALT HULL OM GANGEN, del to: hullet lover bare noe der raden faktisk
       // lander. `dragOverCard` er allerede regnet ut denne runden.
       const hull = dragScope().root.querySelector('[data-dnd-placeholder]');
@@ -10055,16 +10142,29 @@
      innsnevring av ett søk, ikke en innstilling. */
   let searchScope = 'all';
 
+  /* DEN SEGMENTERTE BRYTEREN — hovedbryteren (Lister ↔ Notater) og søkets
+     scopevelger er den samme kontrollen (`.seg` i styles.css), og dette er alt
+     JS gjør for den: hvor mange segmenter den har, og hvilket som er aktivt.
+     CSS eier bevegelsen — den ene flaten som glir mellom segmentene er
+     `100% / --seg-n` bred og står `--seg-i * 100%` inn, så en tredje fane ville
+     virket uten en eneste ny utregning. Semantikken (`aria-selected` + rullende
+     `tabIndex`) settes her, ett sted for begge bryterne. */
+  function paintSeg(el, sel, erAktiv) {
+    if (!el) return;
+    const btns = [...el.querySelectorAll(sel)];
+    el.style.setProperty('--seg-n', btns.length || 1);
+    btns.forEach((b, i) => {
+      const on = !!erAktiv(b);
+      if (on) el.style.setProperty('--seg-i', i);
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+    });
+  }
+
   function setSearchScope(scope) {
     searchScope = SEARCH_SCOPES.indexOf(scope) > -1 ? scope : 'all';
-    if (searchScopeEl) {
-      searchScopeEl.querySelectorAll('.seg-btn').forEach((b) => {
-        const on = b.dataset.scope === searchScope;
-        b.classList.toggle('is-active', on);
-        b.setAttribute('aria-selected', on ? 'true' : 'false');
-        b.tabIndex = on ? 0 : -1;
-      });
-    }
+    paintSeg(searchScopeEl, '.seg-btn', (b) => b.dataset.scope === searchScope);
     paintSearchResults();
   }
 
@@ -16045,7 +16145,7 @@
     };
     const nT = trashedNoteFoldersOf(p).length;
     const nA = archivedNoteFoldersOf(p).length;
-    mk('note-folder-archive-btn', ICONS.archive, null, nA,
+    mk('note-folder-archive-btn archive-can', ICONS.archive, notesFolderArchiveZone(p.id), nA,
       tr('notes.archiveFoldersCount', { count: nA, name: quoted(p.name) }),
       tr('notes.archiveFoldersTitle'), null);
     mk('note-folder-trash-btn', ICONS.trash, notesFolderTrashZone(p.id), nT,
@@ -16061,7 +16161,10 @@
     body.appendChild(wrap);
     return wrap;
   }
+  // Sone-id-ene bærer bokhyllens id: hver bokhylle har sin egen kasse og sitt
+  // eget arkiv, og slippet må vite hvilken det traff.
   const notesFolderTrashZone = (projectId) => 'note-folder-trash:' + projectId;
+  const notesFolderArchiveZone = (projectId) => 'note-folder-archive:' + projectId;
 
   function wireNotesLifecycleButtons() {
     if (noteArchiveBtn) noteArchiveBtn.addEventListener('click', openNotesArchive);
@@ -16562,7 +16665,7 @@
       axis: 'vertical',
       keyboard: false,               // tastaturet er Huskis' eget (attachKeyHandle)
       safeInsets: safeInsets,
-      zoneSelector: '#note-trash-btn',
+      zoneSelector: '#note-trash-btn, #note-archive-btn',
       describeItem: notesCardLabel,
       phrases: notesPhrases(),
       onCommit: notesCommitCard,
@@ -16611,23 +16714,38 @@
     dndNoteLiftedBox(el);
     dndLockAxis(b);
     armDragTrash();             // notat-kassen, avdekket for draget
+    armDragArchive();           // … og arkivet ved siden av den
   }
 
-  /* Søppelkassen som SONE i notatfanen — nøyaktig samme to kroker som i de to
-     andre scopene (se «Søppelkassen som sone»): Smett ruller kortet tilbake
-     dit det kom fra FØR handlingen kalles, så et slipp i kassen sletter og
-     flytter ikke. */
-  function notesDropTarget(target) {
-    const btn = dragTrashBtn();
-    setDragTrashTarget(!!(drag.trashArmed && btn && target &&
-      target.kind === 'zone' && target.element === btn));
+  /* KASSEN OG ARKIVET SOM SONER I NOTATFANEN — nøyaktig samme to kroker som i
+     de to andre scopene (se «Søppelkassen som sone»): Smett ruller kortet
+     tilbake dit det kom fra FØR handlingen kalles, så et slipp i en kasse
+     sletter/arkiverer og flytter ikke.
+
+     De to kassene deler kroker fordi de deler alt annet enn hva slippet betyr;
+     scopet er det eneste som skiller notatfanen fra nav-modalen. */
+  function notesCanTarget(target) {
+    const sikter = (btn) => !!(btn && target && target.kind === 'zone' && target.element === btn);
+    const t = dragTrashBtn(), a = dragArchiveBtn();
+    setDragTrashTarget(!!drag.trashArmed && sikter(t));
+    setDragArchiveTarget(!!drag.archiveArmed && sikter(a));
   }
-  function notesZoneDrop(result) {
-    const btn = dragTrashBtn();
-    if (!drag.trashArmed || !btn || btn.getAttribute('data-dnd-zone') !== result.zoneId) return;
-    disarmDragTrash();
-    dropIntoTrash(notesScope, 'card', result.itemId);
+  function notesCanDrop(S, result) {
+    const kind = drag.kind === 'card' ? 'card' : 'item';
+    const traff = (armed, btn) =>
+      !!armed && !!btn && btn.getAttribute('data-dnd-zone') === result.zoneId;
+    if (traff(drag.trashArmed, dragTrashBtn())) {
+      disarmDragTrash();
+      dropIntoTrash(S, kind, result.itemId);
+      return;
+    }
+    if (traff(drag.archiveArmed, dragArchiveBtn())) {
+      disarmDragTrash();
+      dropIntoArchive(S, kind, result.itemId);
+    }
   }
+  function notesDropTarget(target) { notesCanTarget(target); }
+  function notesZoneDrop(result) { notesCanDrop(notesScope, result); }
   function notesDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
     dndPaintRotation();
@@ -16714,7 +16832,7 @@
       itemSelector: '#notes-nav-board .card',
       containerSelector: '#notes-nav-board .board-col',
       handleSelector: '.card-head',
-      zoneSelector: '#note-project-trash-btn',
+      zoneSelector: '#note-project-trash-btn, #note-project-archive-btn',
       describeItem: notesNavLabel,
       phrases: notesNavPhrases(false),
       onCommit: notesNavCommitCard,
@@ -16725,7 +16843,7 @@
       itemSelector: '#notes-nav-board .item',
       containerSelector: '#notes-nav-board .items-container',
       handleSelector: '.item',
-      zoneSelector: '.note-folder-trash-btn',
+      zoneSelector: '.note-folder-trash-btn, .note-folder-archive-btn',
       describeItem: notesNavLabel,
       phrases: notesNavPhrases(true),
       onCommit: notesNavCommitRow,
@@ -16779,18 +16897,10 @@
     dndNoteLiftedBox(el);
     dndLockAxis(b);                // nav-modalen har alltid én kolonne
     armDragTrash();                // kassen for NIVÅET, avdekket for draget
+    armDragArchive();              // … og arkivet ved siden av den
   }
-  function notesNavDropTarget(target) {
-    const btn = dragTrashBtn();
-    setDragTrashTarget(!!(drag.trashArmed && btn && target &&
-      target.kind === 'zone' && target.element === btn));
-  }
-  function notesNavZoneDrop(result) {
-    const btn = dragTrashBtn();
-    if (!drag.trashArmed || !btn || btn.getAttribute('data-dnd-zone') !== result.zoneId) return;
-    disarmDragTrash();
-    dropIntoTrash(notesNavScope, drag.kind === 'card' ? 'card' : 'item', result.itemId);
-  }
+  function notesNavDropTarget(target) { notesCanTarget(target); }
+  function notesNavZoneDrop(result) { notesCanDrop(notesNavScope, result); }
   function notesNavDragStart(b, kind) {
     dndSyncIntent(b.manager.dragOperation);
     dndPaintRotation();
@@ -17650,14 +17760,7 @@
       try { localStorage.setItem(MAIN_TAB_KEY, activeMainTab); } catch (e) { /* ignore */ }
     }
     const notes = activeMainTab === 'notes';
-    if (mainTabsEl) {
-      mainTabsEl.querySelectorAll('.main-tab').forEach((btn) => {
-        const on = btn.dataset.tab === activeMainTab;
-        btn.classList.toggle('is-active', on);
-        btn.setAttribute('aria-selected', on ? 'true' : 'false');
-        btn.tabIndex = on ? 0 : -1;
-      });
-    }
+    paintSeg(mainTabsEl, '.main-tab', (btn) => btn.dataset.tab === activeMainTab);
     if (topbarRowLists) topbarRowLists.hidden = notes;
     if (topbarRowNotes) topbarRowNotes.hidden = !notes;
     board.hidden = notes;

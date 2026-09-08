@@ -228,6 +228,11 @@ innholdsregisteret):
 De to kan stå samtidig: et arkivert notat kan legges i søppelkassen og
 gjenopprettes tilbake til arkivet det lå i.
 
+**Begge er slippmål.** Drar man et objekt, folder BEGGE kassene seg ut — også
+den tomme — og et slipp i arkivet arkiverer akkurat som et slipp i kassen
+sletter. Det er det samme maskineriet med to betydninger og to farger
+([`drag-and-drop.md`](drag-and-drop.md)).
+
 **Flaggene arves ikke nedover.** En bortlagt bokhylle skjuler notatbøkene og
 notatene sine uten å flagge dem — akkurat som en slettet mappe skjuler listene
 sine — og gir dem tilbake ved gjenoppretting. Derfor er hver kasse og hvert
@@ -366,7 +371,8 @@ Slik ble det:
 - **Ingen nye kontrollmønstre.** Kassene og arkivene er `.trashcan` på de samme
   tre plassene listenes kasser står ([`trash.md`](trash.md)), arkivet låner
   søppelkasse-modalen, og alle tre notatnivåene fikk den eksisterende
-  objektmenyen ([`menus.md`](menus.md)). Dra-til-kassen virker på alle tre.
+  objektmenyen ([`menus.md`](menus.md)). Dra-til-kassen OG dra-til-arkivet
+  virker på alle tre.
 - **Søket er fortsatt ÉN funksjon.** Scopevalget er et filter over den samme
   indeksen, og `navigateToObject` bytter hoveddel selv — et treff virker
   uansett hvilken fane man står i.

@@ -29,6 +29,8 @@
        synken
    12. Synk: `archived` og koblingsradene lander i mock-databasen, og en
        kobling som fjernes blir borte der også
+   13. Mock-backenden speiler DB-kontrakten: en koblingsrad med null eller to
+       id-er på en side avvises, som produksjonens to `check`-vilkår
 
   Kjøres på BÅDE desktop- og mobil-viewport der oppførselen avhenger av layout.
 
@@ -39,7 +41,8 @@
 const path = require('path');
 const { chromium } = require(path.join(process.env.NODE_PATH ||
   require('child_process').execSync('npm root -g').toString().trim(), 'playwright'));
-const { centre, dragFromTo } = require('./dnd-gestures');
+const G = require('./dnd-gestures');
+const { centre } = G;
 
 const BASE = process.env.HUSKIS_URL || 'http://localhost:8000';
 const results = [];
@@ -373,45 +376,107 @@ async function run(navn, viewport, touch) {
   log(M('posisjonsregisteret flettes for seg — den nyeste posisjonen står'),
     lww.pos === 0 && lww.posTs === 10, JSON.stringify({ pos: lww.pos, posTs: lww.posTs }));
 
-  /* ---------- 7. Drag til søppelkassen i notatfanen ---------- */
+  /* ---------- 7. Drag til kassen OG til arkivet, på alle tre nivåene ---------- */
   // Bygg treet på nytt (forrige seksjon tømte det).
   const ids2 = await byggNotater(p);
-  await p.evaluate(() => window.__huskis.closeNotesNav());
-  await p.waitForFunction(() => document.querySelectorAll('#notes-board .note-card').length === 2,
-    null, { timeout: 5000, polling: 100 });
 
-  const kassenFørDrag = await p.evaluate(() => document.getElementById('note-trash').hidden);
-  const kortSel = () => '#notes-board .note-card[data-id="' + ids2.fri1 + '"]';
-  await dragFromTo(p, await centre(p, kortSel()),
-    () => centre(p, '#note-trash-btn'), { touch });
-  await p.waitForTimeout(120);
-  const etterDrag = await p.evaluate((ids2) => {
-    const H = window.__huskis;
-    return {
-      synlige: H.notesIn(H.state.activeProject, null).map((n) => n.title),
-      søppel: H.trashedNotesIn(H.state.activeProject, null).map((n) => n.title),
-    };
-  }, ids2);
-  log(M('kassen er skjult før draget, og et notat sluppet i den slettes'),
-    kassenFørDrag && etterDrag.søppel.join('|') === 'Blodprøver' &&
-    !etterDrag.synlige.includes('Blodprøver'), JSON.stringify(etterDrag));
-  await p.evaluate((ids2) => window.__huskis.restoreNoteObject('note', ids2.fri1), ids2);
+  // Er knappen malt akkurat nå? Måles på BOKSEN, ikke på `hidden`: en knapp i
+  // en skjult beholder er like usynlig som en skjult knapp.
+  const synlig = (sel) => p.evaluate((s) => {
+    const el = document.querySelector(s);
+    if (!el) return false;
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }, sel);
 
-  // … og en notatbok i bokhyllens egen kasse.
-  await p.evaluate(() => window.__huskis.openNotesNav());
-  await p.waitForFunction(() => !!document.querySelector('#notes-nav-board .note-folder-row'),
-    null, { timeout: 5000, polling: 100 });
-  const bokSel = '#notes-nav-board .note-folder-row[data-id="' + ids2.bok + '"]';
-  await dragFromTo(p, await centre(p, bokSel),
-    () => centre(p, '#notes-nav-board .note-folder-trash-btn'), { touch });
-  await p.waitForTimeout(120);
-  const bokEtterDrag = await p.evaluate(() => {
+  const åpneNav = async () => {
+    await p.evaluate(() => window.__huskis.openNotesNav());
+    await p.waitForFunction(() => !!document.querySelector('#notes-nav-board .note-folder-row'),
+      null, { timeout: 5000, polling: 100 });
+  };
+  const lukkNav = async () => {
+    await p.evaluate(() => window.__huskis.closeNotesNav());
+    await p.waitForFunction(() => document.querySelectorAll('#notes-board .note-card').length === 2,
+      null, { timeout: 5000, polling: 100 });
+  };
+
+  // Hva ligger i kassen og i arkivet på ETT nivå — samme spørsmål, tre svar.
+  const bortlagt = (kind) => p.evaluate((k) => {
     const H = window.__huskis;
-    return H.trashedNoteFoldersOf(H.state.noteProjects[0]).map((f) => f.name);
-  });
-  log(M('en notatbok sluppet i bokhyllens kasse slettes'),
-    bokEtterDrag.join('|') === 'Anatomi', JSON.stringify(bokEtterDrag));
-  await p.evaluate((ids2) => window.__huskis.restoreNoteObject('noteFolder', ids2.bok), ids2);
+    if (k === 'note') {
+      const pid = H.state.activeProject;
+      return { søppel: H.trashedNotesIn(pid, null).map((n) => n.title),
+        arkiv: H.archivedNotesIn(pid, null).map((n) => n.title) };
+    }
+    if (k === 'noteFolder') {
+      const pr = H.state.noteProjects[0];
+      return { søppel: H.trashedNoteFoldersOf(pr).map((f) => f.name),
+        arkiv: H.archivedNoteFoldersOf(pr).map((f) => f.name) };
+    }
+    return { søppel: H.trashedNoteProjects().map((x) => x.name),
+      arkiv: H.archivedNoteProjects().map((x) => x.name) };
+  }, kind);
+
+  /* De tre nivåene er den SAMME påstanden tre ganger: to kasser, skjult når de
+     er tomme, foldet ut av draget, og et slipp som betyr nøyaktig det menyens
+     «Arkiver»/«Slett» betyr. Derfor én tabell og én løkke — ikke tre kopier. */
+  const nivåer = [
+    { kind: 'note', navn: 'notat', tittel: 'Blodprøver', forbered: lukkNav,
+      id: () => ids2.fri1,
+      fra: () => '#notes-board .note-card[data-id="' + ids2.fri1 + '"]',
+      kasse: '#note-trash-btn', arkiv: '#note-archive-btn' },
+    { kind: 'noteFolder', navn: 'notatbok', tittel: 'Anatomi', forbered: åpneNav,
+      id: () => ids2.bok,
+      fra: () => '#notes-nav-board .note-folder-row[data-id="' + ids2.bok + '"]',
+      kasse: '#notes-nav-board .note-folder-trash-btn',
+      arkiv: '#notes-nav-board .note-folder-archive-btn' },
+    { kind: 'noteProject', navn: 'bokhylle', tittel: 'Fagstoff', forbered: åpneNav,
+      id: () => ids2.proj,
+      fra: () => '#notes-nav-board .card[data-id="' + ids2.proj + '"] .card-head',
+      kasse: '#note-project-trash-btn', arkiv: '#note-project-archive-btn' },
+  ];
+
+  for (const n of nivåer) {
+    await n.forbered();
+    const før = { kasse: await synlig(n.kasse), arkiv: await synlig(n.arkiv) };
+    log(M('7 ' + n.navn + ': kassen og arkivet er skjult når de er tomme'),
+      !før.kasse && !før.arkiv, JSON.stringify(før));
+
+    // (a) Draget folder ut BEGGE — også det tomme arkivet — og et slipp som
+    //     ikke traff noen av dem rydder dem bort igjen.
+    await G.lift(p, await centre(p, n.fra()), touch);
+    const under = { kasse: await synlig(n.kasse), arkiv: await synlig(n.arkiv) };
+    await G.drop(p, undefined, touch);
+    await p.waitForTimeout(200);
+    const etter = { kasse: await synlig(n.kasse), arkiv: await synlig(n.arkiv),
+      rester: await p.evaluate(() => document.querySelectorAll(
+        '.trashcan.drag-trash, [data-drag-revealed], .to-trash, .to-archive').length) };
+    log(M('7 ' + n.navn + ': draget folder ut både kassen og arkivet'),
+      under.kasse && under.arkiv, JSON.stringify(under));
+    log(M('7 ' + n.navn + ': et drag som ikke endte i en kasse rydder opp etter seg'),
+      !etter.kasse && !etter.arkiv && etter.rester === 0, JSON.stringify(etter));
+
+    // (b) Slipp i ARKIVET arkiverer.
+    await n.forbered();
+    await G.dragFromTo(p, await centre(p, n.fra()), () => centre(p, n.arkiv), { touch });
+    await p.waitForTimeout(200);
+    const arkivert = await bortlagt(n.kind);
+    log(M('7 ' + n.navn + ': sluppet i arkivet blir objektet arkivert'),
+      arkivert.arkiv.join('|') === n.tittel && !arkivert.søppel.length,
+      JSON.stringify(arkivert));
+    await p.evaluate(([k, id]) => window.__huskis.setNoteArchived(k, id, false), [n.kind, n.id()]);
+
+    // (c) Slipp i KASSEN sletter — den samme gesten, den andre knappen.
+    await n.forbered();
+    await G.dragFromTo(p, await centre(p, n.fra()), () => centre(p, n.kasse), { touch });
+    await p.waitForTimeout(200);
+    const slettet = await bortlagt(n.kind);
+    log(M('7 ' + n.navn + ': sluppet i kassen blir objektet slettet'),
+      slettet.søppel.join('|') === n.tittel && !slettet.arkiv.length,
+      JSON.stringify(slettet));
+    await p.evaluate(([k, id]) => window.__huskis.restoreNoteObject(k, id), [n.kind, n.id()]);
+    await p.waitForTimeout(150);
+  }
   await p.evaluate(() => window.__huskis.closeNotesNav());
 
   /* ---------- 8. Det felles søket ---------- */
@@ -704,6 +769,38 @@ async function run(navn, viewport, touch) {
     etterDangling.igjen === 0 && etterDangling.gravlagt &&
     etterDangling.status.state !== 'rejected',
     JSON.stringify({ start: dangling, etter: etterDangling }));
+
+  /* ---------- 13. Mock-backenden speiler DB-kontrakten for koblingene ----------
+     Produksjonen har to `check`-vilkår på `object_links`: NØYAKTIG én kolonne
+     på notatsiden og nøyaktig én på listesiden. Godtok mocken null eller to,
+     ville en nettlesertest kunne bevise en skriving produksjonen avviser. */
+  const kontrakt = await p.evaluate(async (ids2) => {
+    const c = window.HK_MOCK.createClient();
+    const H = window.__huskis;
+    const uni = H.state.universes[0];
+    const rad = (x) => Object.assign({
+      id: 'cccccccc-0000-4000-8000-' + String(Date.now()).slice(-12),
+      owner_id: 'u1', ts: Date.now(), org: 'test',
+      note_project_id: null, note_folder_id: null, note_id: null,
+      universe_id: null, group_id: null, card_id: null,
+    }, x);
+    const feil = async (x) => {
+      const r = await c.from('object_links').insert(rad(x));
+      return r.error ? r.error.message : null;
+    };
+    return {
+      ingenNotatside: await feil({ universe_id: uni.id }),
+      toNotatsider: await feil({ note_project_id: ids2.proj, note_id: ids2.fri1, universe_id: uni.id }),
+      ingenListeside: await feil({ note_project_id: ids2.proj }),
+      toListesider: await feil({ note_project_id: ids2.proj, universe_id: uni.id, group_id: uni.groups[0].id }),
+      rader: (JSON.parse(localStorage.getItem('hk-mock-db')).object_links || []).length,
+    };
+  }, ids2);
+  const avvist = (m) => typeof m === 'string' && /check constraint/.test(m);
+  log(M('mocken avviser en koblingsrad uten eller med to id-er på notatsiden'),
+    avvist(kontrakt.ingenNotatside) && avvist(kontrakt.toNotatsider), JSON.stringify(kontrakt));
+  log(M('mocken avviser en koblingsrad uten eller med to id-er på listesiden'),
+    avvist(kontrakt.ingenListeside) && avvist(kontrakt.toListesider), JSON.stringify(kontrakt));
 
   log(M('ingen JS-feil'), jsFeil.length === 0, jsFeil.join(' | ') || 'ingen');
   await browser.close();

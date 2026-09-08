@@ -150,7 +150,10 @@ segmentert kontroll, men semantikken er uendret og følger WAI-ARIA-mønsteret:
 `role="tablist"`/`role="tab"` med `aria-selected`, `aria-controls` mot hver sin
 `role="tabpanel"`, venstre/høyre piltast bytter, og bare den aktive halvdelen er
 i tabbrekkefølgen (`tabindex="-1"` på den andre) — så Tab går VIDERE til
-innholdet i stedet for mellom to knapper.
+innholdet i stedet for mellom to knapper. Markeringen er ÉN flate som GLIR
+mellom halvdelene; bevegelsen er slått av under `prefers-reduced-motion`, og
+den bærer ingen informasjon alene (`aria-selected` sier hva som er valgt).
+Søkets scopevelger er den samme kontrollen med de samme reglene.
 
 **Notatene har de samme snarveiene som alt annet.** `Alt`+pil flytter et
 notatkort, en notatbok eller en bokhylle ett hakk (`canReorderObj` svarer

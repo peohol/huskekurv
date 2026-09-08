@@ -101,6 +101,14 @@ et arkivert notat kan legges i søppelkassen og komme tilbake til arkivet det l�
 i. Arkivet er ikke destruktivt, så det har verken angre-toast, buffer eller
 hold-og-sveip — veien tilbake er arkivknappen som står rett ved siden av.
 
+**Arkivet er også et slippmål.** Drar man et notat, en notatbok eller en
+bokhylle, foldes BEGGE kassene ut — også de tomme — og et slipp i arkivet
+arkiverer akkurat som et slipp i kassen sletter. Det er det samme maskineriet
+(`armDragArchive` ved siden av `armDragTrash`, samme sone-oppsett, samme
+opprydding på alle veier ut av draget); bare fargen og betydningen skiller dem.
+Uten dette var arkivet den ene bortleggingsmåten man ikke kunne dra til.
+Se [`drag-and-drop.md`](drag-and-drop.md).
+
 **Arkivet låner søppelkassens modal.** Det er den samme `showTrashModal`, den
 samme raden og den samme foten — bare et annet ikon i hodet, en «Slett»-knapp
 ved siden av «Hent ut av arkivet» på hver rad, og en fot som legger ALT i

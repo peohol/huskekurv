@@ -129,7 +129,17 @@ stående). Autoritativt: `docs/trash.md` («Slett ved å dra objektet i kassen»
 ## Toppmenyen (`.topbar`)
 
 Ett fast panel øverst (`position: fixed`, full bredde, samme DOM på mobil og
-desktop). Panelet er en KOLONNE med to rader:
+desktop). Panelet er en KOLONNE med to rader.
+
+**Headeren har ÉN luft-verdi** (`--topbar-gap`), og den gjelder begge
+retninger: mellom panelets rader, mellom kontrollene på en rad, mellom
+hjørneknappene og mellom hjørnegruppens rader. Ett tall, ingen kompenserende
+unntak — er avstanden mellom to knapper 10 px, er avstanden ned til raden under
+det også. `syncTopChrome()` LESER radgapet ut av panelet i stedet for å kjenne
+tallet, så høydeutregningen (`--main-tabs-h`) følger med av seg selv.
+Panelets egen polstring over og under står i `--topbar-pad-y`, som hjørnegruppen
+leser for å flukte med den samme linjen. `tests/corner-controls.test.js` (2e)
+måler alle avstandene mot det ene tokenet.
 
 0. **Hovedbryteren** (`.main-tabs`, `#main-tabs`, `role="tablist"`):
    `Lister ↔ Notater` — Huskis' to hoveddeler
@@ -140,7 +150,10 @@ desktop). Panelet er en KOLONNE med to rader:
    dele linje med den. Fanen er en VISNING, ikke et eget program:
    toppkontrollene tilhører hele appen og dupliseres ikke per fane. Den aktive
    halvdelen bærer `.is-active` og `aria-selected="true"`; venstre/høyre
-   piltast bytter (WAI-ARIA), og bare den aktive er i tabbrekkefølgen. Valget
+   piltast bytter (WAI-ARIA), og bare den aktive er i tabbrekkefølgen.
+   Markeringen er ÉN flate som GLIR mellom halvdelene — samme kontroll og
+   samme bevegelse som søkets scopevelger, se `.seg` i
+   [`design-system.md`](design-system.md). Valget
    er per ENHET (`localStorage['huskis-tab']`) og synkes ikke — hvilken fane
    man sist så på er ikke innhold. Bryteren er kompakt med vilje: raden koster
    høyde, og høyde er det knappeste i landskap.
@@ -187,9 +200,9 @@ så plassen til dem må holdes av noe annet: på én linje er det en
 `margin-right` i ENDEN av linjen (listefunksjonenes), i det stablede oppsettet
 holder BEGGE radene av den samme plassen (breadcrumbens `padding-right` og
 listefunksjonenes `margin-right`) — er hjørnegruppen også to rader (under
-560 px), ligger én gruppe-rad ved siden av hver av dem. Fanenes rad holder av
-den samme plassen (`.main-tabs` sin `margin-right`): den er panelets FØRSTE, og
-det er den gruppens første rad ligger ved siden av. Begge leser
+560 px), ligger én gruppe-rad ved siden av hver av dem. Fanenes rad holder ikke av noe: hjørnegruppen
+begynner først UNDER den (`--main-tabs-h`), så de deler ingen linje. De andre
+leser
 `--corner-btns-w`, som appen MÅLER (`syncTopChrome`) som gruppens BREDESTE rad,
 så plassen holder takt med hvor mange knapper gruppen faktisk har. Har gruppen
 flere rader enn panelet, skyves overskuddet over panelets egne rader ned i

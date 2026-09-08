@@ -168,20 +168,33 @@
      viewportets hjørne) bruker samme token, så den flukter med toppmenyens
      høyre kant. */
   --toolbar-pad: clamp(12px, 3vw, 40px);
-  /* Luften mellom hjørneknappene i toppkontrollgruppen (og mellom gruppen og
-     innholdet ved siden av). */
-  --corner-btns-gap: 10px;
+  /* ÉN luft-verdi for HELE headeren, i begge retninger: mellom panelets rader
+     (hovedbryteren og fanens knapperad), mellom kontrollene på en rad, og
+     mellom hjørneknappene — som bryter til flere rader og derfor bruker den
+     samme verdien vannrett og loddrett. Ett tall, ingen kompenserende
+     unntak: er avstanden mellom to knapper 10 px, er avstanden ned til raden
+     under det også. `syncTopChrome()` LESER radgapet ut av panelet i stedet for
+     å kjenne tallet, så høydeutregningen følger med av seg selv. */
+  --topbar-gap: 10px;
+  /* Panelets egen polstring over og under innholdet. Hjørnegruppen ligger
+     UTENFOR panelets flyt og må flukte med den samme linjen, så begge leser
+     tallet herfra. */
+  --topbar-pad-y: 12px;
   /* Bredden toppkontrollgruppen tar, inkludert luften til innholdet ved siden
      av. Brukt to steder som MÅ holde takt: `.toolbar`s margin (én linje) og
      `.breadcrumb`s padding (stablet mobiloppsett) — se «Toppmenyen» over
      `.topbar`. Verdien her er kun en startverdi for de tre knappene som finnes
      i dag; `syncTopChrome()` i app.js MÅLER gruppen og skriver den faktiske
      bredden, slik at en ny knapp ikke krever en ny utregning her. */
-  --corner-btns-w: calc(var(--control-h) * 3 + var(--corner-btns-gap) * 3);
+  --corner-btns-w: calc(var(--control-h) * 3 + var(--topbar-gap) * 3);
   /* Høyden hovedbryteren (`.topbar-row-tabs`) legger beslag på øverst i
      panelet, medregnet radgapet under den. MÅLES i syncTopChrome; verdien her
      er reserven fram til den første målingen. */
   --main-tabs-h: 0px;
+  /* BEVEGELSEN i appens brytere: knotten i konto-modalens av/på-brytere og den
+     glidende flaten i de segmenterte bryterne (`.seg`) skal lese som den samme
+     mekanikken, så varighet og kurve står ett sted. */
+  --switch-motion: 0.16s ease;
   /* Ett tall for ALT luft-mellomrom i listevisningen: board-ets venstre/høyre/
      bunn-padding, kolonne-gap OG kort-til-kort-avstand — samme verdi overalt gir
      identisk luft rundt og mellom listekortene. Bunn-padding-effekten kommer fra
@@ -218,6 +231,11 @@
   --shadow-sm: 0 2px 6px rgba(35, 45, 55, 0.12);
   --shadow-md: 0 8px 20px rgba(35, 45, 55, 0.18);
   --shadow-lg: 0 18px 42px rgba(25, 35, 45, 0.34);
+
+  /* DRA-SLØRET: hvor mye av sin egen farge en LØFTET flate beholder. Ett tall
+     for hele appen — flaten, korthodet og platene under det som dras leser det
+     samme (se «ALT SOM DRAS ER HALVGJENNOMSIKTIG» lenger ned). */
+  --dnd-veil: 58%;
 
   /* Skygge bak hvit skrift så den er lesbar også på lyse kort-/mappefarger. */
   --text-shadow: 0 1px 2px rgba(0, 0, 0, 0.42);
@@ -332,6 +350,13 @@
      --danger-soft: den er en flate under mørk tekst på hvitt, denne er et lag
      over en halvgjennomsiktig flate og må bære signalet alene. */
   --drag-danger: rgba(192, 56, 77, 0.45);
+  /* Samme lag, men for ARKIVET: et slipp der arkiverer, og arkivering er ingen
+     fare — fargen er derfor arkivikonets egen manilagule, ikke rødt. Litt
+     sterkere alfa enn rødvasken fordi tonen er lysere og ellers ville forsvunnet
+     i kortfargene. `--archive-soft` er søsteren under knappen selv, som
+     `--danger-soft` er det for kassen. */
+  --archive-soft: rgba(201, 160, 106, 0.22);
+  --drag-archive: rgba(201, 160, 106, 0.55);
   /* Avkryssingsboksens kant ved hover. Egen fra --primary fordi hvilekanten
      (--card-accent) regnes ut fra kortfargen og treffer 3:1 — en hover som
      bytter til en fast farge må klare det samme, ellers blir kontrollen
@@ -445,6 +470,10 @@
      mørkne, så vasken er den LYSE rødfargen — og svakere, fordi den ligger på
      en mørk flate der lys tar mer plass. */
   --drag-danger: rgba(240, 143, 160, 0.34);
+  /* Speilingen av --drag-archive/--archive-soft, av samme grunn: den mørke
+     drakten løfter, så tonen er den lyse manilagule og svakere. */
+  --archive-soft: rgba(230, 200, 150, 0.20);
+  --drag-archive: rgba(230, 200, 150, 0.34);
   /* --primary mot den mørke platen (nå en color-mix() mot palettfargen, se
      `.card` lenger ned) klarer så vidt 3:1 i verste hjørne — men med langt
      mindre margin (min 3,13:1) enn dette dedikerte tokenet gir (min 5,94:1),
@@ -851,7 +880,7 @@ body {
   z-index: 30;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--topbar-gap);
   /* Flaten når helt ut i kantene, men INNHOLDET holdes innenfor den sikre
      sonen: statusfeltet øverst og et eventuelt hakk i sidene legges på
      paddingen. Panelet blir dermed høyere, og `syncTopChrome()` måler den
@@ -862,9 +891,9 @@ body {
      Har gruppen flere rader enn det, skyves HELE panelet ned like mye. Den er
      0 i begge dagens oppsett — én gruppe-rad mot én panelrad på bred skjerm,
      to mot to på smal. */
-  padding: calc(12px + var(--safe-top) + var(--corner-btns-overflow, 0px))
+  padding: calc(var(--topbar-pad-y) + var(--safe-top) + var(--corner-btns-overflow, 0px))
            calc(var(--toolbar-pad) + var(--safe-right))
-           12px calc(var(--toolbar-pad) + var(--safe-left));
+           var(--topbar-pad-y) calc(var(--toolbar-pad) + var(--safe-left));
   background: var(--glass-bg);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
@@ -876,11 +905,13 @@ body {
   align-items: stretch;
 }
 
-/* Én rad i panelet — den aktive fanens breadcrumb + knapper. */
+/* Én rad i panelet — den aktive fanens breadcrumb + knapper. Samme luft som
+   mellom radene og mellom hjørneknappene (`--topbar-gap`): headeren har ÉN
+   avstand, ikke én per retning. */
 .topbar-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--topbar-gap);
 }
 
 /* Breadcrumb: ÉN knapp med de to navnenivåene, skilt med › — bare navn, ingen
@@ -1021,13 +1052,13 @@ body {
      hovedbryteren (`--main-tabs-h`, målt i syncTopChrome): den raden er
      panelets øverste og skal ligge alene, sentrert i hele bredden, så gruppen
      begynner først under den. */
-  top: calc(12px + var(--safe-top) + var(--main-tabs-h, 0px));
+  top: calc(var(--topbar-pad-y) + var(--safe-top) + var(--main-tabs-h, 0px));
   right: calc(var(--toolbar-pad) + var(--safe-right));
   z-index: 35;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: var(--corner-btns-gap);
+  gap: var(--topbar-gap);
   /* Bredden gruppen har å bryte innenfor: viewportet minus den sikre sonen og
      panelets sidepolstring i begge ender. */
   max-width: calc(100vw - var(--safe-left) - var(--safe-right) - var(--toolbar-pad) * 2);
@@ -1050,7 +1081,7 @@ body {
    bruddelement ville kostet en ekstra flex-linje — altså høyde. */
 @media (max-width: 560px) {
   .corner-controls {
-    max-width: calc(var(--control-h) * 3 + var(--corner-btns-gap) * 2);
+    max-width: calc(var(--control-h) * 3 + var(--topbar-gap) * 2);
     flex-wrap: wrap-reverse;
   }
 }
@@ -1101,6 +1132,9 @@ body {
    kontoknappen flukter fortsatt med kanten (se tests/safe-area.test.js). */
 .toolbar {
   flex: 0 0 auto;
+  /* Headerens ene luft-verdi, ikke `.panel-actions`' egen: knapperaden her er
+     en header-kontrollgruppe og skal ha den samme avstanden som resten. */
+  gap: var(--topbar-gap);
   margin-right: var(--corner-btns-w);
 }
 
@@ -2245,7 +2279,9 @@ body.is-dragging * { cursor: grabbing !important; }
    drag-trash` (samme regel som mappe-/listepunkt-kassene) noe å vokse inn i,
    så kassen blir like lett å treffe her som i et kort. */
 .nav-foot .item-trash { flex: 1 1 auto; }
-.nav-foot:has(.item-trash[hidden]) { display: none; }
+/* … og notatenes nav-modal har TO (arkiv + kasse) i den samme foten, så
+   spørsmålet er ikke «er en av dem skjult» men «er alle det». */
+.nav-foot:not(:has(.item-trash:not([hidden]))) { display: none; }
 /* Kolonnene lages av `relayoutBoard` (samme maskineri som hovedsidens board),
    men nav-scopet setter `singleColumn` → alltid ÉN `.board-col`. */
 .nav-board {
@@ -2302,7 +2338,7 @@ body.is-dragging * { cursor: grabbing !important; }
 .dnd-surface .card[data-dnd-dragging] {
   scale: 1.02;
   box-shadow: var(--shadow-lg);
-  background: color-mix(in srgb, var(--card-bg) 58%, transparent);
+  background: color-mix(in srgb, var(--card-bg) var(--dnd-veil), transparent);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
   cursor: grabbing;
@@ -2311,11 +2347,33 @@ body.is-dragging * { cursor: grabbing !important; }
 .dnd-surface .category[data-dnd-dragging] {
   scale: 1.03;
   box-shadow: var(--shadow-lg);
-  background: color-mix(in srgb, var(--surface) 58%, transparent);
+  background: color-mix(in srgb, var(--surface) var(--dnd-veil), transparent);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
   list-style: none;
   cursor: grabbing;
+}
+/* … OG DET GJELDER HELE DEN MALTE FLATEN, ikke bare det ytterste laget. Et kort
+   er flere flater oppå hverandre: kortfargen, korthodets eget hakk, og platene
+   innholdet står på. Med bare den ytterste sluppet gjennom leser et løftet
+   NOTATKORT som ugjennomsiktig — hodet og utdragsplaten dekker nesten hele det.
+   Regelen står derfor på de indre lagene også, med det samme sløret.
+
+   Ikke `opacity`: den ville tatt teksten med seg. Bakgrunnen alene slipper lys
+   gjennom, innholdet står i full styrke (`dnd-drop-animation`, punkt 6). */
+.dnd-surface [data-dnd-dragging] .card-head {
+  background: color-mix(in srgb, var(--card-head) var(--dnd-veil), transparent);
+}
+/* Mørk drakt maler hodet og platene med SINE tokens (og hodet i tillegg med
+   stripe-gradienten, som `background`-kortformen her rydder bort — nøyaktig som
+   på kortflaten over). Platene er allerede halvgjennomsiktige i LYS drakt
+   (`--plate` er hvitt med alfa), så de trenger bare sløret her. */
+:root[data-theme="dark"] .dnd-surface [data-dnd-dragging] .card-head {
+  background: color-mix(in srgb, var(--card-head-face) var(--dnd-veil), transparent);
+}
+:root[data-theme="dark"] .dnd-surface [data-dnd-dragging] .item,
+:root[data-theme="dark"] .dnd-surface [data-dnd-dragging] .note-card-excerpt {
+  background: color-mix(in srgb, var(--plate) var(--dnd-veil), transparent);
 }
 /* Kategorien dras som en kompakt rad: hylla er foldet sammen ved løft
    (`dndCollapseCategory`), og resten må matche et listepunkt — samme polstring
@@ -2364,6 +2422,12 @@ body.is-dragging * { cursor: grabbing !important; }
    (`setDragTrashTarget`). */
 .dnd-surface [data-dnd-dragging].to-trash {
   background-image: linear-gradient(var(--drag-danger), var(--drag-danger));
+}
+/* Sikter man på ARKIVET, skifter objektet til arkivfargen på nøyaktig samme
+   måte — samme lag, samme grunn, bare en annen betydning. `to-archive` settes
+   fra JS (`setDragArchiveTarget`). */
+.dnd-surface [data-dnd-dragging].to-archive {
+  background-image: linear-gradient(var(--drag-archive), var(--drag-archive));
 }
 /* Lista sikter på 📁-breadcrumben (flytt til en annen mappe). Den ENESTE
    dra-tilstanden som fortsatt tones ut i stedet for å skifte farge: en flytting
@@ -3594,7 +3658,7 @@ body.no-auth .corner-controls { display: none; }
   background: var(--track);
   padding: 3px;
   cursor: pointer;
-  transition: background 0.16s ease;
+  transition: background var(--switch-motion);
 }
 .toggle-switch .toggle-knob {
   display: block;
@@ -3602,7 +3666,7 @@ body.no-auth .corner-controls { display: none; }
   border-radius: 50%;
   background: #fff;
   box-shadow: 0 1px 3px rgba(0,0,0,0.28);
-  transition: transform 0.16s ease;
+  transition: transform var(--switch-motion);
 }
 .toggle-switch[aria-checked="true"] { background: var(--accent); }
 .toggle-switch[aria-checked="true"] .toggle-knob { transform: translateX(22px); }
@@ -4846,6 +4910,13 @@ body.no-auth .corner-controls { display: none; }
   box-shadow: 0 4px 12px rgba(180, 60, 60, 0.35);
   transform: scale(1.12);
 }
+/* Arkivet er den samme knappen med en annen betydning, og markeres derfor på
+   den samme måten i sin egen farge. Bare flaten og skyggen byttes; veksten og
+   reduced-motion-unntaket over gjelder begge. */
+.trashcan.archive-can.drag-trash.drop-target {
+  background: var(--archive-soft);
+  box-shadow: 0 4px 12px rgba(150, 115, 60, 0.35);
+}
 @media (prefers-reduced-motion: reduce) {
   .trashcan.drag-trash.drop-target { transform: none; }
 }
@@ -5042,7 +5113,102 @@ body.no-auth .corner-controls { display: none; }
   --keyboard-inset: 0px;
 }
 
-/* HOVEDBRYTEREN: Lister ↔ Notater, ÉN segmentert kontroll på panelets egen
+/* SEGMENTERT BRYTER (`.seg`) — ÉN kontroll med to bruk: hovedbryteren
+   Lister ↔ Notater øverst i headeren (`.main-tabs`), og søkets scopevelger
+   Alt | Lister | Notater (`.search-scope`). Formen står HER, én gang;
+   bruksstedene setter bare størrelse.
+
+   MARKERINGEN ER ÉN FLATE SOM GLIR. Ikke en bakgrunn som tones inn på det
+   aktive segmentet og ut på det forrige — da leser kontrollen som to knapper
+   som blinker, ikke som én bryter med et hendel. Flaten er `::before` på
+   beholderen, nøyaktig ett segment bred, og den flyttes med `transform` i
+   samme egenskap og samme timing som knotten i konto-modalens brytere
+   (`--switch-motion`).
+
+   SEGMENTENE ER LIKE BREDE (`flex: 1 1 0`), og det er dét som gjør reisen til
+   ren regning: flaten er `100% / --seg-n` bred og står `--seg-i * 100%` inn.
+   De to tallene settes fra JS (`paintSeg`) — ingen måling, ingen hardkodet
+   segmentbredde, og en tredje fane ville virket av seg selv. Semantikken
+   (`role`/`aria-selected`/rullende `tabIndex`) settes det samme stedet.
+
+   FLATEN ER DEN GRØNNE ＋-KNAPPENS (`--grad-green`). Den bærer derfor SVARTE
+   ikoner og MØRKT blekk, ikke hvitt — nøyaktig kontrakten `.btn-solid` pinner
+   (se kontrast-kontrakten øverst), og tokenene pinnes på samme måte her, så
+   den mørke drakten ikke kan lyse dem opp på en flate som ikke skifter. */
+.seg {
+  position: relative;
+  /* GRID, ikke flex: `grid-auto-columns: 1fr` gir segmentene like brede spor OG
+     lar beholderen bli så bred at det bredeste segmentet får plass i sitt eget
+     spor. Med `flex: 1 1 0` blir beholderen bare summen av innholdet, og da
+     klemmer `min-width: auto` det lengste segmentet ut av takt — målt: 51/71/86
+     px i stedet for tre like. Like brede segmenter er hele forutsetningen for at
+     markøren kan flyttes med ren brøkregning. */
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  align-items: center;
+  align-self: center;
+  /* Ingen gap: segmentene ligger inntil hverandre, og det er den glidende
+     flaten som skiller dem. Et gap ville dessuten gjort «ett segment» til noe
+     annet enn `100% / n`. */
+  gap: 0;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--control-bg);
+  box-shadow: var(--shadow-sm);
+}
+.seg::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / var(--seg-n, 1));
+  border-radius: 999px;
+  background: var(--grad-green);
+  box-shadow: var(--shadow-sm);
+  transform: translateX(calc(var(--seg-i, 0) * 100%));
+  transition: transform var(--switch-motion);
+}
+.seg-btn {
+  position: relative;        /* over den glidende flaten */
+  appearance: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1;
+  padding: 6px 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  transition: color var(--switch-motion), opacity var(--switch-motion);
+}
+.seg-btn:not(.is-active) { opacity: 0.72; }
+.seg-btn:not(.is-active):hover { opacity: 1; color: var(--ink); }
+/* Det aktive segmentet står PÅ den grønne flaten. Samme pinning som
+   `.btn-solid`: gradienten er den samme i begge drakter, så blekket og
+   ikonstreken skal stå stille. Vekten bærer forskjellen sammen med fargen. */
+.seg-btn.is-active {
+  --ink: #37343f;
+  --icon-ink: #111111;
+  --icon-paper: #ffffff;
+  --icon-grey: #c0c4c9;
+  color: var(--ink);
+  font-weight: 800;
+}
+.seg-btn:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .seg::before { transition: none; }
+}
+
+/* HOVEDBRYTEREN: Lister ↔ Notater, `.seg` i header-størrelse, på panelets egen
    øverste linje — sentrert i HELE headerens bredde, ikke skjøvet til side av
    hjørnegruppen. Gruppen skyves i stedet ned like mye som denne raden er høy
    (`--main-tabs-h`, målt i syncTopChrome), så bryteren ligger alene øverst.
@@ -5050,46 +5216,7 @@ body.no-auth .corner-controls { display: none; }
 /* Bryteren midtstilles både når raden er vannrett (bred skjerm) og når
    `.topbar-row` stables til en kolonne under 620 px. */
 .topbar-row-tabs { justify-content: center; align-items: center; }
-.main-tabs {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  flex: 0 0 auto;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--control-bg);
-  box-shadow: var(--shadow-sm);
-}
-.main-tab {
-  appearance: none;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  line-height: 1;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 14px;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ink-soft);
-  transition: background 0.18s, color 0.18s, box-shadow 0.18s;
-}
-.main-tab:hover { color: var(--ink); }
-/* Den AKTIVE halvdelen er den eneste massive flaten i bryteren: full kortflate,
-   mørkt blekk og en tydelig skygge, mot den gjennomsiktige hvilen. Forskjellen
-   må bæres av mer enn fargen alene — derfor også vekten. */
-.main-tab.is-active {
-  background: var(--surface);
-  color: var(--ink);
-  font-weight: 800;
-  box-shadow: var(--shadow-sm);
-}
-.main-tab:not(.is-active) { opacity: 0.72; }
-.main-tab:not(.is-active):hover { opacity: 1; }
-.main-tab:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 2px; }
+.main-tab { padding: 7px 14px; }
 .main-tab > .icon { width: 20px; height: 20px; flex: none; }
 
 /* NOTATKORTET er et LISTEKORT: samme `.card`-flate, samme korthode, samme
@@ -5416,44 +5543,8 @@ body.note-editing .corner-controls { display: none; }
    Autoritativt: docs/sok-og-navigering.md og docs/notater-plan.md.
    ============================================================ */
 
-/* Scopevelgeren i søket er den SAMME segmenterte kontrollen som hovedbryteren
-   øverst — samme pille, samme aktive flate, bare mindre. Den arver derfor
-   `.main-tabs`-reglene i form, ikke i kopi: `.seg` er den generelle formen, og
-   hovedbryteren er den ene store bruken av den. */
-.seg {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  align-self: center;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--control-bg);
-  box-shadow: var(--shadow-sm);
-}
-.seg-btn {
-  appearance: none;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  line-height: 1;
-  padding: 6px 14px;
-  border: none;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ink-soft);
-  transition: background 0.18s, color 0.18s, box-shadow 0.18s;
-}
-.seg-btn:hover { color: var(--ink); }
-.seg-btn.is-active {
-  background: var(--surface);
-  color: var(--ink);
-  font-weight: 800;
-  box-shadow: var(--shadow-sm);
-}
-.seg-btn:not(.is-active) { opacity: 0.72; }
-.seg-btn:not(.is-active):hover { opacity: 1; }
-.seg-btn:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 2px; }
+/* Scopevelgeren i søket er `.seg` i sin minste bruk — formen står ved
+   hovedbryteren i header-seksjonen, og her settes bare plasseringen. */
 .search-scope { margin: 0 auto 2px; }
 
 /* Utdraget fra notatteksten under et treff: sitatet som forklarer HVORFOR

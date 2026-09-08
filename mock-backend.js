@@ -1324,6 +1324,17 @@
          må være LESBAR for meg, og begge målene må FINNES — fremmednøklene i
          databasen sier begge deler, og klienten skal møte det samme her. */
       if (table === 'object_links') {
+        /* NØYAKTIG ÉN kolonne per side. Databasen har to `check`-vilkår
+           (`object_links_one_note_side`/`object_links_one_list_side`), og uten
+           dem her ville en rad med null eller to id-er på en side blitt tatt
+           imot av mocken og avvist av produksjonen. */
+        var antall = function (a) {
+          return a.reduce(function (n, v) { return n + (v ? 1 : 0); }, 0);
+        };
+        if (antall([row.note_project_id, row.note_folder_id, row.note_id]) !== 1 ||
+            antall([row.universe_id, row.group_id, row.card_id]) !== 1) {
+          throw new Error('new row for relation "object_links" violates check constraint');
+        }
         var noteRad = row.note_project_id
           ? (db.note_projects || []).find(function (x) { return x.id === row.note_project_id; })
           : row.note_folder_id

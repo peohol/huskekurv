@@ -177,13 +177,13 @@
          semantisk er den fortsatt en tablist med to tab-er.
          Se docs/notater-plan.md og docs/menus.md. -->
     <div class="topbar-row topbar-row-tabs">
-    <div class="main-tabs" id="main-tabs" role="tablist" data-i18n-aria-label="tabs.aria">
-      <button class="main-tab is-active" id="tab-lists" type="button" role="tab"
+    <div class="main-tabs seg" id="main-tabs" role="tablist" data-i18n-aria-label="tabs.aria">
+      <button class="main-tab seg-btn is-active" id="tab-lists" type="button" role="tab"
               data-tab="lists" aria-selected="true" aria-controls="board">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4.5" fill="#ffffff"></rect><circle cx="8" cy="8.5" r="0.7" fill="#111" stroke="none"></circle><circle cx="8" cy="12" r="0.7" fill="#111" stroke="none"></circle><circle cx="8" cy="15.5" r="0.7" fill="#111" stroke="none"></circle><path d="M11.5 8.5h5.5"></path><path d="M11.5 12h5.5"></path><path d="M11.5 15.5h5.5"></path></svg>
         <span data-i18n="tabs.lists">Lister</span>
       </button>
-      <button class="main-tab" id="tab-notes" type="button" role="tab"
+      <button class="main-tab seg-btn" id="tab-notes" type="button" role="tab"
               data-tab="notes" aria-selected="false" aria-controls="notes-board" tabindex="-1">
         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h7.5L19 8.5V21H6Z" fill="#ffffff"></path><path d="M13.5 3v5.5H19"></path><path d="M8.8 12.5h6.4"></path><path d="M8.8 15.5h6.4"></path><path d="M8.8 18.5h3.6"></path></svg>
         <span data-i18n="tabs.notes">Notater</span>
@@ -232,10 +232,11 @@
         <button class="btn-add btn-solid btn-green" id="add-note-btn" type="button" data-i18n-title="notes.newNote" data-i18n-aria-label="notes.newNote"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5v15"></path><path d="M4.5 12h15"></path></svg> <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h7.5L19 8.5V21H6Z" fill="#ffffff"></path><path d="M13.5 3v5.5H19"></path><path d="M8.8 12.5h6.4"></path><path d="M8.8 15.5h6.4"></path><path d="M8.8 18.5h3.6"></path></svg></button>
         <!-- Arkivet og søppelkassen for NOTATER i plasseringen man står i —
              samme knapp, samme «skjult når tom» som listenes kasser
-             (docs/trash.md, docs/notater-plan.md). Kassen er i tillegg et
-             semantisk slippmål for et notat-drag (Smett: `zoneSelector`). -->
+             (docs/trash.md, docs/notater-plan.md). BEGGE er i tillegg
+             semantiske slippmål for et notat-drag (Smett: `zoneSelector`). -->
         <span class="item-trash note-can" id="note-archive" hidden>
-          <button class="trashcan note-archive-btn" id="note-archive-btn" type="button"
+          <button class="trashcan note-archive-btn archive-can" id="note-archive-btn" type="button"
+                  data-dnd-zone="note-archive"
                   data-i18n-title="notes.archiveNotesTitle">
             <svg class="icon trashcan-icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.2" y="4" width="17.6" height="4.4" rx="1.2" fill="#c9a06a"></rect><path d="M4.8 8.4h14.4V19a1.6 1.6 0 0 1-1.6 1.6H6.4A1.6 1.6 0 0 1 4.8 19Z" fill="#ffffff"></path><rect x="3.2" y="4" width="17.6" height="4.4" rx="1.2"></rect><path d="M4.8 8.4h14.4V19a1.6 1.6 0 0 1-1.6 1.6H6.4A1.6 1.6 0 0 1 4.8 19Z"></path><path d="M9.8 12.2h4.4"></path></svg>
             <span class="trashcan-count" id="note-archive-count">0</span>
@@ -325,10 +326,12 @@
         <section class="board nav-board dnd-surface" id="notes-nav-board" aria-live="polite"></section>
       </div>
       <!-- Bokhylle-arkivet og -søppelkassen i egen, FAST fot — som
-           område-kassen i listenes nav-modal. -->
+           område-kassen i listenes nav-modal. Begge er slippmål for et
+           bokhylle-drag (Smett: `zoneSelector`). -->
       <footer class="modal-foot nav-foot">
         <div class="item-trash" id="note-project-archive" hidden>
-          <button class="trashcan note-project-archive-btn" id="note-project-archive-btn" type="button"
+          <button class="trashcan note-project-archive-btn archive-can" id="note-project-archive-btn" type="button"
+                  data-dnd-zone="note-project-archive"
                   data-i18n-title="notes.archiveProjectsTitle">
             <svg class="icon trashcan-icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.2" y="4" width="17.6" height="4.4" rx="1.2" fill="#c9a06a"></rect><path d="M4.8 8.4h14.4V19a1.6 1.6 0 0 1-1.6 1.6H6.4A1.6 1.6 0 0 1 4.8 19Z" fill="#ffffff"></path><rect x="3.2" y="4" width="17.6" height="4.4" rx="1.2"></rect><path d="M4.8 8.4h14.4V19a1.6 1.6 0 0 1-1.6 1.6H6.4A1.6 1.6 0 0 1 4.8 19Z"></path><path d="M9.8 12.2h4.4"></path></svg>
             <span class="trashcan-count" id="note-project-archive-count">0</span>

@@ -6,6 +6,10 @@
     1. Hovedbryteren: ÉN segmentert kontroll `Lister ↔ Notater`, sentrert på
        panelets øverste linje med hjørnegruppen UNDER seg, fanevalget huskes
        på enheten, og toppkontrollene finnes i BEGGE fanene
+   1b. … og den er en EKTE bryter: markeringen er ÉN flate som GLIR mellom to
+       like brede segmenter, i samme egenskap og timing som konto-modalens
+       av/på-brytere — og tastatur, `aria-selected` og rullende `tabIndex`
+       følger med
     2. Lister-fanen er funksjonelt uendret (ingen regresjon): kort, rader og
        nav-modalen står som før når man kommer tilbake
     3. Bokhylle > Notatbok > Notat: oppretting og omdøping fra navigasjonen,
@@ -152,6 +156,81 @@ async function run(navn, viewport, touch) {
     faner.sammenhengende && faner.avvikFraMidten <= 2 && faner.hjørneUnder,
     JSON.stringify(faner));
   log(navn + ': toppkontrollene er felles og synlige i listefanen', faner.hjørne);
+
+  /* ---------- 1b. Bryteren er en EKTE bryter ----------
+     Markeringen skal være ÉN flate som GLIR mellom segmentene — ikke en
+     bakgrunn som tones inn på det ene og ut på det andre. Den måles derfor på
+     det som faktisk står malt: flaten er nøyaktig ett segment bred, den
+     flyttes med `transform`, og den flytter seg i samme egenskap og timing som
+     knotten i konto-modalens av/på-brytere (`--switch-motion`). Flaten er den
+     grønne ＋-knappens (`--grad-green`), i begge drakter. */
+  const bryter = await p.evaluate(() => {
+    const seg = document.getElementById('main-tabs');
+    const cs = getComputedStyle(seg, '::before');
+    const knapper = [...seg.querySelectorAll('.main-tab')];
+    const rot = getComputedStyle(document.documentElement);
+    return {
+      markørW: Math.round(parseFloat(cs.width)),
+      segmentW: Math.round(knapper[0].getBoundingClientRect().width),
+      likeBrede: new Set(knapper.map((b) => Math.round(b.getBoundingClientRect().width))).size === 1,
+      flate: cs.backgroundImage,
+      grønn: rot.getPropertyValue('--grad-green').trim(),
+      egenskap: cs.transitionProperty,
+      varighet: cs.transitionDuration,
+      knott: getComputedStyle(document.querySelector('.toggle-switch .toggle-knob') || document.body).transitionDuration,
+      før: cs.transform,
+      n: seg.style.getPropertyValue('--seg-n'),
+      i: seg.style.getPropertyValue('--seg-i'),
+    };
+  });
+  log(navn + ': markøren er ÉN flate, nøyaktig ett segment bred',
+    bryter.markørW === bryter.segmentW && bryter.likeBrede && bryter.n === '2' && bryter.i === '0',
+    JSON.stringify(bryter));
+  log(navn + ': markøren flyttes med `transform`, i bryter-timingen',
+    bryter.egenskap === 'transform' && bryter.varighet === '0.16s',
+    bryter.egenskap + ' / ' + bryter.varighet);
+
+  await p.click('#tab-notes');
+  // ANIMASJONSFYSIKK: markøren GLIR (0,16 s), så en lesing i samme øyeblikk som
+  // klikket ville lest startverdien. Fast venting er riktig her (tests/CLAUDE.md).
+  await p.waitForTimeout(320);
+  const glidd = await p.evaluate(() => {
+    const seg = document.getElementById('main-tabs');
+    const cs = getComputedStyle(seg, '::before');
+    const aktiv = seg.querySelector('.main-tab.is-active');
+    const ak = getComputedStyle(aktiv);
+    return { transform: cs.transform, markørW: parseFloat(cs.width),
+      i: seg.style.getPropertyValue('--seg-i'),
+      aktivId: aktiv.id, aktivFarge: ak.color,
+      // Segmentet maler ingen egen flate: markøren ER flaten.
+      egenFlate: ak.backgroundColor,
+      tabIndex: [...seg.querySelectorAll('.main-tab')].map((b) => b.tabIndex).join(','),
+    };
+  });
+  const reist = (t) => {
+    const m = /matrix\(1, 0, 0, 1, ([-\d.]+), 0\)/.exec(t || '');
+    return m ? Math.abs(Number(m[1])) : 0;
+  };
+  log(navn + ': markøren GLIR til det andre segmentet (én flate, ikke to)',
+    glidd.i === '1' && Math.abs(reist(glidd.transform) - glidd.markørW) < 1 &&
+    glidd.aktivId === 'tab-notes' && glidd.egenFlate === 'rgba(0, 0, 0, 0)' &&
+    glidd.aktivFarge === 'rgb(55, 52, 63)',
+    JSON.stringify(glidd));
+  log(navn + ': rullende tabIndex følger med (0 på den aktive)',
+    glidd.tabIndex === '-1,0', glidd.tabIndex);
+
+  // Piltastene bytter fortsatt fane, og markøren følger.
+  await p.locator('#tab-notes').focus();
+  await p.keyboard.press('ArrowLeft');
+  const medTast = await p.evaluate(() => {
+    const seg = document.getElementById('main-tabs');
+    return { i: seg.style.getPropertyValue('--seg-i'),
+      valgt: document.getElementById('tab-lists').getAttribute('aria-selected'),
+      fokus: document.activeElement.id };
+  });
+  log(navn + ': piltast bytter fane, flytter markøren og tar fokus med seg',
+    medTast.i === '0' && medTast.valgt === 'true' && medTast.fokus === 'tab-lists',
+    JSON.stringify(medTast));
 
   await p.click('#tab-notes');
   const iNotater = await p.evaluate(() => ({

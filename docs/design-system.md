@@ -33,7 +33,9 @@ står fortsatt som px.
 `--grad-purple/-blue` som bare brukes av startgruppene i «Kommende
 hendelser», og `--grad-slate` som er den nøytrale flaten de to gruppene lenger
 ute enn en måned deler der), `--danger`/`--warn`
-(fare/advarsel som flate- og signalfarge), skygge- og radius-variablene. Nye
+(fare/advarsel som flate- og signalfarge), `--switch-motion` (bevegelsen i
+appens brytere), `--dnd-veil` (hvor mye av sin egen farge en LØFTET flate
+beholder), skygge- og radius-variablene. Nye
 kontroller skal bruke disse — aldri egne ad hoc-verdier. Endres et token, skal
 hele appen følge med.
 
@@ -146,6 +148,12 @@ legge seg oppå det, så feltet som redigeres kan bli liggende under det. Sidens
   være minst like stor som paddingen inni dem — trangere inni enn utenfor
   oppleves harmonisk, det motsatte ikke. (F.eks. item-padding 6 / item-gap 8;
   chip-padding 6 / chip-gap 8; kort-seksjonspadding 10 / `--board-gap` ≥ 12.)
+- **Headeren har ÉN luft-verdi** (`--topbar-gap`), og den gjelder begge
+  retninger: mellom panelets rader, mellom kontrollene på en rad, mellom
+  hjørneknappene og mellom hjørnegruppens rader. Panelets egen polstring over og
+  under står i `--topbar-pad-y`, som hjørnegruppen leser for å flukte med den
+  samme linjen. Ingen kompenserende tall per retning eller breakpoint — se
+  [`menus.md`](menus.md).
 - Listekortet er en flex-kolonne: `.card-head` øverst + `.card-body` (alt annet).
   `.card-body` bærer luften (`gap: 10px` mellom seksjonene + `padding: 10px 0`
   topp/bunn); seksjonene (items/skjema/listepunkt-kurv) har 10px sidepolstring →
@@ -328,14 +336,12 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   (bare navn, uten ikoner, på flate-mønsteret; `.crumb-name` med ellipsis);
   `.crumb-sep` er ›-skilletegnet mellom dem. Notatfanen har sin egen
   (`#notes-crumb`, `[bokhylle] › [notatbok]`) med nøyaktig den samme klassen.
-- `.main-tabs` + `.main-tab`: hovedbryteren `Lister ↔ Notater` — ÉN segmentert
-  kontroll (pilleformet flate med to segmenter inni), sentrert på panelets
-  FØRSTE rad (`.topbar-row-tabs`), i hele bredden. Hjørnegruppen skyves ned
-  under den (`--main-tabs-h`, målt i `syncTopChrome`), så bryteren ligger alene
-  øverst. Den aktive halvdelen er den eneste massive flaten: kortflate + tyngre
-  skrift + skygge — forskjellen bæres av mer enn fargen alene. Semantisk er den
-  fortsatt en `tablist` med to `tab`-er (`docs/tilgjengelighet.md`).
-  `.topbar-row` er den aktive fanens egen rad.
+- `.main-tabs` + `.main-tab`: hovedbryteren `Lister ↔ Notater` — `.seg` (under)
+  i header-størrelse, sentrert på panelets FØRSTE rad (`.topbar-row-tabs`), i
+  hele bredden. Hjørnegruppen skyves ned under den (`--main-tabs-h`, målt i
+  `syncTopChrome`), så bryteren ligger alene øverst. Semantisk er den fortsatt
+  en `tablist` med to `tab`-er (`docs/tilgjengelighet.md`). `.topbar-row` er
+  den aktive fanens egen rad.
 - `.note-card`: notatkortet ER et listekort — samme `.card`-flate, samme
   `.card-head` (notatikon + tittel til venstre, «sist endret» som `.meta-chip`
   til høyre) og samme posisjonsbaserte palettfarge fra `paintCardColor`.
@@ -344,12 +350,27 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   klipper ved padding-boksen, så en klipping på platen selv ville latt den
   fjerde linjen stå synlig i bunnpolstringen. Hele kortet er klikkflate og
   dra-sone, så det har pekehånd og `:focus-visible`-ring.
-- `.seg` + `.seg-btn`: den GENERELLE segmenterte pillen. `.main-tabs` over er
-  den store bruken av formen; `.seg` er den samme flaten i liten størrelse, og
-  søkets scopevelger (`Alt | Lister | Notater`) er første kaller. Samme aktive
-  flate (kortflate + tyngre skrift + skygge) og samme `tablist`-semantikk med
-  piltaster. Trenger noe annet et to- eller tredelt valg, er det denne som
-  gjenbrukes — ikke en ny knapperad.
+- `.seg` + `.seg-btn`: den GENERELLE segmenterte bryteren — hovedbryteren
+  (`.main-tabs`) og søkets scopevelger (`Alt | Lister | Notater`) er den samme
+  kontrollen i to størrelser. Den er en EKTE bryter: markeringen er ÉN flate
+  som GLIR mellom segmentene (`::before` på beholderen), ikke en bakgrunn som
+  tones inn på det ene og ut på det andre — da ville den lest som to knapper
+  som blinker. Flaten flyttes med `transform` i den samme timingen som knotten
+  i konto-modalens av/på-brytere (`--switch-motion`), og reduced-motion slår
+  bevegelsen av.
+
+  Segmentene er LIKE BREDE (`display: inline-grid` + `grid-auto-columns: 1fr`),
+  og det er dét som gjør reisen til ren regning: flaten er `100% / --seg-n` bred
+  og står `--seg-i * 100%` inn. De to tallene settes fra JS (`paintSeg`), som
+  også setter `aria-selected` og den rullende `tabIndex`-en — ett sted for
+  begge bryterne, så en tredje fane ville virket uten en ny utregning. (Grid og
+  ikke flex: med `flex: 1 1 0` blir beholderen bare like bred som innholdet, og
+  `min-width: auto` klemmer det lengste segmentet ut av takt.)
+
+  Den aktive flaten er den grønne ＋-knappens (`--grad-green`). Den bærer derfor
+  SVARTE ikoner og MØRKT blekk, som `.btn-solid` pinner dem — samme
+  kontrakt, samme tokens, i begge drakter. Trenger noe annet et to- eller
+  tredelt valg, er det denne som gjenbrukes — ikke en ny knapperad.
 - `.trashcan`: ALLE søppelkasse-knapper — hvit avrundet beholder, antall i grå
   sirkel (`.trashcan-count`), **skjult (`hidden`) når tom**. ARKIVET
   ([`notater-plan.md`](notater-plan.md)) er den SAMME knappen med arkivikonet:

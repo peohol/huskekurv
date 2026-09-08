@@ -38,16 +38,19 @@ er hvilket state-tre man slår opp i (`boardScope` / `navScope` / `ideaScope` /
 | `boardCardBoard` | `#board .card` (lister) | `#board .board-col` | `.card-head` | `#trash-btn`, `#nav-crumb` |
 | `boardRowBoard` | `.items-container > .item`, `.items-container > .category`, `.cat-items > .item` | `.items-container`, `.cat-items` | `.item`, `.cat-head` | `.item-trash-btn` |
 | `ideaRowBoard` | de samme radene, i idémodalen | `.items-container`, `.cat-items` | `.item`, `.cat-head` | `.item-trash-btn` |
-| `notesCardBoard` | `#notes-board .note-card` (notater) | `#notes-board .board-col` | `.note-card` (hele kortet) | `#note-trash-btn` |
-| `notesNavCardBoard` | `#notes-nav-board .card` (bokhyller) | `#notes-nav-board .board-col` | `.card-head` | `#note-project-trash-btn` |
-| `notesNavRowBoard` | `#notes-nav-board .item` (notatbøker) | `#notes-nav-board .items-container` | `.item` | `.note-folder-trash-btn` |
+| `notesCardBoard` | `#notes-board .note-card` (notater) | `#notes-board .board-col` | `.note-card` (hele kortet) | `#note-trash-btn`, `#note-archive-btn` |
+| `notesNavCardBoard` | `#notes-nav-board .card` (bokhyller) | `#notes-nav-board .board-col` | `.card-head` | `#note-project-trash-btn`, `#note-project-archive-btn` |
+| `notesNavRowBoard` | `#notes-nav-board .item` (notatbøker) | `#notes-nav-board .items-container` | `.item` | `.note-folder-trash-btn`, `.note-folder-archive-btn` |
 
 **Notat-scopene er de enkleste.** Ingen kategorier, ingen låser og ingen
-ekstrahering, så et slipp kan bety to ting: ny plass i rekka (for en notatbok i
-tillegg en ny bokhylle), eller SLETTING når det lander i kassen. Kassene er de
-samme sonene som på listesiden ([`trash.md`](trash.md)), og siden notatene hører
-til kontoen alene, er det ingen myndighet å spørre om — kassen armes så snart
-objektet finnes. NOTATKORTET
+ekstrahering, så et slipp kan bety tre ting: ny plass i rekka (for en notatbok i
+tillegg en ny bokhylle), SLETTING når det lander i kassen, eller ARKIVERING når
+det lander i arkivet. Notatsiden er den eneste som har to kasser per nivå, og de
+er samme sone-maskineri ([`trash.md`](trash.md)): begge foldes ut av draget,
+begge markeres når man sikter, og bare betydningen skiller dem. Siden notatene
+hører til kontoen alene, er det ingen myndighet å spørre om — begge armes så
+snart objektet finnes, og med den samme retten (den som ikke får slette, får
+heller ikke arkivere ved å dra). NOTATKORTET
 er sin egen dra-sone i sin helhet: kortet har ingen indre kontroller å treffe, så
 klikk åpner editoren og klikk-og-hold løfter — dnd-kits egen aktiveringsterskel
 skiller de to, og klikk-vakten svelger klikket som ellers ville fulgt et slipp.
@@ -281,6 +284,14 @@ posisjon. `dndRowPolicy` henger derfor på begge krokene.
 
 Testene merker det samme fra utsiden, og sender hver bevegelse som TO punkter —
 som `travel()` i `tests/dnd-gestures.js` gjør, av samme grunn.
+
+**Men et drag som er OVER har ingen politikk.** De samme to krokene kan fyre
+ETTER `dragend` — typisk mens en avbrutt gests retur-animasjon fortsatt går — og
+en runde der malte ekstraheringsmodusen på nytt PÅ ET BOARD I HVILE:
+`is-extracting` og ny-liste-stripa ble stående etter at `finishDrag` hadde
+ryddet, og NESTE drag startet i feil modus (målt: en rad sluppet i en tom liste
+landet ikke der). `dndRowPolicy` returnerer derfor med én gang når `drag.active`
+er falsk. Måles i `dnd-extract-thresholds` (E0).
 
 **Står pekeren stille, står svaret stille.** Det er ikke en optimalisering, det
 er hele stabiliteten: vår egen plassering flytter radene, og en ny runde på det
@@ -899,6 +910,14 @@ Idet et drag starter, vises kassen for NIVÅET fram (`armDragTrash` — den er
 ellers skjult når den er tom), den markeres når man sikter på den, og et slipp i
 den SLETTER objektet i stedet for å flytte det.
 
+**På notatsiden gjelder nøyaktig det samme for ARKIVET** (`armDragArchive`), som
+står ved siden av kassen på alle tre nivåene. Det er den samme knappen, den
+samme sonen og den samme utfoldingen — bare betydningen og fargen er en annen:
+`--drag-archive` i stedet for `--drag-danger`, fordi arkivering ikke er en fare.
+Retten er slettingens (`draggedCanBeTrashed`), og opprydningen er felles:
+`disarmDragTrash` rydder BEGGE kassene og begge fargene på alle veier ut av et
+drag, også avbrutte.
+
 Kassene er **soner** (`zoneSelector` + `onZoneDrop`), og Smett ruller raden
 tilbake dit den kom fra FØR handlingen kalles — nøyaktig semantikken vi vil ha:
 ingen ny `pos` skrives, slettingen tar over. Treffsonen er knappen selv; sonen er
@@ -1329,6 +1348,13 @@ så teksten er like lesbar som i hvile.
 Regelen gjelder alle fem nivåene, fra én blokk på `[data-dnd-dragging]`. Den er
 Huskis' politikk, ikke Smetts: Smett sier hvor et slipp lander, ikke hvordan det
 som dras ser ut.
+
+**Og den gjelder HELE den malte flaten, ikke bare det ytterste laget.** Et kort er
+flere flater oppå hverandre: kortfargen, korthodets eget hakk og platene
+innholdet står på. Slipper bare den ytterste lys gjennom, leser objektet fortsatt
+som ugjennomsiktig — tydeligst på notatkortet, der hodet og utdragsplaten dekker
+nesten hele kortet. De indre lagene får derfor det samme sløret, og hvor mye som
+slipper gjennom står ett sted for hele appen (`--dnd-veil`).
 
 **Tilstander må derfor uttrykkes i FARGE, ikke i mer gjennomsikt.** Sikter man på
 søppelkassen, males en rødvask (`--drag-danger`) over flaten som

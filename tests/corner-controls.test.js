@@ -12,7 +12,10 @@
      1. Gruppen finnes, og knappene ligger i rekkefølgen varsler → kalender →
         søk → idéer → drakt → konto (DOM og visuelt), med kontoknappen ytterst.
      2. Alle knappene har kontrollhøyden, samme overkant og lik luft mellom seg
-        — ingen av dem er mindre enn berøringsmålet.
+        — ingen av dem er mindre enn berøringsmålet — og HELE headeren bruker
+        den samme luft-verdien i begge retninger (`--topbar-gap`): mellom
+        knappene, mellom gruppens rader, mellom panelets rader og mellom
+        kontrollene på en rad.
      3. Kontoknappen flukter fortsatt med toppmenyens høyre kant.
      4. `--corner-btns-w` MÅLES av appen (gruppens bredde + luften), og er det
         toppmenyen holder av plass med: `.toolbar`s margin på én linje,
@@ -238,6 +241,47 @@ async function run(label, viewport, mobile) {
     gaps.length > 0 && gaps.every((x) => nær(x, g.gap)), JSON.stringify(gaps) + ' vs gap ' + g.gap);
   log(label + ' 2d: ingen knapp er under berøringsmålet på 44 px',
     g.kids.every((k) => k.w >= 44 && k.h >= 44), JSON.stringify(g.kids.map((k) => k.w)));
+
+  /* ---------- 2e) ÉN luft-verdi i HELE headeren, i begge retninger ----------
+     Avstanden mellom to hjørneknapper, mellom gruppens rader, mellom panelets
+     rader (hovedbryteren → fanens knapperad) og mellom kontrollene på en rad
+     skal være det SAMME tallet (`--topbar-gap`). Var de forskjellige, leste
+     headeren som to systemer lagt oppå hverandre — og et kompenserende
+     magisk tall ett sted ville flyttet grensen et annet. */
+  const luft = await p.evaluate(() => {
+    const r = (sel) => { const e = document.querySelector(sel); return e ? e.getBoundingClientRect() : null; };
+    const rader = new Map();
+    document.querySelectorAll('#corner-controls .corner-btn').forEach((b) => {
+      const box = b.getBoundingClientRect();
+      const k = Math.round(box.top);
+      (rader.get(k) || rader.set(k, []).get(k)).push(box);
+    });
+    const nøkler = [...rader.keys()].sort((a, b) => a - b);
+    const x = [];
+    nøkler.forEach((k) => {
+      const rw = rader.get(k).sort((a, b) => a.left - b.left);
+      for (let i = 1; i < rw.length; i++) x.push(Math.round(rw[i].left - rw[i - 1].right));
+    });
+    const y = [];
+    for (let i = 1; i < nøkler.length; i++) {
+      y.push(Math.round(nøkler[i] - rader.get(nøkler[i - 1])[0].bottom));
+    }
+    const faner = r('.topbar-row-tabs'), fane = r('#topbar-row-lists');
+    const crumb = r('.breadcrumb'), tool = r('.toolbar');
+    // Under 620 px stables `.topbar-row` — da er avstanden crumb → knapperad
+    // loddrett, og det er den samme verdien som skal måles.
+    const stablet = tool.top >= crumb.bottom - 1;
+    return {
+      token: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--topbar-gap')),
+      knappX: x, knappY: y,
+      panelRad: Math.round(fane.top - faner.bottom),
+      crumbTilKnapper: Math.round(stablet ? tool.top - crumb.bottom : tool.left - crumb.right),
+    };
+  });
+  const alleLuft = [].concat(luft.knappX, luft.knappY, [luft.panelRad, luft.crumbTilKnapper]);
+  log(label + ' 2e: én og samme luft mellom alle header-kontroller, i x og y',
+    alleLuft.length >= 4 && alleLuft.every((v) => nær(v, luft.token)),
+    JSON.stringify(luft));
 
   /* ---------- 3) Fluktingen med toppmenyen ---------- */
   const flukt = g.vw - g.group.right;
