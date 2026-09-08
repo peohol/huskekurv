@@ -4476,8 +4476,9 @@
      den avgjøres ÉN gang per drag, i `beforedragstart`, før dnd-kit har malt en
      eneste frame. `drag.oneAxis` leses derfra av både modifikatoren og
      rotasjonen. DELT av alle fem nivåene. */
-  function dndLockAxis() {
+  function dndLockAxis(b) {
     drag.oneAxis = boardColumnCount(dragScope()) <= 1;
+    dndTuneAutoScroll(b);
   }
 
   /* Modifikatoren dnd-kit spør hver frame. Den nuller x når draget er låst —
@@ -4510,6 +4511,63 @@
      derfor både mindre duplisering og én færre hash i policyen. Den ENE som
      blir igjen er `Feedback`s, og den er uunnværlig: den er hele
      posisjoneringen av det løftede objektet (`docs/sikkerhetsheadere.md`). */
+  /* Den ØVRE auto-scroll-sonen skal rekke UNDER den faste toppmenyen: man skal
+     ikke måtte dra objektet opp BAK panelet for at siden skal begynne å rulle.
+     dnd-kits `AutoScroller` måler sonen som en BRØKDEL av scroll-containeren,
+     mens kravet er en PIKSELKANT (panelets underkant), og panelet er nå to
+     rader høyt (hovedfanene + kontrollene, docs/notater-plan.md). En fast
+     brøkdel ville derfor rukket til på én skjermstørrelse og ikke på en annen.
+
+     Brøken leses derfor LEVENDE, som gettere: dnd-kit spør om terskelen på
+     hver scroll-runde, og svaret er alltid regnet ut av panelets faktiske
+     underkant mot viewportets faktiske høyde. Gulvet er dnd-kits egen
+     standard, taket holder sonen fra å svelge en tredjedel av skjermen.
+     `tests/dnd-mobile-autoscroll.test.js` er vakten. */
+  /* `DND_SCROLL_PAD` er marginen UNDER panelet sonen skal nå: kanten skal ligge
+     et stykke forbi det høyeste punktet en finger kan sikte på, ikke nøyaktig
+     på det (en terskel er en streng ulikhet).
+
+     UTVIDELSEN GJELDER BARE ØVRE HALVDEL. dnd-kit bruker ÉN brøkdel for begge
+     kantene, og en større sone NEDE er skadelig: søppelkassen siktes på der, og
+     en side som begynner å rulle idet man nærmer seg knappen drar målet vekk
+     under fingeren. Grunnen til at sonen må utvides finnes bare i toppen — det
+     faste panelet — så brøken svarer stort kun mens pekeren faktisk er i den
+     halvdelen. Pekerposisjonen er den `dndSyncIntent` alt fører. */
+  const DND_SCROLL_MIN = 0.2, DND_SCROLL_MAX = 0.34, DND_SCROLL_PAD = 16;
+  /* Manageren som drar NÅ. Pekerposisjonen leses fra dnd-kits egen operasjon,
+     ikke fra `drag.lastY`: den fylles av VÅR `dragmove`-lytter, som kjører
+     etter auto-scroll-runden — sonen ville da svart på forrige posisjon, og en
+     finger som blir stående rett under panelet ville aldri fått den utvidede
+     sonen i det hele tatt. */
+  let dndScrollManager = null;
+  function dndScrollFraction() {
+    const vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    if (!vh || !topbarEl) return DND_SCROLL_MIN;
+    const at = dndScrollManager && dndScrollManager.dragOperation &&
+      dndScrollManager.dragOperation.position &&
+      dndScrollManager.dragOperation.position.current;
+    if (!at || !(at.y < vh / 2)) return DND_SCROLL_MIN;
+    const under = topbarEl.getBoundingClientRect().bottom + DND_SCROLL_PAD;
+    return Math.max(DND_SCROLL_MIN, Math.min(DND_SCROLL_MAX, under / vh));
+  }
+  const dndScrollThreshold = {
+    get x() { return DND_SCROLL_MIN; },   // vannrett auto-scroll er dnd-kits egen
+    get y() { return dndScrollFraction(); },
+  };
+  /* Terskelen settes ved LØFT, ikke ved bygging: board-ets egne effekter
+     registrerer dnd-kits standard-plugins ETTER konstruktøren, så en
+     omregistrering derfra ville blitt overskrevet med standardverdiene igjen.
+     Kallet er idempotent — står terskelen alt på vår, gjøres ingenting. */
+  function dndTuneAutoScroll(b) {
+    if (!b || typeof Smett === 'undefined' || !Smett.AutoScroller) return;
+    dndScrollManager = b.manager;
+    const plugins = b.manager.registry.plugins;
+    const cur = plugins.get(Smett.AutoScroller);
+    const opts = (cur && cur.options) || {};
+    if (opts.threshold === dndScrollThreshold) return;
+    plugins.unregister(Smett.AutoScroller);
+    plugins.register(Smett.AutoScroller, Object.assign({}, opts, { threshold: dndScrollThreshold }));
+  }
   function dndTuneManager(b) {
     b.manager.registry.plugins.unregister(Smett.Cursor);
     b.manager.registry.plugins.unregister(Smett.PreventSelection);
@@ -7085,7 +7143,7 @@
     armDragTrash();             // kassen for NIVÅET, avdekket for draget
     navHoldGrab(el, top0);
     dndNoteLiftedBox(el);       // etter kollapsen: boksen dnd-kit straks måler
-    dndLockAxis();              // nav-modalen har alltid én kolonne
+    dndLockAxis(board);         // nav-modalen har alltid én kolonne
   }
 
   function navDragStart(board) {
@@ -7791,7 +7849,7 @@
     boardCollapseCardsForDrag(el);
     boardTuneColumnCollisions();
     dndNoteLiftedBox(el);       // etter kollapsen: boksen dnd-kit straks måler
-    dndLockAxis();              // én kolonne (smal skjerm) = ingen vannrett vei
+    dndLockAxis(b);             // én kolonne (smal skjerm) = ingen vannrett vei
     armDragTrash();             // liste-kassen, avdekket for draget
   }
 
@@ -8173,7 +8231,7 @@
     boardFreezeForRowDrag(el);
     dndTuneRowCollisions(boardRowBoard);
     dndNoteLiftedBox(el);       // etter kategoriens sammenfolding: boksen dnd-kit straks måler
-    dndLockAxis();              // én kolonne (smal skjerm) = ingen vannrett vei
+    dndLockAxis(b);             // én kolonne (smal skjerm) = ingen vannrett vei
     armDragTrash();             // element-kassen, avdekket for draget
   }
 
@@ -9168,6 +9226,11 @@
     if (timeQuickOpen) { closeTimeQuick(); return true; } // tids-popoveren ligger øverst
     if (respOpen) { closeResponsible(); return true; } // ansvarlig-velgeren ligger øverst
     if (confirmModalEl && !confirmModalEl.hidden) { closeConfirm(false); return true; } // øverst
+    /* Notat-editoren er et fullskjermsbilde over alt annet (den gjør resten av
+       appen inert), så den er øverste lag når den står åpen — både for Escape
+       og for Androids tilbakeknapp. Et åpent panel i den lukkes av editorens
+       egen Escape-lytter, som stopper hendelsen der. */
+    if (noteEditorOpen()) { closeNoteEditor(); return true; }
     const delAcc = document.getElementById('delete-account-modal');
     if (delAcc && !delAcc.hidden) { closeDeleteAccount(); return true; } // over konto-modalen
     if (avatarModal && !avatarModal.hidden) { closeAvatarEditor(); return true; } // over konto-modalen
@@ -9202,6 +9265,7 @@
     }
     if (!trashModal.hidden) { closeTrash(); return true; }
     if (!navModal.hidden) { closeNavModal(); return true; }
+    if (notesNavModal && !notesNavModal.hidden) { closeNotesNav(); return true; }
     if (!accountModal.hidden) { closeAccount(); return true; }
     return false;
   }
@@ -14290,7 +14354,7 @@
     if (kind === 'category') dndCollapseCategory(el);
     dndTuneRowCollisions(ideaRowBoard);
     dndNoteLiftedBox(el);
-    dndLockAxis();              // idémodalen har alltid én kolonne
+    dndLockAxis(b);             // idémodalen har alltid én kolonne
   }
 
   function ideaRowDragStart(b) {
@@ -15307,7 +15371,7 @@
     document.documentElement.style.overflowAnchor = 'none';
     notesTuneColumnCollisions();
     dndNoteLiftedBox(el);
-    dndLockAxis();
+    dndLockAxis(b);
   }
   function notesDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
@@ -15450,7 +15514,7 @@
     document.documentElement.style.overflowAnchor = 'none';
     if (kind === 'item') dndTuneRowCollisions(notesNavRowBoard);
     dndNoteLiftedBox(el);
-    dndLockAxis();                 // nav-modalen har alltid én kolonne
+    dndLockAxis(b);                // nav-modalen har alltid én kolonne
   }
   function notesNavDragStart(b, kind) {
     dndSyncIntent(b.manager.dragOperation);
@@ -16041,9 +16105,12 @@
       if (ev.key === 'Enter') { ev.preventDefault(); applyNoteLink(); }
       else if (ev.key === 'Escape') { ev.preventDefault(); closeNotePanels(); noteDocEl.focus(); }
     });
-    // Escape lukker et åpent panel først, deretter editoren.
+    /* Escape lukker et åpent panel først, deretter editoren. Hendelsen stoppes
+       her: dokumentets egen Escape-lytter (`closeTopLayer`) ville ellers lukket
+       hele editoren i det samme trykket som bare skulle lukke panelet. */
     noteEditorEl.addEventListener('keydown', (ev) => {
       if (ev.key !== 'Escape') return;
+      ev.stopPropagation();
       if (noteLinkPanel.hidden && noteSymbolPanel.hidden) { closeNoteEditor(); return; }
       closeNotePanels();
       noteDocEl.focus();

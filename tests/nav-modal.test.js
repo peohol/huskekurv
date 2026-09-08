@@ -177,14 +177,19 @@ async function run(label, vp, mobile) {
   await register(p);
   await seed(p);
 
-  /* ---------- 1) Én nav-knapp, én modal ---------- */
+  /* ---------- 1) Én nav-knapp, én modal ----------
+     Hver HOVEDFANE har sin egen breadcrumb (docs/notater-plan.md), og bare den
+     aktive fanens rad er synlig. Kravet er derfor at LISTEFANEN har nøyaktig
+     én — ikke at det finnes én i hele dokumentet. */
   const nav = await p.evaluate(() => ({
-    crumbs: document.querySelectorAll('.breadcrumb .crumb-btn').length,
+    crumbs: document.querySelectorAll('#topbar-row-lists .breadcrumb .crumb-btn').length,
+    synlige: [...document.querySelectorAll('.breadcrumb .crumb-btn')]
+      .filter((el) => el.getClientRects().length).length,
     oldModals: !!document.getElementById('uni-modal') || !!document.getElementById('group-modal'),
     text: document.getElementById('nav-crumb').innerText.replace(/\s+/g, ' ').trim(),
   }));
   log(label + ' 1: én navigasjonsknapp med hele lokasjonen',
-    nav.crumbs === 1 && nav.text === 'Hjemme › Ukesplan', JSON.stringify(nav));
+    nav.crumbs === 1 && nav.synlige === 1 && nav.text === 'Hjemme › Ukesplan', JSON.stringify(nav));
   log(label + ' 1: de gamle område-/mappe-modalene er borte', nav.oldModals === false);
 
   await open(p);

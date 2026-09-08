@@ -321,6 +321,26 @@ async function run(navn, viewport, touch) {
     /Lagrer/.test(lagrer), JSON.stringify(lagrer));
 
   /* ---------- 7. Tilbake til samme kontekst ---------- */
+  // Escape lukker først et åpent panel, deretter editoren — og lukker ikke
+  // begge i ett trykk (systemBack tar den samme stigen på Android).
+  await p.click('.note-tool[data-cmd="symbol"]');
+  await p.waitForSelector('#note-symbol-panel button', { timeout: 3000 });
+  await p.keyboard.press('Escape');
+  const etterEnEsc = await p.evaluate(() => ({
+    panel: document.getElementById('note-symbol-panel').hidden,
+    editor: document.getElementById('note-editor').hidden,
+  }));
+  log(navn + ': Escape lukker panelet, ikke hele editoren',
+    etterEnEsc.panel && !etterEnEsc.editor, JSON.stringify(etterEnEsc));
+  const viaBack = await p.evaluate(() => {
+    const tatt = window.__huskis.systemBack();
+    return { tatt, editor: document.getElementById('note-editor').hidden };
+  });
+  log(navn + ': Androids tilbakeknapp lukker editoren i stedet for appen',
+    viaBack.tatt === true && viaBack.editor, JSON.stringify(viaBack));
+  // …og åpne den igjen, så resten av flyten står som før.
+  await p.click('#notes-board .note-card');
+  await editorÅpen(p);
   await p.click('#note-back');
   await editorLukket(p);
   const tilbake = await p.evaluate(() => ({

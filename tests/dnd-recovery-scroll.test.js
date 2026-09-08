@@ -297,7 +297,13 @@ const log = (n, ok, x = '') => { results.push(ok); console.log((ok ? 'PASS' : 'F
 
   /* ===== 10/11) Scroll etter liste-slipp ===== */
   {
-    const p = await b.newPage({ viewport: { width: 500, height: 900 }, hasTouch: true, isMobile: true });
+    /* Toppmenyen har fått ÉN RAD TIL — hovedfanene `Lister | Notater`
+       (docs/notater-plan.md) — og den koster board-et ~44 px. Sjekk 10 hviler
+       på at lista er FULLT SYNLIG allerede før slippet, altså på hvor mye
+       plass board-et har under panelet; med den samme viewporthøyden ville
+       forutsetningen ikke lenger holdt, og en scroll som bringer lista i syne
+       hadde vært riktig. Viewporten får derfor plassen tilbake. */
+    const p = await b.newPage({ viewport: { width: 500, height: 900 + 44 }, hasTouch: true, isMobile: true });
     const errs = []; p.on('pageerror', (e) => errs.push(e.message));
     await register(p); await seed(p, [['A', 4], ['B', 4], ['C', 4], ['D', 4], ['E', 4]]);
 
