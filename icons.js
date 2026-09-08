@@ -218,13 +218,36 @@ window.ICONS = {
     '<path d="M8.8 18.5h3.6"></path>' +
     '</svg>',
 
-  // Notatprosjekt: mappen med et ark i — prosjektet er notatenes øverste nivå,
-  // slik området er listenes. Manilamappe-tan som `folder`, arket hvitt som
-  // `note`, så slektskapet begge veier er synlig.
+  // Bokhylle: notatenes ØVERSTE nivå, slik området er listenes. Reolen er hvit
+  // som liste-/notatflatene, og bøkene bærer motivfargene fra settet — en
+  // hylle med flere fargede rygger leses som «her står bøkene mine» på et par
+  // titalls piksler, slik globusen leses som «område».
   noteProject: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<path d="M2.5 19.5V6a1.8 1.8 0 0 1 1.8-1.8h3.1a1.8 1.8 0 0 1 1.45.73l1 1.35a1.8 1.8 0 0 0 1.45.72h6.4A1.8 1.8 0 0 1 19.5 8.8v10.7a1.8 1.8 0 0 1-1.8 1.8H4.3a1.8 1.8 0 0 1-1.8-1.8Z" fill="#c9a06a"></path>' +
-    '<path d="M9.5 9.5h6.2l2.6 2.6v6.6H9.5Z" fill="#ffffff"></path>' +
-    '<path d="M15.7 9.5v2.6h2.6"></path>' +
+    '<rect x="3" y="3.5" width="18" height="17" rx="2" fill="#ffffff"></rect>' +
+    '<path d="M5.9 6.1h2v5.1h-2Z" fill="#c15c56"></path>' +
+    '<path d="M8.6 6.9h1.8v4.3H8.6Z" fill="#6fa8e0"></path>' +
+    '<path d="M11.1 6.1h2v5.1h-2Z" fill="#e8bd3e"></path>' +
+    '<path d="M13.8 7.3h2.1v3.9h-2.1Z" fill="#5da172"></path>' +
+    '<path d="M3 11.9h18"></path>' +
+    '<path d="M5.9 13.6h2v4.6h-2Z" fill="#85adad"></path>' +
+    '<path d="M8.6 14.3h1.8v3.9H8.6Z" fill="#c9a06a"></path>' +
+    '<path d="M11.1 13.6h2v4.6h-2Z" fill="#ad85ad"></path>' +
+    '<path d="M13.8 14.9h2.1v3.3h-2.1Z" fill="#c96b45"></path>' +
+    '<path d="M3 18.4h18"></path>' +
+    '<rect x="3" y="3.5" width="18" height="17" rx="2"></rect>' +
+    '</svg>',
+
+  // Notatbok: bokhyllens innhold og notatets forelder. Rød perm med de hvite
+  // sidene stikkende fram til høyre — det ene motivet som sier «bok» uten å
+  // kunne forveksles med et ark (`note`) eller en hylle (`noteProject`).
+  noteFolder: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4.5 5A1.5 1.5 0 0 1 6 3.5h13A1.5 1.5 0 0 1 20.5 5v14a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19Z" fill="#c15c56"></path>' +
+    '<path d="M8.5 3.5h10.5A1.5 1.5 0 0 1 20.5 5v14a1.5 1.5 0 0 1-1.5 1.5H8.5Z" fill="#ffffff"></path>' +
+    '<path d="M8.5 3.5v17"></path>' +
+    '<path d="M11 8.4h6.4"></path>' +
+    '<path d="M11 12h6.4"></path>' +
+    '<path d="M11 15.6h4"></path>' +
+    '<path d="M4.5 5A1.5 1.5 0 0 1 6 3.5h13A1.5 1.5 0 0 1 20.5 5v14a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19Z"></path>' +
     '</svg>',
 
   // Kryss (×) for lukk-/slett-knapper: egen SVG med samme strek (1.05) og runde

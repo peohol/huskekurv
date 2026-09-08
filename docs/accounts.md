@@ -87,7 +87,7 @@ hvilken versjon (`user_metadata.onboarding`) — og hvilke gest-tips som er vist
 
 **Aktiv posisjon på kontoen**: hvilket område/mappe man står i lagres i
 `user_metadata.nav = {u,g,np,nf}` via `auth.updateUser({ data })` — `u`/`g` er
-listefanens område og mappe, `np`/`nf` notatfanens prosjekt og mappe (debouncet,
+listefanens område og mappe, `np`/`nf` notatfanens bokhylle og notatbok (debouncet,
 `saveNavPref`), og gjenopprettes ved første pull (`restoreNavPref`). Se
 `docs/data-model.md` for semantikken. Mock-backenden speiler dette:
 `user_metadata` ligger på profilen i den delte «databasen», settes av
@@ -275,10 +275,12 @@ samme nested `state` som før; synken går slik (`cloudCycle`):
    overlates neste forsøk til det vanlige pollet.
 
    Notatradene sorteres inn i den samme foreldre-før-barn-rekkefølgen
-   (prosjekt → mappe → notat), og `pruneNoteParents` gjør for dem det
-   `pruneDanglingCats` gjør for kategoriene: en mappepeker som ikke treffer
-   nulles (notatet blir fritt), og en rad uten lesbart prosjekt tas ut av
-   doc-en i stedet for å bli hengende i en usynlig retry-løkke.
+   (bokhylle → notatbok → notat), og `pruneNoteParents` gjør for dem det
+   `pruneDanglingCats` gjør for kategoriene: en notatbok-peker som ikke treffer
+   nulles (notatet blir fritt), og en rad uten lesbar bokhylle tas ut av
+   doc-en i stedet for å bli hengende i en usynlig retry-løkke. Peker notatet
+   på en notatbok som FINNES, vinner notatbokens bokhylle — den samme regelen
+   serveren håndhever (`notes_fix_parent`), så de to kan ikke bli uenige.
 
    **Rekkefølge innen en tabell**: `items.cat_id`/`groups.cat_id` er
    fremmednøkler til SIN EGEN tabell, så `pushOps` sorterer kategorier FØR

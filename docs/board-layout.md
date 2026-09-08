@@ -8,7 +8,10 @@ selve listevisningen (kolonnene med lister/kort), IKKE menyene rundt (se
 `.board-col`-containere og `.note-card`-kort, og går gjennom nøyaktig den samme
 `relayoutBoard`/`packBoardColumns`-motoren (scopet `notesScope`). Notatkortene
 er derfor flere kolonner på desktop og én på mobil av samme grunn og etter samme
-regnestykke som listene — ingen egen grid, ingen egne terskler. Bare ETT av de to
+regnestykke som listene — ingen egen grid, ingen egne terskler, og SAMME
+pakkerekkefølge: venstre kolonne fylles først (se under). Det eneste notatene
+har for seg selv er minstebredden (`notesScope.colMin`): et notatkort er
+lesbart på mindre plass enn en liste med rader og chips. Bare ETT av de to
 board-ene er synlig om gangen, og fordelingen hoppes over for et skjult board:
 alt måler 0 der. Se [`notater-plan.md`](notater-plan.md).
 

@@ -355,7 +355,8 @@
   }
 
   /* ---- Notater (docs/notater-plan.md) ----
-     Huskis' andre hoveddel: Prosjekt > Mappe > Notat. Formen er listenes — to
+     Huskis' andre hoveddel: Bokhylle > Notatbok > Notat (identifikatorene
+     heter fortsatt project/folder — se docs/notater-plan.md). Formen er listenes — to
      registre (innhold `ts/org`, posisjon `posTs/posOrg`), samme gravsteiner,
      samme 3-veis fletting — men uten roller, låser og deling: notatene hører
      til KONTOEN, som idéene, og eierskapet er hele autorisasjonen.
@@ -761,6 +762,9 @@
   /* ---------------- DOM-referanser ---------------- */
   const board = document.getElementById('board');
   const topbarEl = document.getElementById('topbar');
+  // Hovedbryteren (Lister ↔ Notater). Hentes her fordi `syncTopChrome()`
+  // måler raden dens ved hver eneste layout-runde.
+  const mainTabsEl = document.getElementById('main-tabs');
   // ÉN navigasjonsknapp i toppmenyen (🌐 område › 📁 mappe) → nav-modalen.
   const navCrumbBtn = document.getElementById('nav-crumb');
   const crumbUniName = document.getElementById('crumb-uni-name');
@@ -1712,18 +1716,10 @@
     });
     return cols;
   }
-  /* Budsjettet en kolonne fylles innenfor.
-
-     LISTENE fyller venstre kolonne først, én skjermhøyde om gangen: en liste er
-     en høy beholder man leser ovenfra og ned, og en ny kolonne skal først
-     oppstå når den forrige er full (se blokken over).
-
-     NOTATKORTENE er små og like høye, og en fyll-venstre-først-regel ville lagt
-     tre notater i en smal stripe med to tomme kolonner ved siden av. Med
-     `evenColumns` settes budsjettet i stedet til den JEVNE høyden — den minste
-     som fordeler kortene like høyt utover alle kolonnene vinduet har plass til.
-     Rekkefølgen er fortsatt kolonnevis (kolonne 1 ovenfra og ned, så kolonne 2),
-     som alt annet i Huskis, så `pos`-regnestykket ved et slipp er uendret. */
+  /* Budsjettet en kolonne fylles innenfor. ÉN regel for alle kortene, lister
+     som notater: venstre kolonne fylles først, én skjermhøyde om gangen. Et
+     kort er en beholder man leser ovenfra og ned, og en ny kolonne skal først
+     oppstå når den forrige er full (se blokken over). */
   /* Den MINSTE kolonnehøyden som får alt inn i `n` kolonner, aldri lavere enn
      `lo`. Monotont (større budsjett gir aldri flere kolonner), så et binærsøk
      finner den. Et kort kan ikke deles, så gulvet er dessuten det høyeste. */
@@ -1740,13 +1736,6 @@
   }
   function boardColumnBudget(heights, gap, n, S) {
     if (n <= 1) return Infinity; // én kolonne: alt havner der uansett
-    /* NOTATKORTENE fordeles JEVNT: budsjettet er den minste kolonnehøyden som
-       får alt inn i de kolonnene vinduet har plass til, uten skjermhøyde-
-       gulvet listene har. Tre notater blir da tre korte kolonner i stedet for
-       én smal stripe med tomrom ved siden av — kravet «flere responsive
-       kolonner på desktop» (docs/notater-plan.md). Rekkefølgen er fortsatt
-       kolonnevis, som alt annet i Huskis, så `pos`-regnestykket er uendret. */
-    if (S && S.evenColumns) return smallestBudget(heights, gap, n, 0);
     // Budsjettet er én SKJERMHØYDE under toppmenyen. Gestelinjen dekker de
     // nederste pikslene av viewportet, så de er ikke skjerm man kan bruke —
     // uten leddet blir kolonnen for høy, og siste kort i den havner under
@@ -6471,6 +6460,11 @@
                          sted. Gruppen er `display: none` før innlogging — da
                          står CSS-startverdien, som er riktig for de knappene
                          som finnes.
+       --main-tabs-h     høyden hovedbryteren (Lister ↔ Notater) legger beslag
+                         på øverst i panelet, medregnet radgapet under den.
+                         Bryteren skal ligge ALENE på den øverste linjen,
+                         sentrert i hele bredden, så hjørnegruppen begynner
+                         først under den (styles.css → .corner-controls).
        --corner-btns-overflow
                          høyden gruppen har UTOVER én knapperad. Gruppen ligger
                          som en høyre KOLONNE oppå toppmenyen, og den
@@ -6491,15 +6485,22 @@
       const btnGap = parseFloat(getComputedStyle(cornerControls).columnGap) || 0;
       root.setProperty('--corner-btns-w', (cornerWidestRowWidth(corner) + btnGap) + 'px');
     }
+    /* Faneraden først: hjørnegruppen begynner UNDER den, og resten av
+       regnestykket gjelder radene som ligger ved siden av gruppen. */
+    const barCs = getComputedStyle(topbarEl);
+    const rowGap = parseFloat(barCs.rowGap) || 0;
+    const tabsRow = mainTabsEl ? mainTabsEl.closest('.topbar-row') : null;
+    const tabsH = tabsRow ? tabsRow.getBoundingClientRect().height + rowGap : 0;
+    root.setProperty('--main-tabs-h', Math.round(tabsH) + 'px');
     /* Overskuddet er de gruppe-radene toppmenyen IKKE har en egen rad ved siden
        av. Panelets egne rader holder alle av den samme klaringen (styles.css),
        så det er panelets innholdshøyde — ikke én kontrollhøyde — gruppen måles
-       mot. Måles på innholdsboksen, som er uavhengig av paddingen dette tallet
+       mot. Faneraden trekkes fra: gruppen ligger ikke ved siden av den.
+       Måles på innholdsboksen, som er uavhengig av paddingen dette tallet
        selv går inn i; ellers hadde utregningen bitt seg selv i halen. */
-    const barCs = getComputedStyle(topbarEl);
     const barContent = Math.max(
       parseFloat(rootCs.getPropertyValue('--control-h')) || 0,
-      topbarEl.clientHeight - (parseFloat(barCs.paddingTop) || 0) - (parseFloat(barCs.paddingBottom) || 0));
+      topbarEl.clientHeight - (parseFloat(barCs.paddingTop) || 0) - (parseFloat(barCs.paddingBottom) || 0) - tabsH);
     root.setProperty('--corner-btns-overflow',
       Math.max(0, (corner ? corner.height : 0) - barContent) + 'px');
     // ETTER overskuddet: toppmenyens høyde avhenger av det, og rect-lesningen
@@ -9226,11 +9227,6 @@
     if (timeQuickOpen) { closeTimeQuick(); return true; } // tids-popoveren ligger øverst
     if (respOpen) { closeResponsible(); return true; } // ansvarlig-velgeren ligger øverst
     if (confirmModalEl && !confirmModalEl.hidden) { closeConfirm(false); return true; } // øverst
-    /* Notat-editoren er et fullskjermsbilde over alt annet (den gjør resten av
-       appen inert), så den er øverste lag når den står åpen — både for Escape
-       og for Androids tilbakeknapp. Et åpent panel i den lukkes av editorens
-       egen Escape-lytter, som stopper hendelsen der. */
-    if (noteEditorOpen()) { closeNoteEditor(); return true; }
     const delAcc = document.getElementById('delete-account-modal');
     if (delAcc && !delAcc.hidden) { closeDeleteAccount(); return true; } // over konto-modalen
     if (avatarModal && !avatarModal.hidden) { closeAvatarEditor(); return true; } // over konto-modalen
@@ -9267,6 +9263,14 @@
     if (!navModal.hidden) { closeNavModal(); return true; }
     if (notesNavModal && !notesNavModal.hidden) { closeNotesNav(); return true; }
     if (!accountModal.hidden) { closeAccount(); return true; }
+    /* Notat-editoren er et fullskjermsbilde over appflaten (den gjør resten av
+       appen inert), men den ligger UNDER modalene: hver `.modal-overlay` er
+       `z-index: 200`, editoren 60. Idémodalen og drakten er tilgjengelige fra
+       editorens egen verktøylinje, så en modal KAN stå oppå den — og da skal et
+       tilbaketrykk lukke modalen, ikke bildet under. Editoren er derfor det
+       SISTE laget i stigen. Et åpent panel i den lukkes av editorens egen
+       Escape-lytter, som stopper hendelsen der. */
+    if (noteEditorOpen()) { closeNoteEditor(); return true; }
     return false;
   }
   // Escape lukker øverste lag — men ikke midt i en inline-redigering (der
@@ -14416,7 +14420,7 @@
   }
 
   /* ============================================================
-     NOTATER — Huskis' andre hoveddel (Prosjekt > Mappe > Notat)
+     NOTATER — Huskis' andre hoveddel (Bokhylle > Notatbok > Notat)
      ------------------------------------------------------------
      Autoritativt: docs/notater-plan.md.
 
@@ -14799,8 +14803,11 @@
     }).sort(posCmp);
   }
   const activeNotes = () => notesIn(state.activeProject, state.activeFolder);
-  // Antallet notater et prosjekt/en mappe viser — pillen i nav-modalen.
+  // Antallet notater en bokhylle/notatbok viser — pillene i nav-modalen.
   const noteCountIn = (projectId, folderId) => notesIn(projectId, folderId).length;
+  // Hele bokhyllen: de frie notatene pluss alle notatbøkenes.
+  const noteCountInProject = (projectId) =>
+    allNotes().filter((n) => live(n) && n.project === projectId).length;
 
   function setActiveProject(id) {
     state.activeProject = id || null;
@@ -14848,10 +14855,16 @@
   function buildNoteCard(note) {
     const el = fromTemplate(noteCardTpl);
     el.dataset.id = note.id;
+    // Palettfargen settes av `renderNotes` FØR kortet bygges (posisjonsbasert,
+    // som listene); her males bare de tre kortvariablene.
+    paintCardColor(el, note.color || colorForIndex(0));
+    el.querySelector('.note-card-icon').innerHTML = ICONS.note;
     el.querySelector('.note-card-title').textContent = noteDisplayTitle(note);
     const ex = el.querySelector('.note-card-excerpt');
     const text = noteExcerpt(note);
-    ex.textContent = text;
+    // Utdraget står i anførselstegn: det er et SITAT fra notatet, ikke en
+    // undertittel noen har skrevet.
+    ex.querySelector('.note-card-excerpt-text').textContent = text ? quoted(text) : '';
     ex.hidden = !text;
     el.querySelector('.note-card-meta').textContent = noteEditedText(note);
     // Klikk åpner editoren; klikk-og-hold løfter kortet (dnd-kit eier gesten,
@@ -14890,7 +14903,7 @@
       p1.textContent = tr('notes.emptyNoProjects');
       const p2 = document.createElement('p');
       p2.innerHTML = tr('notes.emptyNoProjectsHint', {
-        nav: '<span class="hint-chip">' + ICONS.noteProject + ' › ' + ICONS.folder + '</span>',
+        nav: '<span class="hint-chip">' + ICONS.noteProject + ' › ' + ICONS.noteFolder + '</span>',
       });
       es.append(big, p1, p2);
       notesBoard.appendChild(es);
@@ -14921,6 +14934,8 @@
     notesBoard.classList.remove('empty');
     const col = document.createElement('div');
     col.className = 'board-col';
+    // Samme posisjonsbaserte palettfarge som listekortene (colorForIndex).
+    notes.forEach((n, i) => { n.color = colorForIndex(i); });
     notes.forEach((n) => col.appendChild(buildNoteCard(n)));
     notesBoard.appendChild(col);
     stampBoardColumns(notesBoard);
@@ -15045,7 +15060,7 @@
   function buildNoteFolderRow(f) {
     const el = fromTemplate(noteFolderTpl);
     el.dataset.id = f.id;
-    el.querySelector('.folder-icon').innerHTML = ICONS.folder;
+    el.querySelector('.note-book-icon').innerHTML = ICONS.noteFolder;
     const txt = el.querySelector('.item-text');
     txt.textContent = f.name;
     el.querySelector('.title-line').appendChild(noteRowCount(noteCountIn(f.project, f.id)));
@@ -15071,6 +15086,37 @@
     return el;
   }
 
+  /* Bokhyllens EGEN plass: notatene som ikke ligger i en notatbok. Den er en
+     rad som notatbøkene, men den er ingen RAD I MODELLEN — den har en syntetisk
+     id som aldri finnes i `rowPool()`, så `reconcileRows()` ser rett forbi den,
+     og `data-dnd-ignore` gjør den uløftbar. Den er der fordi bokhyllehodet nå
+     er et trekkspill: veien til de frie notatene må finnes et sted man ser den.
+     Den står alltid først. */
+  function buildNoteFreeRow(p) {
+    const el = fromTemplate(noteFolderTpl);
+    el.classList.add('note-free-row');
+    el.dataset.id = 'free:' + p.id;
+    el.dataset.dndIgnore = '';
+    el.querySelector('.note-book-icon').innerHTML = ICONS.note;
+    const txt = el.querySelector('.item-text');
+    txt.textContent = tr('notes.freeNotes');
+    txt.removeAttribute('title');
+    txt.removeAttribute('data-i18n-title');
+    el.querySelector('.title-line').appendChild(noteRowCount(noteCountIn(p.id, null)));
+    el.addEventListener('click', () => {
+      setActiveProject(p.id);
+      setActiveNoteFolder(null);
+      closeNotesNav();
+    });
+    el.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
+      ev.preventDefault();
+      el.click();
+    });
+    el.classList.toggle('is-active', state.activeProject === p.id && !state.activeFolder);
+    return el;
+  }
+
   function buildNoteProjectCard(p) {
     const el = fromTemplate(noteProjectTpl);
     el.dataset.id = p.id;
@@ -15078,7 +15124,9 @@
     el.querySelector('.uni-icon').innerHTML = ICONS.noteProject;
     const title = el.querySelector('.card-title');
     title.textContent = p.name;
-    el.querySelector('.title-line').appendChild(noteRowCount(noteCountIn(p.id, null)));
+    // Pillen på bokhyllen teller HELE bokhyllen — de frie notatene har sin egen
+    // rad med sitt eget tall, og to like tall ved siden av hverandre forvirrer.
+    el.querySelector('.title-line').appendChild(noteRowCount(noteCountInProject(p.id)));
     const rename = () => editText(title, p.name, (val) => {
       const o = findNoteProject(p.id);
       if (!o) return;
@@ -15089,23 +15137,36 @@
       save();
     });
     title.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
-    // Korthodet ellers navigerer til prosjektets FRIE notater — det er stedet
-    // «prosjektet selv» er, slik en mappe er stedet under et område.
+    /* Korthodet er et TREKKSPILL — nøyaktig som områdekortets: det åpner og
+       lukker bokhyllen, og lukker ALDRI modalen. Veien til bokhyllens frie
+       notater er raden «Frie notater» inne i den. */
     const head = el.querySelector('.card-head');
-    head.addEventListener('click', () => {
-      setActiveProject(p.id);
-      setActiveNoteFolder(null);
-      closeNotesNav();
+    head.setAttribute('aria-expanded', p.collapsed ? 'false' : 'true');
+    head.addEventListener('click', (ev) => {
+      if (ev.target.closest('.edit-input')) return;
+      toggleCardCollapsed(el, p, notesNavScope);
+    });
+    head.addEventListener('keydown', (ev) => {
+      if (ev.target !== head) return;
+      if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
+      ev.preventDefault();
+      toggleCardCollapsed(el, p, notesNavScope);
     });
     attachKeyHandle(head, 'noteProject', () => p.id, { rename });
-    el.classList.toggle('is-active', state.activeProject === p.id && !state.activeFolder);
     const list = el.querySelector('.items-container');
     list.dataset.dndContainer = p.id;
+    list.appendChild(buildNoteFreeRow(p));
     liveFolders(p).forEach((f) => list.appendChild(buildNoteFolderRow(f)));
-    el.querySelector('.add-item-btn').addEventListener('click', (ev) => {
+    const addBtn = el.querySelector('.add-item-btn');
+    addBtn.querySelector('.add-kind-icon').innerHTML = ICONS.noteFolder;
+    addBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       addNoteFolder(p.id);
     });
+    if (p.collapsed) {
+      collapseCardBody(el);
+      setCollapseCount(head, leafCount(p.folders), true, ICONS.noteFolder);
+    }
     return el;
   }
 
@@ -15114,11 +15175,10 @@
     wrap.className = 'nav-add-uni notes-add-project';
     const btn = document.createElement('button');
     btn.type = 'button';
-    btn.className = 'btn btn-solid btn-green btn-small';
-    btn.innerHTML = ICONS.plus;
-    const span = document.createElement('span');
-    span.textContent = tr('notes.addProject');
-    btn.appendChild(span);
+    // ＋ + typens eget ikon, som «＋ Liste» og «＋ Notat» — ikke en tekstknapp.
+    btn.className = 'btn-add btn-solid btn-green';
+    btn.innerHTML = ICONS.plus + ' ' + ICONS.noteProject;
+    labelBtn(btn, tr('notes.addProject'));
     btn.addEventListener('click', () => addNoteProject());
     wrap.appendChild(btn);
     return wrap;
@@ -15185,10 +15245,9 @@
     contKind: 'noteProject', rowKind: 'note',
     contSelector: '.note-card',
     get root() { return notesBoard; },
-    // Notatkortene fordeles JEVNT utover kolonnene, ikke venstre-først som
-    // listene — se `boardColumnBudget` — og de trenger mindre bredde enn en
-    // liste for å være lesbare.
-    evenColumns: true,
+    // Samme kolonnemotor og samme pakkerekkefølge som listene; bare
+    // minstebredden er notatenes egen — et notatkort (tittel + utdrag + dato)
+    // er lesbart på mindre plass enn en liste med rader og chips.
     colMin: 300,
     containers: () => activeNotes(),
     findContainer: (id) => findNoteById(id),
@@ -15210,7 +15269,9 @@
     refreshContainer: () => renderNotes(),
     render: () => renderNotes(),
     afterDrop: () => { /* DOM-en er allerede riktig */ },
-    reindexColors: () => { /* notatkortene har ingen palettfarge */ },
+    // Notatkortene bærer palettfargen som listekortene: den følger POSISJONEN,
+    // ikke objektet, så en omrokkering maler alle om (reindexContainerColors).
+    reindexColors: () => reindexContainerColors(notesScope),
     lockedTargetMsg: '',
     refusesRow: () => false,
   };
@@ -15237,7 +15298,7 @@
     },
     canExtract: () => false,
     createContainer: () => null,
-    countIcon: null,
+    countIcon: ICONS.noteFolder,
     refreshContainer: () => renderNotesNav(),
     render: () => renderNotesNav(),
     afterDrop: () => { updateNotesCrumbs(); renderNotes(); },
@@ -15627,6 +15688,10 @@
   const noteLinkRemove = document.getElementById('note-link-remove');
   const noteLinkCopy = document.getElementById('note-link-copy');
   const noteSymbolPanel = document.getElementById('note-symbol-panel');
+  // Idéer og drakt tilhører HELE Huskis, ikke listefanen: de finnes derfor også
+  // i editorens verktøylinje, koblet til de samme funksjonene som hjørnegruppen.
+  const noteIdeasBtn = document.getElementById('note-ideas-btn');
+  const noteThemeBtn = document.getElementById('note-theme-btn');
 
   /* Spesialtegnene. Ett flatt sett — det er en hurtigvei til tegn et norsk
      eller engelsk tastatur ikke har, ikke en full tegntabell. */
@@ -15687,11 +15752,14 @@
     };
     noteOpenId = id;
     noteEditorEl.hidden = false;
+    const titleIcon = noteEditorEl.querySelector('.note-title-icon');
+    if (titleIcon && !titleIcon.firstChild) titleIcon.innerHTML = ICONS.note;
     document.body.classList.add('note-editing');
     setNoteEditorInert(true);
     noteTitleInput.value = n.title || '';
     noteApplyingDoc = true;
     noteDocIntoEl(noteDocEl, n.doc);
+    noteApplyIndent();
     noteApplyingDoc = false;
     noteSavedRange = null;
     setNoteStatus('');
@@ -15701,7 +15769,6 @@
     try { document.execCommand('styleWithCSS', false, false); } catch (e) { /* ignore */ }
     try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (e) { /* ignore */ }
     noteEditorBody.scrollTop = 0;
-    noteToolsEl.scrollLeft = 0;   // verktøylinjen ruller vannrett på smal skjerm
     if (opts.focusTitle) noteTitleInput.focus();
     else noteDocEl.focus();
     refreshNoteTools();
@@ -15945,6 +16012,7 @@
     noteLinkInput.value = cur ? cur.dataset.url : '';
     noteLinkRemove.hidden = !cur;
     noteLinkCopy.hidden = !cur;
+    placeNotePanel(noteLinkPanel, noteToolBtn('link'));
     noteLinkInput.focus();
     noteLinkInput.select();
   }
@@ -16027,8 +16095,179 @@
     noteTrackRange();
     if (noteLinkPanel) noteLinkPanel.hidden = true;
     noteSymbolPanel.hidden = false;
+    placeNotePanel(noteSymbolPanel, noteToolBtn('symbol'));
     const first = noteSymbolPanel.querySelector('button');
     if (first) first.focus();
+  }
+
+
+  /* ---- Overskriftshierarkiet som INNRYKK ----
+     En overskrift eier innholdet fram til neste overskrift på samme eller
+     høyere nivå, og hvert nøstede nivå rykkes ett trinn inn. Det er en AVLEDET
+     VISNING: nivået regnes ut av blokkrekkefølgen og skrives som `data-lvl`
+     (styles.css gjør resten). Dokumentmodellen lagrer det ikke — den er flat,
+     og skal forbli det, så et notat kan leses uten å kjenne til innrykk.
+     Ingen trekkspill, trekanter, autolukk eller nivåfarger: bare innrykket. */
+  const NOTE_HEAD_LEVEL = { h1: 1, h2: 2, h3: 3 };
+  function noteApplyIndent() {
+    if (!noteDocEl) return;
+    const stack = [];
+    [...noteDocEl.children].forEach((el) => {
+      const lvl = NOTE_HEAD_LEVEL[el.tagName.toLowerCase()] || 0;
+      if (lvl) {
+        // En overskrift lukker alle som er på samme eller dypere nivå.
+        while (stack.length && stack[stack.length - 1] >= lvl) stack.pop();
+        setNoteLvl(el, stack.length);
+        stack.push(lvl);
+      } else {
+        setNoteLvl(el, stack.length);
+      }
+    });
+  }
+  // Attributtet settes kun når det FAKTISK endrer seg: en skriving inn i DOM-en
+  // under markøren kan ellers slå ut tastaturets komposisjon på mobil.
+  function setNoteLvl(el, depth) {
+    const v = String(Math.min(3, depth));
+    if (v === '0') { if (el.hasAttribute('data-lvl')) el.removeAttribute('data-lvl'); return; }
+    if (el.getAttribute('data-lvl') !== v) el.setAttribute('data-lvl', v);
+  }
+
+  /* ---- Automatiske tegnregler ----
+     De tre skrivereglene som gjør vanlig tastaturtekst til riktige tegn:
+
+       « - »  →  « – »   tankestrek midt i en setning
+       «...»  →  «…»     ellipse
+       « * »  →  « · »   midtprikk
+
+     KRAVET OM LUFT er det som gjør dem trygge: «e-post», «2*3» og et
+     listepunkt som begynner med «- » går fri, fordi regelen bare slår til når
+     tegnet har mellomrom på begge sider. Byttet gjøres med `replaceData` på
+     tekstnoden — den flytter verken markøren ut av noden eller ut av
+     markeringen den står i, så aktiv fet/kursiv/lenke overlever. */
+  function noteAutoChars(data) {
+    if (!noteDocEl || (data !== ' ' && data !== '.')) return false;
+    const range = noteRange();
+    if (!range || !range.collapsed) return false;
+    const node = range.startContainer;
+    if (!node || node.nodeType !== 3 || !noteDocEl.contains(node)) return false;
+    const at = range.startOffset;
+    const before = node.data.slice(0, at);
+    let cut = 0;
+    let ch = '';
+    if (data === ' ' && /\s-\s$/.test(before)) { cut = 2; ch = '–'; }
+    else if (data === ' ' && /\s\*\s$/.test(before)) { cut = 2; ch = '·'; }
+    else if (data === '.' && /\.\.\.$/.test(before)) { cut = 3; ch = '…'; }
+    if (!ch) return false;
+    node.replaceData(at - cut, cut === 3 ? 3 : 1, ch);
+    // Markøren står like langt inn i noden som før, minus tegnene som forsvant.
+    const pos = at - (cut === 3 ? 2 : 0);
+    const sel = window.getSelection();
+    const r = document.createRange();
+    r.setStart(node, Math.min(pos, node.length));
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    noteTrackRange();
+    return true;
+  }
+
+  /* ---- Panelene forankres under knappen sin ----
+     Et panel som alltid står midt på skjermen mister sammenhengen med knappen
+     som åpnet det. Her legges det under ankeret, klemt innenfor det SYNLIGE
+     feltet (`visualViewport`, ikke `innerHeight`: med tastaturet oppe er de to
+     ikke det samme), og snudd over ankeret når det ikke er plass under. */
+  const NOTE_PANEL_MARGIN = 8;
+  function noteVisibleBox() {
+    const v = window.visualViewport;
+    if (!v) return { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+    return { left: v.offsetLeft, top: v.offsetTop, right: v.offsetLeft + v.width, bottom: v.offsetTop + v.height };
+  }
+  function placeNotePanel(panel, anchor) {
+    if (!panel || !anchor) return;
+    const box = noteVisibleBox();
+    const m = NOTE_PANEL_MARGIN;
+    panel.style.maxHeight = Math.max(140, box.bottom - box.top - m * 2) + 'px';
+    const a = anchor.getBoundingClientRect();
+    const size = panel.getBoundingClientRect();
+    const maxLeft = Math.max(box.left + m, box.right - size.width - m);
+    let left = a.left + a.width / 2 - size.width / 2;
+    left = Math.min(Math.max(box.left + m, left), maxLeft);
+    let top = a.bottom + 6;
+    if (top + size.height > box.bottom - m) top = a.top - size.height - 6;
+    const maxTop = Math.max(box.top + m, box.bottom - size.height - m);
+    top = Math.min(Math.max(box.top + m, top), maxTop);
+    panel.style.left = Math.round(left) + 'px';
+    panel.style.top = Math.round(top) + 'px';
+  }
+  const noteToolBtn = (cmd) => (noteToolsEl ? noteToolsEl.querySelector('[data-cmd="' + cmd + '"]') : null);
+  // Ett sted som legger begge panelene der de hører hjemme — også etter en
+  // rullering eller et tastatur som endrer det synlige feltet.
+  function replaceNotePanels() {
+    if (noteLinkPanel && !noteLinkPanel.hidden) placeNotePanel(noteLinkPanel, noteToolBtn('link'));
+    if (noteSymbolPanel && !noteSymbolPanel.hidden) placeNotePanel(noteSymbolPanel, noteToolBtn('symbol'));
+  }
+
+  /* ---- Det SYNLIGE feltet ----
+     Mobiltastaturet krymper det uten å røre layoutviewporten, så `100dvh` blir
+     stående like høy som før: editorens verktøylinje ville glidd ut over
+     toppkanten, og markøren havnet under tastaturet. `visualViewport` vet hvor
+     feltet ligger; her speiles det i CSS-variabler editoren fester seg til
+     (styles.css → .note-editor). Knipezoom er brukerens egen panorering og
+     røres ikke. Uten `visualViewport` står CSS-verdiene, som er riktige når
+     tastaturet er nede. */
+  const NOTE_REVEAL_DELAY = 120;
+  let vvFrame = 0, vvRevealTimer = 0, vvOccluded = 0;
+  function vvReset() {
+    const st = document.documentElement.style;
+    st.removeProperty('--viewport-h');
+    st.removeProperty('--viewport-top');
+    st.removeProperty('--keyboard-inset');
+    vvOccluded = 0;
+  }
+  function vvMeasure() {
+    vvFrame = 0;
+    const v = window.visualViewport;
+    if (!v) return;
+    if (v.scale > 1.01) { vvReset(); return; }
+    const root = document.documentElement;
+    const top = Math.max(0, Math.round(v.offsetTop));
+    const height = Math.round(v.height);
+    const inset = Math.max(0, root.clientHeight - height - top);
+    root.style.setProperty('--viewport-h', height + 'px');
+    root.style.setProperty('--viewport-top', top + 'px');
+    root.style.setProperty('--keyboard-inset', inset + 'px');
+    replaceNotePanels();
+    // Ble det mindre plass, kan markøren ha havnet under den nye underkanten.
+    const hidden = top + inset;
+    if (hidden > vvOccluded + 1) {
+      clearTimeout(vvRevealTimer);
+      vvRevealTimer = setTimeout(vvRevealCaret, NOTE_REVEAL_DELAY);
+    }
+    vvOccluded = hidden;
+  }
+  function vvSchedule() {
+    if (vvFrame) return;
+    vvFrame = requestAnimationFrame(vvMeasure);
+  }
+  // Ruller blokka med markøren fram igjen, uten å flytte på noe som står bra.
+  function vvRevealCaret() {
+    const el = document.activeElement;
+    if (!el || !el.isContentEditable) return;
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const node = sel.getRangeAt(0).startContainer;
+    const block = node.nodeType === 1 ? node : node.parentElement;
+    if (block && block.scrollIntoView) {
+      try { block.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { /* ignore */ }
+    }
+  }
+  function trackVisualViewport() {
+    const v = window.visualViewport;
+    if (!v) return;
+    vvMeasure();
+    v.addEventListener('resize', vvSchedule);
+    v.addEventListener('scroll', vvSchedule);
+    window.addEventListener('orientationchange', vvSchedule);
   }
 
   /* ---- Tastatursnarveiene ----
@@ -16075,7 +16314,22 @@
       ev.preventDefault();
       noteDocEl.focus();
     });
-    noteDocEl.addEventListener('input', () => { scheduleNoteSave(); refreshNoteTools(); });
+    /* ÉN inngang for hver endring i dokumentet, i denne rekkefølgen:
+       tegnreglene bytter tegn (så det er den ferdige teksten som lagres),
+       innrykket regnes ut på nytt, og så køes lagringen.
+
+       Reglene leser `InputEvent.data` — tegnet som FAKTISK kom inn. Det er
+       den ene kilden som også stemmer på et mobiltastatur, der `keydown` ofte
+       bare sier «Unidentified». Og de kjører på `input`, ikke `beforeinput`:
+       regelen ser på teksten FØR markøren, og det tegnet som utløser den
+       (mellomrommet, det tredje punktumet) må stå der for at mønsteret skal
+       kunne matche. */
+    noteDocEl.addEventListener('input', (ev) => {
+      if (ev && ev.inputType === 'insertText' && ev.data) noteAutoChars(ev.data);
+      noteApplyIndent();
+      scheduleNoteSave();
+      refreshNoteTools();
+    });
     noteDocEl.addEventListener('keydown', noteKeydown);
     noteDocEl.addEventListener('paste', noteOnPaste);
     noteDocEl.addEventListener('keyup', refreshNoteTools);
@@ -16092,6 +16346,12 @@
       if (!btn) return;
       ev.preventDefault();
       runNoteCommand(btn.dataset.cmd);
+    });
+    // Idéer og drakt: de SAMME funksjonene og den samme tilstanden som
+    // hjørnegruppens knapper — ingen egen kopi av noen av delene.
+    if (noteIdeasBtn) noteIdeasBtn.addEventListener('click', openIdeasModal);
+    if (noteThemeBtn) noteThemeBtn.addEventListener('click', () => {
+      setTheme(THEME.mode() === 'dark' ? 'light' : 'dark');
     });
     // Verktøylinjen skal ALDRI stjele markeringen: mister dokumentet
     // markeringen i det knappen får fokus, har execCommand ingenting å virke på.
@@ -16120,6 +16380,10 @@
       noteTrackRange();
       refreshNoteTools();
     });
+    // Panelene henger på knappene sine: en rullering eller et vindusbytte
+    // flytter ankeret, og da må panelet følge med.
+    window.addEventListener('resize', replaceNotePanels);
+    trackVisualViewport();
     // Fanen kan lukkes/skjules med endringer som ennå ikke er skrevet.
     window.addEventListener('pagehide', flushNoteSave);
     document.addEventListener('visibilitychange', () => { if (document.hidden) flushNoteSave(); });
@@ -16132,7 +16396,6 @@
      ikke: hvilken fane man sist så på er ikke innhold. */
   const MAIN_TAB_KEY = 'huskis-tab';
   const MAIN_TABS = ['lists', 'notes'];
-  const mainTabsEl = document.getElementById('main-tabs');
   const topbarRowLists = document.getElementById('topbar-row-lists');
   const topbarRowNotes = document.getElementById('topbar-row-notes');
   let activeMainTab = 'lists';
@@ -19358,7 +19621,8 @@
     const dark = THEME.mode() === 'dark';
     const icon = dark ? ICONS.moon : ICONS.sun;
     const label = tr(dark ? 'theme.toLight' : 'theme.toDark');
-    [themeToggleBtn, authThemeToggleBtn].forEach((btn) => {
+    [themeToggleBtn, authThemeToggleBtn, noteThemeBtn].forEach((btn) => {
+      if (!btn) return;
       btn.innerHTML = icon;
       btn.title = label;
       btn.setAttribute('aria-label', label);
@@ -19401,6 +19665,8 @@
     paintTheme();
     reindexContainerColors(boardScope);
     reindexContainerColors(navScope);   // no-op når nav-modalen er tom
+    notesScope.reindexColors();         // notatkortene, no-op når fanen er skjult
+    notesNavScope.reindexColors();      // bokhyllene, no-op når modalen er tom
     ideaScope.reindexColors();          // no-op når idémodalen aldri har vært åpen
     repaintAvatars();
   });

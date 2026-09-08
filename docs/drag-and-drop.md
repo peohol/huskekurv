@@ -39,12 +39,12 @@ er hvilket state-tre man slår opp i (`boardScope` / `navScope` / `ideaScope` /
 | `boardRowBoard` | `.items-container > .item`, `.items-container > .category`, `.cat-items > .item` | `.items-container`, `.cat-items` | `.item`, `.cat-head` | `.item-trash-btn` |
 | `ideaRowBoard` | de samme radene, i idémodalen | `.items-container`, `.cat-items` | `.item`, `.cat-head` | `.item-trash-btn` |
 | `notesCardBoard` | `#notes-board .note-card` (notater) | `#notes-board .board-col` | `.note-card` (hele kortet) | ingen |
-| `notesNavCardBoard` | `#notes-nav-board .card` (notatprosjekter) | `#notes-nav-board .board-col` | `.card-head` | ingen |
-| `notesNavRowBoard` | `#notes-nav-board .item` (notatmapper) | `#notes-nav-board .items-container` | `.item` | ingen |
+| `notesNavCardBoard` | `#notes-nav-board .card` (bokhyller) | `#notes-nav-board .board-col` | `.card-head` | ingen |
+| `notesNavRowBoard` | `#notes-nav-board .item` (notatbøker) | `#notes-nav-board .items-container` | `.item` | ingen |
 
 **Notat-scopene er de enkleste.** Ingen kategorier, ingen låser, ingen
 ekstrahering og — i PR 1 — ingen søppelkasse, så det eneste et slipp kan bety er
-ny plass i rekka (og for en notatmappe i tillegg et nytt prosjekt). NOTATKORTET
+ny plass i rekka (og for en notatbok i tillegg en ny bokhylle). NOTATKORTET
 er sin egen dra-sone i sin helhet: kortet har ingen indre kontroller å treffe, så
 klikk åpner editoren og klikk-og-hold løfter — dnd-kits egen aktiveringsterskel
 skiller de to, og klikk-vakten svelger klikket som ellers ville fulgt et slipp.
@@ -52,9 +52,16 @@ Notatkortene fordeles av den SAMME kolonnemotoren som listene
 ([`board-layout.md`](board-layout.md)); `.note-card` bærer derfor også klassen
 `.card`, som er det `boardRows` teller.
 
-Flytter en notatmappe til et annet prosjekt, følger notatene med: de peker på
-mappen, og `noteFolderMoved` retter `project`-pekeren deres i samme slipp, slik
-at plasseringen er hel i begge ender.
+Flytter en notatbok til en annen bokhylle, følger notatene med: de peker på
+notatboken, og `noteFolderMoved` retter `project`-pekeren deres i samme slipp,
+slik at plasseringen er hel i begge ender. Serveren gjør det samme uavhengig av
+klienten (`note_folders_cascade`), for enheten kan miste nettet mellom de to
+skrivingene — se [`arkitektur-brukere-deling.md`](arkitektur-brukere-deling.md).
+
+Raden «Frie notater» øverst i hver bokhylle er IKKE en rad i modellen: den har
+en syntetisk id (`free:<bokhylle>`) som aldri finnes i `rowPool()`, og bærer
+`data-dnd-ignore`, så den kan verken løftes eller telles med når rekkefølgen
+leses tilbake fra DOM-en.
 
 **Idé-scopet har ingen kortnivå-board**, og trenger ikke ett: det finnes
 nøyaktig ÉN beholder (`ideasCont`, id `__ideas__`), og den er ikke en `.card`.

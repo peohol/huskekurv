@@ -68,7 +68,7 @@ for et objekt to brukere har sammen:
 | Tabell | Hva den er | Klientvei |
 |---|---|---|
 | `ideas` | kontoens idéer og idékategorier ([`ideer.md`](ideer.md)) | RLS `owner_id = auth.uid()` |
-| `note_projects`, `note_folders`, `notes` | kontoens notater, Prosjekt > Mappe > Notat ([`notater-plan.md`](notater-plan.md)) | RLS `owner_id = auth.uid()` |
+| `note_projects`, `note_folders`, `notes` | kontoens notater, Bokhylle > Notatbok > Notat ([`notater-plan.md`](notater-plan.md)) | RLS `owner_id = auth.uid()` |
 | `notifications` | varselhistorikken | RLS `user_id = auth.uid()` |
 | `notification_prefs` | de fire varselvalgene + generator-markøren | RLS `user_id = auth.uid()` |
 | `push_subscriptions` | ett abonnement per nettleserkontekst, med gjenkjennelig metadata | RLS på egne rader; skrives kun av RPC-ene |
@@ -99,12 +99,29 @@ vilkårlig. `notes.body` er editorens dokument som `jsonb`; databasen lagrer det
 og tolker det ikke, og hele verdien rir på INNHOLDSREGISTERET, altså er
 konfliktmodellen per dokument.
 
-At mappen og notatet ligger i MITT prosjekt er en egen betingelse i
+At notatboken og notatet ligger i MIN bokhylle er en egen betingelse i
 `note_folders_insert`/`notes_insert`/`-_update` (`exists (… owner_id =
 auth.uid())`), ikke bare i eierskapet på raden selv: uten den kunne en bruker
-hekte sin egen rad inn i et prosjekt hen ikke eier — usynlig for eieren, men
+hekte sin egen rad inn i en bokhylle hen ikke eier — usynlig for eieren, men
 bundet til raden hans av fremmednøkkelen. `supabase/tests/test-notes.sql` prøver
 nettopp det, i begge retninger.
+
+**De to forelder-pekerne på et notat kan heller ikke motsi hverandre.** RLS sier
+at både bokhyllen og notatboken er mine, men ikke at de hører sammen — og siden
+`notes.project_id` er `on delete cascade`, ville et notat som pekte på bokhylle
+A og en notatbok i bokhylle B blitt SLETTET når A forsvant, mens UI-et viste det
+under notatboken i B. To triggere håndhever invarianten:
+
+| Trigger | Gjør |
+|---|---|
+| `notes_parent_guard` / `notes_guard` (`notes_fix_parent`, og det samme leddet sist i `notes_before_update`) | ligger notatet i en notatbok, UTLEDES `project_id` av notatboken — ved både innsetting og oppdatering |
+| `note_folders_cascade` (`note_folders_after_update`) | flyttes en notatbok til en annen bokhylle, følger notatene med, med posisjonsregisteret løftet til notatbokens |
+
+Utledning, ikke avvisning: klienten skriver rad for rad gjennom PostgREST, hver
+skriving i sin egen transaksjon, så en avvisning ville gjort rekkefølgen mellom
+to uavhengige HTTP-kall til en del av kontrakten. Utledningen gir det samme
+svaret uansett rekkefølge, og er nøyaktig den samme regelen klienten leser med
+(`pruneNoteParents`).
 
 De to låste tabellene har ingen klientvei i det hele tatt: `push_deliveries`
 røres kun av senderens funksjoner (`service_role`), og `device_sessions` kun av

@@ -605,15 +605,16 @@ async function sakteMotKassa(label, viewport) {
 }
 
 /* Toppmenyen har fått ÉN RAD TIL — hovedfanene `Lister | Notater`
-   (docs/notater-plan.md) — og den raden koster board-et ~44 px av høyden.
+   (docs/notater-plan.md) — og den raden koster board-et 48 px av høyden
+   (radens egen høyde pluss panelets radgap; les den ut av `--main-tabs-h`).
    Fixturene her er tunet på hvor mye plass board-et har UNDER panelet, ikke på
    viewportets egen høyde: sjekk 4 og 12 måler hvor draget havner i forhold til
    kortene og til viewportets bunn. Viewportene får derfor den plassen tilbake.
 
-   VERIFISERT at det er panelhøyden og ikke noe annet: legger man 44 px padding
-   på `.topbar` i et ELLERS uendret repo, feiler nøyaktig de samme tre
+   VERIFISERT at det er panelhøyden og ikke noe annet: legger man like mye
+   padding på `.topbar` i et ELLERS uendret repo, feiler nøyaktig de samme tre
    sjekkene, med de samme tallene. */
-const PANEL_FANERAD = 44;
+const PANEL_FANERAD = 48;
 const vp = (width, height) => ({ width, height: height + PANEL_FANERAD });
 
 (async () => {

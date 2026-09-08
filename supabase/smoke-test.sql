@@ -418,6 +418,7 @@ begin
     'ideas:ideas_insert_guard',
     'note_projects:note_projects_insert_guard',
     'note_folders:note_folders_insert_guard', 'notes:notes_insert_guard',
+    'notes:notes_parent_guard', 'note_folders:note_folders_cascade',
     'universes:universes_owner_seed', 'groups:groups_owner_seed',
     'memberships:memberships_guard', 'memberships:memberships_last_owner_guard',
     'share_invites:on_share_invite_created'

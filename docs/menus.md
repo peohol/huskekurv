@@ -131,21 +131,25 @@ stående). Autoritativt: `docs/trash.md` («Slett ved å dra objektet i kassen»
 Ett fast panel øverst (`position: fixed`, full bredde, samme DOM på mobil og
 desktop). Panelet er en KOLONNE med to rader:
 
-0. **Hovedfanene** (`.main-tabs`, `#main-tabs`, `role="tablist"`): `Lister |
-   Notater` — Huskis' to hoveddeler ([`notater-plan.md`](notater-plan.md)).
-   Fanen er en VISNING, ikke et eget program: toppkontrollene under tilhører
-   hele appen og dupliseres ikke per fane. Den aktive fanen bærer `.is-active`
-   og `aria-selected="true"`; venstre/høyre piltast bytter fane (WAI-ARIA), og
-   bare den aktive er i tabbrekkefølgen. Valget er per ENHET
-   (`localStorage['huskis-tab']`) og synkes ikke — hvilken fane man sist så på
-   er ikke innhold. Fanene er kompakte med vilje: raden koster høyde, og høyde
-   er det knappeste i landskap.
+0. **Hovedbryteren** (`.main-tabs`, `#main-tabs`, `role="tablist"`):
+   `Lister ↔ Notater` — Huskis' to hoveddeler
+   ([`notater-plan.md`](notater-plan.md)). Visuelt er den ÉN segmentert
+   kontroll, ikke to frittstående knapper, og den ligger ALENE på panelets
+   øverste linje (`.topbar-row-tabs`), sentrert i hele bredden. Hjørnegruppen
+   skyves ned under den (`--main-tabs-h`, målt i `syncTopChrome`) i stedet for å
+   dele linje med den. Fanen er en VISNING, ikke et eget program:
+   toppkontrollene tilhører hele appen og dupliseres ikke per fane. Den aktive
+   halvdelen bærer `.is-active` og `aria-selected="true"`; venstre/høyre
+   piltast bytter (WAI-ARIA), og bare den aktive er i tabbrekkefølgen. Valget
+   er per ENHET (`localStorage['huskis-tab']`) og synkes ikke — hvilken fane
+   man sist så på er ikke innhold. Bryteren er kompakt med vilje: raden koster
+   høyde, og høyde er det knappeste i landskap.
 1. **Den aktive fanens rad** (`.topbar-row`): én per fane, og bare den aktive
    er synlig. Listefanens rad har navigasjonsknappen og listefunksjonene
    (under); notatfanens har sin egen breadcrumb (`#notes-crumb`,
-   `[prosjektnavn] › [mappenavn]`, der mappenavnet er «Frie notater» når man
-   står rett i prosjektet) og «＋ Notat» (`#add-note-btn`, avskrudd uten et
-   aktivt prosjekt).
+   `[bokhyllenavn] › [notatboknavn]`, der notatboknavnet er «Frie notater» når
+   man står rett i bokhyllen) og «＋ Notat» (`#add-note-btn`, avskrudd uten en
+   aktiv bokhylle).
 
 Listefanens rad har to deler:
 
@@ -383,16 +387,26 @@ lukker den IKKE** — brukeren skal kunne angre fra søppelkassen med én gang
 ## Notat-navigasjonen (`#notes-nav-modal`, åpnes fra notatfanens breadcrumb)
 
 Samme modal-skall og samme oppsett som nav-modalen over, bare for notatenes
-tre: hvert PROSJEKT er et `.card.uni-card.note-project-card`
-(`#note-project-template`) med MAPPENE sine som `.item.group-row.note-folder-row`-rader
-(`#note-folder-template`) i `.items-container`, og en `＋ Mappe`-knapp i kortets
-`.add-item-row`. Nederst i kolonnen ligger «Nytt prosjekt»
-(`.notes-add-project`), som «Nytt område» gjør i nav-modalen.
+tre: hver BOKHYLLE er et `.card.uni-card.note-project-card`
+(`#note-project-template`) med NOTATBØKENE sine som
+`.item.group-row.note-folder-row`-rader (`#note-folder-template`) i
+`.items-container`, og en `＋ [notatbok]`-knapp i kortets `.add-item-row`.
+Nederst i kolonnen ligger `＋ [bokhylle]` (`.notes-add-project`), som «＋
+Område» gjør i nav-modalen. Begge knappene bærer ＋ og typens eget ikon, som
+resten av Huskis' opprett-knapper.
 
 Klikkdelingen er den samme som for områder og mapper: **tittel-klikk omdøper**
-(inline, `editText`), **klikk ellers navigerer** — på en mapperad inn i mappen,
-på prosjekthodet til prosjektets FRIE notater (notater uten mappe). Den aktive
-plasseringen bærer `.is-active`.
+(inline, `editText`), **klikk ellers navigerer** — på en notatbok-rad inn i
+notatboken. **BOKHYLLEHODET ER ET TREKKSPILL**, som områdekortets: det åpner og
+lukker bokhyllen (`toggleCardCollapsed`, `aria-expanded`, lagret i `collapsed`)
+og lukker ALDRI modalen.
+
+Veien til bokhyllens egen plass — de frie notatene — er raden **«Frie notater»**,
+som alltid står FØRST inne i bokhyllen. Den er ingen rad i modellen: den har en
+syntetisk id (`free:<bokhylle>`) og `data-dnd-ignore`, så den kan verken løftes
+eller telles med når rekkefølgen leses tilbake fra DOM-en
+([`drag-and-drop.md`](drag-and-drop.md)). Den aktive plasseringen bærer
+`.is-active`.
 
 Det som IKKE finnes her, er med vilje (PR 1, [`notater-plan.md`](notater-plan.md)):
 ingen objektmeny, ingen deling, ingen låser, ingen kategorier og ingen

@@ -1865,8 +1865,43 @@ begin
 end;
 $$;
 
+-- ---- Notatets to forelder-pekere kan ikke motsi hverandre ----
+-- `notes` har to uavhengige fremmednøkler: `project_id` (bokhyllen) og
+-- `folder_id` (notatboken). RLS sier at BEGGE er mine, men ikke at de hører
+-- sammen — uten dette kunne den samme brukeren lagre et notat som peker på
+-- bokhylle A og en notatbok som står i bokhylle B. Det er ikke bare rotete:
+-- `project_id` har ON DELETE CASCADE, så en slik rad ville blitt SLETTET når
+-- bokhylle A forsvant, selv om notatet vises under en notatbok i bokhylle B.
+--
+-- INVARIANTEN: ligger notatet i en notatbok, er bokhyllen notatbokens.
+-- Den HÅNDHEVES ved å utlede `project_id`, ikke ved å avvise: klienten skriver
+-- rad for rad gjennom PostgREST (hver skriving sin egen transaksjon), så en
+-- avvisning ville gjort rekkefølgen mellom to uavhengige HTTP-kall til en del
+-- av kontrakten. Utledningen gir det samme svaret uansett rekkefølge, og er
+-- nøyaktig den samme regelen klienten leser med (`pruneNoteParents`: mappens
+-- prosjekt vinner). Et notat UTEN notatbok beholder sin egen bokhylle.
+create or replace function public.notes_fix_parent()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  if new.folder_id is null then
+    return new;
+  end if;
+  select f.project_id into v_project from public.note_folders f where f.id = new.folder_id;
+  if v_project is null then
+    -- Fremmednøkkelen er DEFERRABLE, så notatboken kan komme senere i samme
+    -- transaksjon. Da er det ingenting å utlede av ennå, og fremmednøkkelen
+    -- tar den ved commit.
+    return new;
+  end if;
+  new.project_id := v_project;
+  return new;
+end;
+$$;
+
 create or replace function public.notes_before_update()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
 begin
   if new.owner_id is distinct from old.owner_id and not public.in_privileged_op() then
     raise exception 'owner_id (oppretter) kan ikke endres';
@@ -1879,8 +1914,35 @@ begin
     new.project_id := old.project_id; new.folder_id := old.folder_id;
     new.pos := old.pos; new.pos_ts := old.pos_ts; new.pos_org := old.pos_org;
   end if;
+  -- SIST, på den ferdige raden: LWW-vakten over kan ha rullet tilbake den ene
+  -- av de to pekerne, og invarianten gjelder resultatet.
+  if new.folder_id is not null then
+    select f.project_id into v_project from public.note_folders f where f.id = new.folder_id;
+    if v_project is not null then new.project_id := v_project; end if;
+  end if;
   new.updated_at := now();
   return new;
+end;
+$$;
+
+-- Flyttes en NOTATBOK til en annen bokhylle, følger notatene med. Klienten gjør
+-- det samme lokalt (noteFolderMoved), men serveren kan ikke stole på at den
+-- rekker det: enheten kan miste nettet mellom de to skrivingene, og da ville
+-- notatene blitt liggende igjen i den gamle bokhyllen — og forsvunnet med den.
+-- Posisjonsregisteret løftes til notatbokens eget, så andre enheter tar
+-- flyttingen inn i stedet for å skrive den tilbake.
+create or replace function public.note_folders_after_update()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.project_id is distinct from old.project_id then
+    update public.notes n
+       set project_id = new.project_id,
+           pos_ts     = greatest(n.pos_ts, new.pos_ts),
+           pos_org    = new.pos_org
+     where n.folder_id = new.id
+       and n.project_id is distinct from new.project_id;
+  end if;
+  return null;
 end;
 $$;
 
@@ -1893,6 +1955,15 @@ create trigger note_folders_guard before update on public.note_folders
 drop trigger if exists notes_guard on public.notes;
 create trigger notes_guard before update on public.notes
   for each row execute function public.notes_before_update();
+-- Navnet er valgt slik at den kjører ETTER `notes_insert_guard` (BEFORE-
+-- triggere fyrer i navnerekkefølge): gravsteinsvakten skal få avvise en
+-- gjenoppstanden rad før vi begynner å utlede foreldre for den.
+drop trigger if exists notes_parent_guard on public.notes;
+create trigger notes_parent_guard before insert on public.notes
+  for each row execute function public.notes_fix_parent();
+drop trigger if exists note_folders_cascade on public.note_folders;
+create trigger note_folders_cascade after update on public.note_folders
+  for each row execute function public.note_folders_after_update();
 
 -- ---- Medlemskaps-/rolle-vakter ----
 -- Rollen er MUTABEL, men kun gjennom set_member_role()/accept_share_invite()

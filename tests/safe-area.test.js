@@ -190,8 +190,14 @@ async function run(label, viewport, touchMode) {
     getComputedStyle(document.documentElement).getPropertyValue('--corner-btns-overflow')) || 0);
   log(label + ': toppmenyen står på sin vanlige polstring uten sone',
     bar0.paddingTop === 12 + overskudd0, 'padding-top ' + bar0.paddingTop + ' (overskudd ' + overskudd0 + ')');
+  /* Hjørnegruppen begynner UNDER hovedbryteren (`Lister ↔ Notater`), som ligger
+     alene på panelets øverste linje (--main-tabs-h, docs/notater-plan.md). Den
+     vanlige avstanden er derfor 12 px pluss den raden — det er sonen, ikke
+     bryteren, denne sjekken handler om. */
+  const faneRad0 = await p.evaluate(() => parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--main-tabs-h')) || 0);
   log(label + ': kontoknappen står på sin vanlige avstand uten sone',
-    nær(konto0.top, 12), 'top ' + Math.round(konto0.top));
+    nær(konto0.top, 12 + faneRad0), 'top ' + Math.round(konto0.top) + ' (fanerad ' + faneRad0 + ')');
   log(label + ': board-ets bunn er fortsatt 0 uten sone',
     main0.paddingBottom === 0, 'padding-bottom ' + main0.paddingBottom);
 

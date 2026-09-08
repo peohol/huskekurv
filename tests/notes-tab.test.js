@@ -3,18 +3,20 @@
   mot mock-backend (?mock=1).
 
   Dekker:
-    1. Hovedfanene: `Lister | Notater` ligger over toppkontrollene, fanevalget
-       huskes på enheten, og toppkontrollene finnes i BEGGE fanene
+    1. Hovedbryteren: ÉN segmentert kontroll `Lister ↔ Notater`, sentrert på
+       panelets øverste linje med hjørnegruppen UNDER seg, fanevalget huskes
+       på enheten, og toppkontrollene finnes i BEGGE fanene
     2. Lister-fanen er funksjonelt uendret (ingen regresjon): kort, rader og
        nav-modalen står som før når man kommer tilbake
-    3. Prosjekt > Mappe > Notat: oppretting og omdøping fra notat-navigasjonen,
-       og at frie notater ligger rett i prosjektet
+    3. Bokhylle > Notatbok > Notat: oppretting og omdøping fra navigasjonen,
+       bokhyllehodet som TREKKSPILL (modalen lukkes ikke), og «Frie notater»
+       som den eksplisitte veien til bokhyllens egen plass
     4. «＋ Notat» oppretter notatet OG åpner editoren med det samme
     5. Editoren: tittel, overskrifter, fet/kursiv/understrek, hevet/senket,
        punkt- og nummerliste, skillelinje, lenke, spesialtegn, angre/gjør om
        — og at dokumentet leses tilbake til den strukturerte modellen
     6. Autosave: ingen Lagre-knapp, «Lagrer …» → «Lagret»
-    7. Tilbakeknappen fører tilbake til riktig fane, prosjekt/mappe og
+    7. Tilbakeknappen fører tilbake til riktig fane, bokhylle/notatbok og
        scrollposisjon
     8. Notatkortet: tittel, utdrag og «sist endret»
     9. Reload: innhold og struktur er intakt, og fanen er den samme
@@ -24,6 +26,21 @@
    12. Tastatur: Alt+piler flytter et notatkort
    13. Dokumentmodellen: `javascript:`-lenker slipper aldri gjennom, og
        rendringen bygger noder (ingen markup fra innhold)
+   14. Kortene pakkes venstre-først som listene, og bærer den samme
+       posisjonsbaserte palettfargen
+   15. Verktøylinjen BRYTER og ruller aldri — alle verktøyene er synlige, og
+       H1/H2/H3 viser tre nivåer
+   16. Overskriftshierarkiet vises som innrykk, med reset ved samme/høyere nivå
+   17. Tegnreglene « - »→« – », «...»→«…», « * »→« · » — og at de IKKE tar
+       «e-post», «2*3» eller en bindestrek først på linjen
+   18. contenteditable: lister lages/avsluttes, Enter/Backspace rundt
+       overskrifter gir gyldig struktur, innlimt markup blir tekst
+   19. Idéer og drakt finnes i editoren, og tilbaketrykket tar modalen over
+       editoren først
+   20. Spesialtegn-panelet forankres under knappen, innenfor skjermen
+   21. Editoren festes til det synlige feltet (`visualViewport`)
+   22. Forelder-invarianten: flyttes en notatbok, følger notatene med — ingen
+       blir igjen i en bokhylle som kan slettes under dem
 
   Kjøres på BÅDE desktop- og mobil-viewport der oppførselen avhenger av layout.
 
@@ -106,23 +123,33 @@ async function run(navn, viewport, touch) {
   const { db, uid } = buildDB();
   await seed(p, db, uid);
 
-  /* ---------- 1. Hovedfanene ---------- */
+  /* ---------- 1. Hovedbryteren ---------- */
   const faner = await p.evaluate(() => {
     const tabs = document.getElementById('main-tabs');
     const bar = document.getElementById('topbar').getBoundingClientRect();
     const t = tabs.getBoundingClientRect();
     const rad = document.getElementById('topbar-row-lists').getBoundingClientRect();
+    const hj = document.getElementById('corner-controls').getBoundingClientRect();
+    const knapper = [...tabs.querySelectorAll('.main-tab')].map((b) => b.getBoundingClientRect());
     return {
-      antall: tabs.querySelectorAll('.main-tab').length,
+      antall: knapper.length,
       rolle: tabs.getAttribute('role'),
       øverst: Math.round(t.top) <= Math.round(rad.top),
       iPanelet: t.top >= bar.top && t.bottom <= bar.bottom,
-      hjørne: !!document.getElementById('corner-controls') &&
-        !document.getElementById('corner-controls').hidden,
+      // ÉN kontroll: begge halvdelene ligger inntil hverandre i den samme
+      // flaten, ikke som to frittstående knapper med luft mellom.
+      sammenhengende: knapper.length === 2 &&
+        Math.round(knapper[1].left - knapper[0].right) <= 4,
+      // Sentrert i HELE headerens bredde — ikke forskjøvet av hjørnegruppen.
+      avvikFraMidten: Math.abs(Math.round((t.left + t.right) / 2 - window.innerWidth / 2)),
+      // Hjørnegruppen ligger UNDER bryteren, ikke ved siden av den.
+      hjørneUnder: Math.round(hj.top) >= Math.round(t.bottom) - 1,
+      hjørne: !document.getElementById('corner-controls').hidden,
     };
   });
-  log(navn + ': to hovedfaner øverst i visningsområdet, over kontrollraden',
-    faner.antall === 2 && faner.rolle === 'tablist' && faner.øverst && faner.iPanelet,
+  log(navn + ': ÉN segmentert hovedbryter, sentrert på panelets øverste linje',
+    faner.antall === 2 && faner.rolle === 'tablist' && faner.øverst && faner.iPanelet &&
+    faner.sammenhengende && faner.avvikFraMidten <= 2 && faner.hjørneUnder,
     JSON.stringify(faner));
   log(navn + ': toppkontrollene er felles og synlige i listefanen', faner.hjørne);
 
@@ -143,8 +170,8 @@ async function run(navn, viewport, touch) {
   log(navn + ': toppkontrollene er de samme i notatfanen (ikke duplisert per fane)',
     iNotater.hjørne);
 
-  /* ---------- 3. Prosjekt > Mappe > Notat ---------- */
-  // Navngivingen på plassen: ＋ Prosjekt lager kortet og åpner navnefeltet.
+  /* ---------- 3. Bokhylle > Notatbok > Notat ---------- */
+  // Navngivingen på plassen: ＋ Bokhylle lager kortet og åpner navnefeltet.
   await p.click('#notes-crumb');
   await p.waitForSelector('#notes-nav-board .notes-add-project button', { timeout: 5000 });
   await p.click('.notes-add-project button');
@@ -152,37 +179,79 @@ async function run(navn, viewport, touch) {
     const el = document.querySelector('#notes-nav-board .card .edit-input');
     return el ? { finnes: true, fokus: document.activeElement === el } : { finnes: false };
   });
-  log(navn + ': «＋ Prosjekt» lager prosjektet og åpner navnefeltet på det',
+  log(navn + ': «＋ Bokhylle» lager bokhyllen og åpner navnefeltet på den',
     navnefelt.finnes && navnefelt.fokus, JSON.stringify(navnefelt));
   await p.keyboard.type('Forskning');
   await p.keyboard.press('Enter');
   const prosjekt = await p.evaluate(() => window.__huskis.state.noteProjects.map((x) => x.name));
-  log(navn + ': prosjektet fikk navnet', prosjekt.join(',') === 'Forskning', prosjekt.join(','));
+  log(navn + ': bokhyllen fikk navnet', prosjekt.join(',') === 'Forskning', prosjekt.join(','));
 
   await p.click('#notes-nav-board .card .add-item-btn');
   await p.keyboard.type('Metode');
   await p.keyboard.press('Enter');
   const mapper = await p.evaluate(() => window.__huskis.state.noteProjects[0].folders.map((f) => f.name));
-  log(navn + ': mappen ble lagt i prosjektet', mapper.join(',') === 'Metode', mapper.join(','));
+  log(navn + ': notatboken ble lagt i bokhyllen', mapper.join(',') === 'Metode', mapper.join(','));
 
-  // Naviger inn i mappen fra raden, og tilbake til de frie notatene fra hodet.
-  await p.click('#notes-nav-board .note-folder-row');
+  /* BOKHYLLEHODET ER ET TREKKSPILL, ikke navigasjon: det åpner og lukker
+     bokhyllen, og modalen skal IKKE lukkes av det. */
+  await p.click('#notes-nav-board .card .card-head');
+  const kollapset = await p.evaluate(() => {
+    const card = document.querySelector('#notes-nav-board .card');
+    return {
+      kollapset: card.classList.contains('collapsed'),
+      aria: card.querySelector('.card-head').getAttribute('aria-expanded'),
+      modalÅpen: !document.getElementById('notes-nav-modal').hidden,
+      lagret: !!window.__huskis.state.noteProjects[0].collapsed,
+    };
+  });
+  log(navn + ': klikk på bokhyllehodet kollapser bokhyllen og lar modalen stå',
+    kollapset.kollapset && kollapset.aria === 'false' && kollapset.modalÅpen && kollapset.lagret,
+    JSON.stringify(kollapset));
+  await p.click('#notes-nav-board .card .card-head');
+  const utvidet = await p.evaluate(() => ({
+    kollapset: document.querySelector('#notes-nav-board .card').classList.contains('collapsed'),
+    aria: document.querySelector('#notes-nav-board .card-head').getAttribute('aria-expanded'),
+    modalÅpen: !document.getElementById('notes-nav-modal').hidden,
+  }));
+  log(navn + ': et nytt klikk åpner den igjen — fortsatt uten å lukke modalen',
+    !utvidet.kollapset && utvidet.aria === 'true' && utvidet.modalÅpen, JSON.stringify(utvidet));
+
+  // Naviger inn i notatboken fra raden.
+  await p.click('#notes-nav-board .note-folder-row:not(.note-free-row)');
   const iMappe = await p.evaluate(() => ({
     folder: window.__huskis.state.activeFolder,
     crumb: document.getElementById('crumb-note-folder-name').textContent,
     modalLukket: document.getElementById('notes-nav-modal').hidden,
   }));
-  log(navn + ': klikk på mapperaden navigerer inn i mappen',
+  log(navn + ': klikk på notatbok-raden navigerer inn i notatboken',
     !!iMappe.folder && iMappe.crumb === 'Metode' && iMappe.modalLukket, JSON.stringify(iMappe));
+
+  /* … og «Frie notater» er den EKSPLISITTE veien til bokhyllens egen plass.
+     Raden er ingen rad i modellen: den har en syntetisk id og kan ikke løftes. */
   await p.click('#notes-crumb');
-  await p.waitForSelector('#notes-nav-board .card .card-head', { timeout: 5000 });
-  await p.click('#notes-nav-board .card .card-head');
+  await p.waitForSelector('#notes-nav-board .note-free-row', { timeout: 5000 });
+  const friRad = await p.evaluate(() => {
+    const el = document.querySelector('#notes-nav-board .items-container > *');
+    return {
+      først: !!el && el.classList.contains('note-free-row'),
+      id: el && el.dataset.id,
+      uløftbar: !!el && el.hasAttribute('data-dnd-ignore'),
+      ukjentForModellen: !window.__huskis.state.noteProjects[0].folders
+        .some((f) => f.id === (el && el.dataset.id)),
+    };
+  });
+  log(navn + ': «Frie notater» står først i bokhyllen og er ingen notatbok',
+    friRad.først && /^free:/.test(friRad.id || '') && friRad.uløftbar && friRad.ukjentForModellen,
+    JSON.stringify(friRad));
+  await p.click('#notes-nav-board .note-free-row');
   const friPlass = await p.evaluate(() => ({
     folder: window.__huskis.state.activeFolder,
     crumb: document.getElementById('crumb-note-folder-name').textContent,
+    modalLukket: document.getElementById('notes-nav-modal').hidden,
   }));
-  log(navn + ': klikk på prosjekthodet går til de FRIE notatene',
-    friPlass.folder === null && friPlass.crumb.length > 0, JSON.stringify(friPlass));
+  log(navn + ': «Frie notater» fører til bokhyllens egen plass',
+    friPlass.folder === null && friPlass.crumb.length > 0 && friPlass.modalLukket,
+    JSON.stringify(friPlass));
 
   /* ---------- 4. «＋ Notat» åpner editoren ---------- */
   await p.click('#add-note-btn');
@@ -364,7 +433,7 @@ async function run(navn, viewport, touch) {
     const el = document.querySelector('#notes-board .note-card');
     return {
       tittel: el.querySelector('.note-card-title').textContent,
-      utdrag: el.querySelector('.note-card-excerpt').textContent,
+      utdrag: el.querySelector('.note-card-excerpt-text').textContent,
       meta: el.querySelector('.note-card-meta').textContent,
     };
   });
@@ -562,6 +631,322 @@ async function run(navn, viewport, touch) {
   log(navn + ': innhold rendres som TEKST, aldri som markup',
     trygg.elementer === 0 && trygg.tekst.indexOf('<img') === 0,
     'elementer: ' + trygg.elementer + ', tekst: ' + JSON.stringify(trygg.tekst));
+
+  /* ---------- 14. Samme kolonnepakking og fargesyklus som listene ---------- */
+  const pakking = await p.evaluate(() => {
+    const kort = [...document.querySelectorAll('#notes-board .note-card')];
+    const kolonnerMedKort = [...document.querySelectorAll('#notes-board .board-col')]
+      .filter((c) => c.querySelector('.note-card')).length;
+    return {
+      antall: kort.length,
+      kolonnerMedKort,
+      // Fyll-venstre-først: småkort som får plass på én skjermhøyde skal ligge
+      // i ÉN kolonne, ikke spres jevnt utover (det var den gamle særregelen).
+      farger: kort.map((el) => el.style.getPropertyValue('--card-bg')),
+      hode: kort.map((el) => el.style.getPropertyValue('--card-head')).filter(Boolean).length,
+    };
+  });
+  log(navn + ': notatkortene pakkes venstre-først, som listene',
+    pakking.kolonnerMedKort === 1, JSON.stringify({ kol: pakking.kolonnerMedKort, n: pakking.antall }));
+  log(navn + ': hvert notatkort bærer sin egen palettfarge (posisjonsbasert)',
+    pakking.farger.every((f) => /^#[0-9a-f]{6}$/i.test(f.trim())) &&
+    new Set(pakking.farger).size === pakking.farger.length &&
+    pakking.hode === pakking.antall,
+    JSON.stringify(pakking.farger));
+  // Fargen følger POSISJONEN: bytter to kort plass, bytter fargene også.
+  const førFarge = pakking.farger[0];
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    const liste = H.notesIn(H.state.activeProject, H.state.activeFolder);
+    const a = liste[0].pos; liste[0].pos = liste[1].pos; liste[1].pos = a;
+    H.renderNotes();
+  });
+  const etterFarge = await p.evaluate(() =>
+    document.querySelector('#notes-board .note-card').style.getPropertyValue('--card-bg'));
+  log(navn + ': fargen henger på plassen, ikke på notatet',
+    etterFarge === førFarge, førFarge + ' → ' + etterFarge);
+
+  /* ---------- 15. Editorens verktøylinje: bryter, ruller ALDRI ---------- */
+  await p.click('#notes-board .note-card');
+  await editorÅpen(p);
+  const linja = await p.evaluate(() => {
+    const tools = document.getElementById('note-tools');
+    const t = tools.getBoundingClientRect();
+    const knapper = [...tools.querySelectorAll('[data-cmd]')];
+    return {
+      antall: knapper.length,
+      ruller: tools.scrollWidth > tools.clientWidth + 1,
+      overflowX: getComputedStyle(tools).overflowX,
+      utenfor: knapper.filter((b) => {
+        const r = b.getBoundingClientRect();
+        return r.width === 0 || r.left < t.left - 1 || r.right > t.right + 1;
+      }).length,
+      // Tilbakeknappen er en Huskis-knapp, ikke et verktøy.
+      tilbakeErKnapp: document.getElementById('note-back').classList.contains('btn'),
+      // De tre overskriftsknappene viser tre forskjellige nivåer.
+      hStørrelser: ['h1', 'h2', 'h3'].map((c) => parseFloat(getComputedStyle(
+        document.querySelector('.note-tool[data-cmd="' + c + '"] .note-tool-text')).fontSize)),
+    };
+  });
+  log(navn + ': alle verktøyene er synlige uten vannrett rulling',
+    linja.antall >= 14 && !linja.ruller && linja.overflowX !== 'auto' &&
+    linja.overflowX !== 'scroll' && linja.utenfor === 0, JSON.stringify(linja));
+  log(navn + ': H1/H2/H3 viser tre nivåer, og tilbake er en vanlig knapp',
+    linja.tilbakeErKnapp && linja.hStørrelser[0] > linja.hStørrelser[1] &&
+    linja.hStørrelser[1] > linja.hStørrelser[2], JSON.stringify(linja.hStørrelser));
+
+  /* ---------- 16. Overskriftshierarkiet som innrykk ---------- */
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    const n = H.notesIn(H.state.activeProject, H.state.activeFolder)[0];
+    const T = (t, s) => ({ t, c: [{ s }] });
+    H.closeNoteEditor();   // FØR doc settes: lukkingen skyller editorens DOM tilbake
+    n.doc = { v: 1, blocks: [
+      T('h1', 'Én'), T('p', 'under én'),
+      T('h2', 'To'), T('p', 'under to'),
+      T('h3', 'Tre'), T('p', 'under tre'),
+      T('h2', 'To igjen'), T('p', 'under to igjen'),
+    ] };
+    H.openNoteEditor(n.id);
+  });
+  await editorÅpen(p);
+  const innrykk = await p.evaluate(() => {
+    const doc = document.getElementById('note-doc');
+    const nivå = [...doc.children].map((el) => el.tagName.toLowerCase() + ':' + (el.dataset.lvl || '0'));
+    const steg = parseFloat(getComputedStyle(doc).getPropertyValue('--note-indent'));
+    const margin = [...doc.children].map((el) => Math.round(parseFloat(getComputedStyle(el).marginLeft)));
+    return { nivå: nivå.join(','), steg, margin };
+  });
+  log(navn + ': hver overskrift eier innholdet under seg, og nivåene rykkes inn',
+    innrykk.nivå === 'h1:0,p:1,h2:1,p:2,h3:2,p:3,h2:1,p:2', innrykk.nivå);
+  log(navn + ': innrykket er ETT felles trinn per nivå',
+    innrykk.steg > 0 && innrykk.margin[1] === Math.round(innrykk.steg) &&
+    innrykk.margin[3] === Math.round(innrykk.steg * 2) &&
+    innrykk.margin[5] === Math.round(innrykk.steg * 3) &&
+    innrykk.margin[6] === Math.round(innrykk.steg),
+    JSON.stringify(innrykk));
+
+  /* ---------- 17. Automatiske tegnregler ---------- */
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    const n = H.notesIn(H.state.activeProject, H.state.activeFolder)[0];
+    H.closeNoteEditor();   // FØR doc settes: lukkingen skyller editorens DOM tilbake
+    n.doc = { v: 1, blocks: [{ t: 'p', c: [] }] };
+    H.openNoteEditor(n.id);
+  });
+  await editorÅpen(p);
+  await p.click('#note-doc');
+  await p.keyboard.type('to - tre og x * y og vent... e-post 2*3 ferdig');
+  const tegnregler = await p.evaluate(() =>
+    window.__huskis.noteDocText(window.__huskis.noteDocFromEl(document.getElementById('note-doc'))));
+  log(navn + ': « - » blir tankestrek, «...» blir ellipse og « * » blir midtprikk',
+    /to – tre/.test(tegnregler) && /x · y/.test(tegnregler) && /vent…/.test(tegnregler),
+    JSON.stringify(tegnregler));
+  log(navn + ': og de tar IKKE bindestreken i «e-post» eller stjernen i «2*3»',
+    /e-post/.test(tegnregler) && /2\*3/.test(tegnregler) && !/e–post/.test(tegnregler),
+    JSON.stringify(tegnregler));
+  // Markøren står der den skal etter et bytte: neste tegn havner etter strekene.
+  log(navn + ': markøren blir stående etter tegnbyttet', /ferdig$/.test(tegnregler.trim()),
+    JSON.stringify(tegnregler.slice(-20)));
+  // Regelen skal heller ikke ta et listepunkt som BEGYNNER med «- ».
+  await p.keyboard.press('Enter');
+  await p.keyboard.type('- start');
+  const iStart = await p.evaluate(() =>
+    window.__huskis.noteDocText(window.__huskis.noteDocFromEl(document.getElementById('note-doc'))));
+  log(navn + ': en bindestrek FØRST på linjen står urørt',
+    /- start/.test(iStart) && !/– start/.test(iStart), JSON.stringify(iStart.slice(-12)));
+
+  /* ---------- 18. contenteditable: lister, Enter/Backspace, innliming ---------- */
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    const n = H.notesIn(H.state.activeProject, H.state.activeFolder)[0];
+    H.closeNoteEditor();   // FØR doc settes: lukkingen skyller editorens DOM tilbake
+    n.doc = { v: 1, blocks: [{ t: 'p', c: [] }] };
+    H.openNoteEditor(n.id);
+  });
+  await editorÅpen(p);
+  await p.click('#note-doc');
+  await p.click('.note-tool[data-cmd="ul"]');
+  await p.keyboard.type('ett');
+  await p.keyboard.press('Enter');
+  await p.keyboard.type('to');
+  await p.keyboard.press('Enter');
+  await p.keyboard.press('Enter');            // tomt punkt = ut av lista
+  await p.keyboard.type('etter lista');
+  const listeflyt = await p.evaluate(() => {
+    const d = window.__huskis.noteDocFromEl(document.getElementById('note-doc'));
+    const ul = d.blocks.find((b) => b.t === 'ul');
+    return {
+      typer: d.blocks.map((b) => b.t).join(','),
+      punkter: ul ? ul.items.map((i) => i.map((r) => r.s).join('')).join('|') : '',
+      tekst: window.__huskis.noteDocText(d),
+    };
+  });
+  log(navn + ': lista lages, fylles og avsluttes — teksten etter havner utenfor',
+    listeflyt.punkter === 'ett|to' && /etter lista/.test(listeflyt.tekst) &&
+    /ul/.test(listeflyt.typer) && listeflyt.typer.split(',').every((t) => /^(p|h1|h2|h3|ul|ol|hr)$/.test(t)),
+    JSON.stringify(listeflyt));
+
+  // Backspace i starten av en blokk rett etter en overskrift skal ikke gi
+  // ugyldig struktur (nettleseren slår sammen blokkene selv).
+  await p.click('.note-tool[data-cmd="h2"]');
+  await p.keyboard.press('Enter');
+  await p.keyboard.type('brød');
+  await p.keyboard.press('Home');
+  await p.keyboard.press('Backspace');
+  const etterBackspace = await p.evaluate(() => {
+    const d = window.__huskis.noteDocFromEl(document.getElementById('note-doc'));
+    return { typer: d.blocks.map((b) => b.t).join(','), tekst: window.__huskis.noteDocText(d) };
+  });
+  log(navn + ': Enter/Backspace rundt overskrifter gir fortsatt gyldig struktur',
+    etterBackspace.typer.split(',').every((t) => /^(p|h1|h2|h3|ul|ol|hr)$/.test(t)) &&
+    /brød/.test(etterBackspace.tekst), JSON.stringify(etterBackspace));
+
+  // Innliming: markup fra utsiden blir TEKST, aldri elementer.
+  await p.evaluate(() => {
+    const doc = document.getElementById('note-doc');
+    doc.focus();
+    const dt = new DataTransfer();
+    dt.setData('text/plain', '<b>limt</b> tekst');
+    doc.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  const limt = await p.evaluate(() => ({
+    elementer: document.querySelectorAll('#note-doc b, #note-doc strong, #note-doc script').length,
+    tekst: window.__huskis.noteDocText(window.__huskis.noteDocFromEl(document.getElementById('note-doc'))),
+  }));
+  log(navn + ': innlimt markup blir ren tekst i modellen',
+    limt.elementer === 0 && /<b>limt<\/b> tekst/.test(limt.tekst), JSON.stringify(limt));
+
+  /* ---------- 19. Idéer og drakt er med i editoren ---------- */
+  const førDrakt = await p.evaluate(() => document.documentElement.getAttribute('data-theme'));
+  await p.click('#note-theme-btn');
+  const etterDrakt = await p.evaluate(() => ({
+    tema: document.documentElement.getAttribute('data-theme'),
+    lagret: localStorage.getItem('huskis-theme'),
+    editorÅpen: !document.getElementById('note-editor').hidden,
+  }));
+  log(navn + ': draktknappen i editoren bytter drakt for hele appen',
+    etterDrakt.tema !== førDrakt && etterDrakt.tema === etterDrakt.lagret && etterDrakt.editorÅpen,
+    førDrakt + ' → ' + JSON.stringify(etterDrakt));
+  await p.click('#note-theme-btn');   // tilbake
+  await p.click('#note-ideas-btn');
+  await p.waitForFunction(() => !document.getElementById('ideas-modal').hidden,
+    null, { timeout: 4000, polling: 50 });
+  const medIdeer = await p.evaluate(() => ({
+    ideer: !document.getElementById('ideas-modal').hidden,
+    editor: !document.getElementById('note-editor').hidden,
+  }));
+  log(navn + ': idéknappen i editoren åpner den samme idémodalen',
+    medIdeer.ideer && medIdeer.editor, JSON.stringify(medIdeer));
+  // Idémodalen ligger OVER editoren, så tilbaketrykket skal ta modalen først.
+  const stigen = await p.evaluate(() => {
+    const tatt = window.__huskis.systemBack();
+    return { tatt, ideer: !document.getElementById('ideas-modal').hidden,
+             editor: !document.getElementById('note-editor').hidden };
+  });
+  log(navn + ': tilbaketrykket lukker idémodalen først, ikke editoren under',
+    stigen.tatt === true && !stigen.ideer && stigen.editor, JSON.stringify(stigen));
+
+  /* ---------- 20. Spesialtegn-panelet forankres under knappen ---------- */
+  await p.click('.note-tool[data-cmd="symbol"]');
+  await p.waitForSelector('#note-symbol-panel button', { timeout: 3000 });
+  const anker = await p.evaluate(() => {
+    const panel = document.getElementById('note-symbol-panel');
+    const knapp = document.querySelector('.note-tool[data-cmd="symbol"]');
+    const pr = panel.getBoundingClientRect();
+    const kr = knapp.getBoundingClientRect();
+    return {
+      fast: getComputedStyle(panel).position === 'fixed',
+      under: pr.top >= kr.bottom - 1,
+      // Midtstilt på knappen, eller klemt inn mot en kant.
+      avvik: Math.round(Math.abs((pr.left + pr.right) / 2 - (kr.left + kr.right) / 2)),
+      innenfor: pr.left >= -1 && pr.right <= window.innerWidth + 1 &&
+                pr.top >= -1 && pr.bottom <= window.innerHeight + 1,
+      klemt: Math.round(pr.left) <= 10 || Math.round(pr.right) >= window.innerWidth - 10,
+    };
+  });
+  log(navn + ': symbolpanelet henger under knappen og holder seg innenfor skjermen',
+    anker.fast && anker.under && anker.innenfor && (anker.avvik <= 4 || anker.klemt),
+    JSON.stringify(anker));
+  await p.keyboard.press('Escape');
+  await p.click('#note-back');
+  await editorLukket(p);
+
+  /* ---------- 21. Editoren er festet til det SYNLIGE feltet ---------- */
+  const festet = await p.evaluate(() => {
+    const cs = getComputedStyle(document.getElementById('note-editor'));
+    const root = getComputedStyle(document.documentElement);
+    return {
+      top: cs.top,
+      // Verdiene finnes som tokens uansett om nettleseren har visualViewport.
+      h: root.getPropertyValue('--viewport-h').trim(),
+      t: root.getPropertyValue('--viewport-top').trim(),
+      inset: root.getPropertyValue('--keyboard-inset').trim(),
+      sporet: typeof window.visualViewport === 'undefined' ||
+        root.getPropertyValue('--viewport-h').trim() !== '100dvh',
+    };
+  });
+  log(navn + ': editoren festes til det synlige feltet (mobiltastaturet)',
+    festet.h.length > 0 && festet.t.length > 0 && festet.inset.length > 0 && festet.sporet,
+    JSON.stringify(festet));
+
+  /* ---------- 22. Forelder-invarianten: notatboken bestemmer bokhyllen ---------- */
+  /* «En annen enhet» flytter NOTATBOKEN til en ny bokhylle. Serveren (og
+     mock-backenden, som speiler den) tar notatene med seg; klienten skal lese
+     det samme, ikke bli stående med et notat i en bokhylle notatboken har
+     forlatt — den bokhyllen kan slettes, og `project_id` er ON DELETE CASCADE. */
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    // Legg først notatet i notatboken, og la det synke.
+    const n = H.notesIn(H.state.activeProject, null)[0];
+    const f = H.state.noteProjects[0].folders[0];
+    n.folder = f.id;
+    n.posTs = Date.now() + 1000;
+    n.posOrg = 'denne-enheten';
+    H.save();
+  });
+  await p.evaluate(() => window.__huskis.cloudCycle());
+  await p.waitForFunction(() => {
+    const db = JSON.parse(localStorage.getItem('hk-mock-db') || '{}');
+    return (db.notes || []).some((n) => n.folder_id);
+  }, null, { timeout: 10000, polling: 200 });
+  const flyttet = await p.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('hk-mock-db'));
+    const nyBokhylle = 'aaaa0000-0000-4000-8000-00000000f001';
+    db.note_projects.push({
+      id: nyBokhylle, owner_id: 'u1', name: 'Ny bokhylle', collapsed: false, trashed: false,
+      ts: Date.now() + 5000, org: 'annen-enhet', pos: 9,
+      pos_ts: Date.now() + 5000, pos_org: 'annen-enhet',
+    });
+    const bok = db.note_folders[0];
+    bok.project_id = nyBokhylle;
+    bok.pos_ts = Date.now() + 5000;
+    bok.pos_org = 'annen-enhet';
+    // Serveren kaskaderer til notatene (note_folders_cascade); her gjør vi det
+    // samme, slik en ekte runde ville sett ut.
+    db.notes.forEach((n) => {
+      if (n.folder_id !== bok.id) return;
+      n.project_id = nyBokhylle;
+      n.pos_ts = bok.pos_ts;
+      n.pos_org = bok.pos_org;
+    });
+    localStorage.setItem('hk-mock-db', JSON.stringify(db));
+    return { nyBokhylle, bok: bok.id };
+  });
+  await p.evaluate(() => window.__huskis.cloudCycle());
+  await p.waitForFunction((id) => window.__huskis.state.noteProjects.some((x) => x.id === id),
+    flyttet.nyBokhylle, { timeout: 10000, polling: 200 });
+  const konsistent = await p.evaluate(() => {
+    const H = window.__huskis;
+    const mappeAv = {};
+    H.state.noteProjects.forEach((pr) => (pr.folders || []).forEach((f) => { mappeAv[f.id] = f.project; }));
+    const uenige = H.state.notes.filter((n) => n.folder && mappeAv[n.folder] &&
+      mappeAv[n.folder] !== n.project);
+    return { uenige: uenige.length, bokhyller: H.state.noteProjects.length,
+             notater: H.state.notes.map((n) => ({ f: !!n.folder, p: n.project })) };
+  });
+  log(navn + ': ingen notater er igjen i en bokhylle notatboken har forlatt',
+    konsistent.uenige === 0 && konsistent.bokhyller === 2, JSON.stringify(konsistent));
 
   log(navn + ': ingen JS-feil', errs.length === 0, errs.join(' | ') || 'ingen');
   await browser.close();

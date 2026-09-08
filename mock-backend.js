@@ -1309,6 +1309,10 @@
       if (table === 'notes' && row.folder_id) {
         var mappe = (db.note_folders || []).find(function (f) { return f.id === row.folder_id; });
         if (!mappe || mappe.owner_id !== uid) throw new Error('mangler tilgang til notatmappen');
+        /* Bokhyllen UTLEDES av notatboken (notes_fix_parent i
+           users-and-sharing.sql): de to forelder-pekerne kan ikke motsi
+           hverandre, ellers ville en kaskade fra feil bokhylle tatt notatet. */
+        row.project_id = mappe.project_id;
       }
       // Nye objekter arver invitasjonspolicy dynamisk → lagres som 'inherit'.
       if (table === 'universes' || table === 'groups') { if (!row.invite_policy) row.invite_policy = 'inherit'; }
@@ -1395,6 +1399,21 @@
             if (k in patch) row[k] = patch[k];
           });
           row.pos_ts = patch.pos_ts; row.pos_org = patch.pos_org;
+        }
+        /* SIST, på den ferdige raden — som notes_before_update: et notat i en
+           notatbok ligger i notatbokens bokhylle, uansett hva klienten skrev. */
+        if (table === 'notes' && row.folder_id) {
+          var bok = (db.note_folders || []).find(function (f) { return f.id === row.folder_id; });
+          if (bok) row.project_id = bok.project_id;
+        }
+        /* … og flyttes en NOTATBOK, følger notatene med (note_folders_cascade). */
+        if (table === 'note_folders') {
+          (db.notes || []).forEach(function (n) {
+            if (n.folder_id !== row.id || n.project_id === row.project_id) return;
+            n.project_id = row.project_id;
+            n.pos_ts = Math.max(n.pos_ts || 0, row.pos_ts || 0);
+            n.pos_org = row.pos_org;
+          });
         }
         return;
       }

@@ -57,6 +57,12 @@ grant execute on function public.t_fails_with(text, text, text) to public;
 \set N3 '6b000000-dddd-0000-0000-000000000005'
 \set BP '6b000000-dddd-0000-0000-000000000006'
 \set BN '6b000000-dddd-0000-0000-000000000007'
+-- P2/F2 = en ANNEN bokhylle med sin egen notatbok; N4/N5 = notatene som viser
+-- at de to forelder-pekerne aldri kan motsi hverandre (seksjon 5b).
+\set P2 '6b000000-dddd-0000-0000-000000000010'
+\set F2 '6b000000-dddd-0000-0000-000000000011'
+\set N4 '6b000000-dddd-0000-0000-000000000012'
+\set N5 '6b000000-dddd-0000-0000-000000000013'
 
 insert into auth.users (id, email) values
   (:'A', 'notat-a@example.com'), (:'B', 'notat-b@example.com')
@@ -195,6 +201,49 @@ select public.t_fails('owner_id kan ikke endres på et notat',
   format('update public.notes set owner_id = %L where id = %L', :'B', :'N1'));
 select public.t_fails('owner_id kan ikke endres på et notatprosjekt',
   format('update public.note_projects set owner_id = %L where id = %L', :'B', :'P'));
+
+-- ---------- 5b. De to forelder-pekerne kan ikke motsi hverandre ----------
+-- `notes` har BÅDE `project_id` og `folder_id`. RLS sier at begge er mine, men
+-- ikke at de hører sammen. Uten en egen invariant kunne den samme brukeren
+-- lagre et notat som peker på bokhylle A og en notatbok i bokhylle B — og
+-- siden `project_id` er ON DELETE CASCADE, ville raden blitt SLETTET når
+-- bokhylle A forsvant, selv om notatet vises under notatboken i bokhylle B.
+-- Serveren UTLEDER derfor bokhyllen av notatboken.
+insert into public.note_projects (id, owner_id, name, ts, org) values
+  (:'P2', :'A', 'Bokhylle to', 1, 'a');
+insert into public.note_folders (id, owner_id, project_id, name, ts, org) values
+  (:'F2', :'A', :'P2', 'Notatbok to', 1, 'a');
+
+insert into public.notes (id, owner_id, project_id, folder_id, title, ts, org) values
+  (:'N4', :'A', :'P', :'F2', 'Feilhektet notat', 1, 'a');
+select public.t_check('et notat som pekte på feil bokhylle ble rettet ved innsetting',
+  (select project_id from public.notes where id = :'N4') = :'P2'::uuid);
+
+update public.notes set project_id = :'P', pos_ts = 500, pos_org = 'a' where id = :'N4';
+select public.t_check('… og kan heller ikke skrives feil etterpå',
+  (select project_id from public.notes where id = :'N4') = :'P2'::uuid);
+
+-- FLYTTING AV EN NOTATBOK tar notatene med seg — serverside, ikke bare i
+-- klienten: enheten kan miste nettet mellom de to skrivingene.
+insert into public.notes (id, owner_id, project_id, folder_id, title, ts, org, pos_ts, pos_org) values
+  (:'N5', :'A', :'P2', :'F2', 'Blir med på flyttelasset', 1, 'a', 10, 'a');
+update public.note_folders set project_id = :'P', pos_ts = 900, pos_org = 'z' where id = :'F2';
+select public.t_check('notatbokens notater fulgte med til den nye bokhyllen',
+  (select count(*) from public.notes where folder_id = :'F2' and project_id = :'P'::uuid) = 2);
+select public.t_check('… med posisjonsregisteret løftet til notatbokens, så andre enheter tar flyttingen inn',
+  (select min(pos_ts) from public.notes where folder_id = :'F2') >= 900
+  and (select count(distinct pos_org) from public.notes where folder_id = :'F2') = 1);
+
+-- Og DA er den gamle bokhyllen ufarlig å slette: ingen av notatene peker på den.
+delete from public.note_projects where id = :'P2';
+select public.t_check('notatene overlevde slettingen av den GAMLE bokhyllen',
+  (select count(*) from public.notes where id in (:'N4', :'N5')) = 2);
+select public.t_check('… og notatboken sto igjen i den nye bokhyllen',
+  (select project_id from public.note_folders where id = :'F2') = :'P'::uuid);
+
+-- Rydd opp, så resten av suiten teller det den alltid har talt.
+delete from public.notes where id in (:'N4', :'N5');
+delete from public.note_folders where id = :'F2';
 
 -- ---------- 6. En slettet mappe tar ALDRI notatene med seg ----------
 -- `folder_id` er `on delete set null`, ikke cascade: notatene i en slettet

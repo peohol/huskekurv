@@ -2,14 +2,16 @@
 
 ## Prosjekt
 
-Huskis er en statisk vanilla-JS-app uten bundler eller rammeverk. Appen har to
-hovedfaner øverst — **Lister** og **Notater** — og toppkontrollene (varsler,
-kalender, søk, idéer, drakt, konto) tilhører hele appen, ikke én fane.
+Huskis er en statisk vanilla-JS-app uten bundler eller rammeverk. Appen har én
+segmentert hovedbryter øverst — **Lister ↔ Notater** — og toppkontrollene
+(varsler, kalender, søk, idéer, drakt, konto) tilhører hele appen, ikke én fane.
 
 Listefanens innhold er hierarkisk: **Område > Mappe > Liste > Listepunkt**, der
 en liste i tillegg kan ha ett nivå med **kategorier**. Notatfanen har sitt eget
-tre — **Prosjekt > Mappe > Notat** — bygget av de samme komponentene og den
-samme synken; autoritativt: `docs/notater-plan.md`.
+tre — **Bokhylle > Notatbok > Notat** — bygget av de samme komponentene og den
+samme synken; autoritativt: `docs/notater-plan.md`. Identifikatorene i koden og
+databasen heter fortsatt `note_projects`/`note_folders`, som `universe`/`group`
+for de norske ordene «område» og «mappe».
 
 De to øverste nivåene er bygget av samme komponenter som de to nederste: et
 område ER et kort, en mappe ER en rad. Dra-og-slipp kjører i to scope —
