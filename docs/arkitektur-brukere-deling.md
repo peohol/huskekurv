@@ -214,6 +214,16 @@ tilbake med en eksplisitt `revoke` i `users-and-sharing.sql`. Matrisen står som
 kommentar rett over de setningene, og både smoke-testen og SQL-suiten har
 negative sjekker som slår ut hvis en `revoke` forsvinner.
 
+**Det samme gjelder FUNKSJONER, og der er standarden verre**: PostgreSQL gir
+hver ny funksjon EXECUTE til `public`. Triggerfunksjonene er `security definer`
+og gjør privilegerte ting (vakter, gravsteiner, kaskader) uten en egen
+autorisasjonssjekk — myndigheten ligger i skrivingen som utløste dem — så de
+skal ALDRI kunne kalles som RPC. Låsen er derfor GENERISK og ikke en liste:
+alt i `public` som returnerer `trigger` mister EXECUTE. En liste ville råtnet
+neste gang noen legger til en trigger. Smoke-testen sjekker det samme settet
+generisk, så en ny triggerfunksjon ikke kan komme inn ulåst. Triggerkjøringen
+er upåvirket — den hviler på TRIGGER-rettigheten på TABELLEN, ikke på EXECUTE.
+
 ## Deling (invitasjon → aksept → rolle)
 
 1. `create_share_invite(type, id, email, role)` — `type` er `'universe'` eller

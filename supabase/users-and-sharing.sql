@@ -5566,6 +5566,30 @@ revoke all on function public.native_notif_active(uuid) from public, anon, authe
 revoke all on function public.session_alive(uuid) from public, anon, authenticated;
 revoke all on function public.current_session_id() from public, anon, authenticated;
 
+-- TRIGGERFUNKSJONENE er ikke RPC-er. Alle er `security definer` og gjør
+-- privilegerte ting (vakter, gravsteiner, kaskader) uten en egen
+-- autorisasjonssjekk — myndigheten ligger i skrivingen som utløste triggeren.
+-- PostgreSQL gir hver ny funksjon EXECUTE til `public` som standard, og
+-- Supabases Security Advisor flagger dem derfor som direkte kallbare.
+--
+-- Regelen er GENERISK, ikke en liste: alt i `public` som returnerer `trigger`
+-- mister EXECUTE. En liste ville råtnet neste gang noen legger til en trigger;
+-- dette dekker også den. Selve triggerkjøringen er upåvirket — den sjekker
+-- TRIGGER-rettigheten på TABELLEN, ikke EXECUTE på funksjonen
+-- (smoke-testens seksjon 6 og hele SQL-suiten kjører triggerne etterpå).
+do $$
+declare fn text;
+begin
+  for fn in
+    select p.oid::regprocedure::text
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.prorettype = 'trigger'::regtype
+  loop
+    execute format('revoke all on function %s from public, anon, authenticated', fn);
+  end loop;
+end $$;
+
 -- SENDERENS to funksjoner leser og skriver ANDRE brukeres leveringer. De skal
 -- derfor ikke kunne kalles med anon-nøkkelen eller av en innlogget bruker —
 -- kun av service_role, som bare senderen har. Rollesjekken inne i funksjonene

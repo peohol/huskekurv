@@ -402,6 +402,22 @@ begin
     end if;
   end loop;
 
+  /* TRIGGERFUNKSJONENE ER IKKE RPC-ER. Alle er `security definer` og gjør
+     privilegerte ting uten en egen autorisasjonssjekk, og PostgreSQL gir hver
+     ny funksjon EXECUTE til `public` som standard. Sjekken er GENERISK — alt i
+     `public` som returnerer `trigger` — så en ny trigger ikke kan komme inn
+     uten låsen (users-and-sharing.sql, seksjon 12). */
+  for tg in
+    select p.oid::regprocedure::text
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.prorettype = 'trigger'::regtype
+       and (has_function_privilege('authenticated', p.oid, 'EXECUTE')
+            or has_function_privilege('anon', p.oid, 'EXECUTE'))
+  loop
+    feil := array_append(feil, 'triggerfunksjonen ' || tg || ' er kallbar som RPC (skal være intern)');
+  end loop;
+
   -- Vaktene og gravsteinstriggerne: uten dem er skjemaet på plass, men
   -- reglene håndheves ikke.
   foreach tg in array array[
