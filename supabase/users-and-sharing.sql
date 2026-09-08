@@ -1929,16 +1929,25 @@ $$;
 -- det samme lokalt (noteFolderMoved), men serveren kan ikke stole på at den
 -- rekker det: enheten kan miste nettet mellom de to skrivingene, og da ville
 -- notatene blitt liggende igjen i den gamle bokhyllen — og forsvunnet med den.
--- Posisjonsregisteret løftes til notatbokens eget, så andre enheter tar
--- flyttingen inn i stedet for å skrive den tilbake.
+--
+-- `(pos_ts, pos_org)` ER ETT UDELELIG REGISTER: `reg_newer` sammenligner
+-- tidsstempelet først og lar `org` bryte uavgjort. Halvdelene kan derfor ikke
+-- plukkes hver for seg — et notat med nyere `pos_ts` enn notatboken ville ellers
+-- endt med sitt eget tidsstempel og notatbokens `org`, en kombinasjon som aldri
+-- har eksistert, og som kan snu hvem som vinner en senere skriving med likt
+-- tidsstempel. Hele paret velges derfor atomisk: er notatbokens register nyere,
+-- kopieres BEGGE feltene; ellers beholdes BEGGE. `project_id` følger
+-- notatbokens bokhylle uansett — det er invarianten, ikke et register.
 create or replace function public.note_folders_after_update()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if new.project_id is distinct from old.project_id then
     update public.notes n
        set project_id = new.project_id,
-           pos_ts     = greatest(n.pos_ts, new.pos_ts),
-           pos_org    = new.pos_org
+           pos_ts  = case when public.reg_newer(new.pos_ts, new.pos_org, n.pos_ts, n.pos_org)
+                          then new.pos_ts else n.pos_ts end,
+           pos_org = case when public.reg_newer(new.pos_ts, new.pos_org, n.pos_ts, n.pos_org)
+                          then new.pos_org else n.pos_org end
      where n.folder_id = new.id
        and n.project_id is distinct from new.project_id;
   end if;

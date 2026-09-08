@@ -936,6 +936,61 @@ async function run(navn, viewport, touch) {
   await p.evaluate(() => window.__huskis.cloudCycle());
   await p.waitForFunction((id) => window.__huskis.state.noteProjects.some((x) => x.id === id),
     flyttet.nyBokhylle, { timeout: 10000, polling: 200 });
+
+  /* Og SERVERREGELEN selv: `(pos_ts, pos_org)` er ETT register — hele paret
+     velges atomisk når en notatbok flyttes, aldri tidsstempelet fra det ene og
+     `org` fra det andre. Mock-backenden speiler note_folders_cascade, og her
+     kjøres den gjennom sin egen skrivevei (`update`), ikke gjennom en håndlagd
+     kopi i localStorage. */
+  const register = await p.evaluate(async () => {
+    const c = window.HK_MOCK.createClient();
+    const db = window.HK_MOCK._loadDB();
+    const bok = db.note_folders[0];
+    if (!bok) return { hoppet: true };
+    /* Notatbokens NYE register må være nyere enn dens eget, ellers avviser
+       felt-LWW-en flyttingen før kaskaden i det hele tatt blir aktuell. */
+    const stempel = (bok.pos_ts || 0) + 1000;
+    // Tre notater i den samme notatboken: eldre, nyere og uavgjort register.
+    const lag = (id, ts, org) => ({
+      id, owner_id: 'u1', project_id: bok.project_id, folder_id: bok.id,
+      title: id, body: { v: 1, blocks: [] }, trashed: false,
+      ts: 1, org: 'a', pos: 0, pos_ts: ts, pos_org: org,
+    });
+    db.notes.push(lag('aaaa0000-0000-4000-8000-00000000e001', stempel - 100, 'a'));
+    db.notes.push(lag('aaaa0000-0000-4000-8000-00000000e002', stempel + 100, 'm'));
+    db.notes.push(lag('aaaa0000-0000-4000-8000-00000000e003', stempel, 'b'));
+    const nyId = 'aaaa0000-0000-4000-8000-00000000f002';
+    db.note_projects.push({
+      id: nyId, owner_id: 'u1', name: 'Enda en bokhylle', collapsed: false, trashed: false,
+      ts: 1, org: 'a', pos: 20, pos_ts: 1, pos_org: 'a',
+    });
+    window.HK_MOCK._saveDB(db);
+    // Notatbokens eget register: `stempel` med org 'z'.
+    await c.from('note_folders').update({
+      project_id: nyId, pos: bok.pos, pos_ts: stempel, pos_org: 'z',
+    }).eq('id', bok.id);
+    const etter = window.HK_MOCK._loadDB();
+    const hent = (id) => etter.notes.find((n) => n.id === id);
+    return {
+      eldre: hent('aaaa0000-0000-4000-8000-00000000e001'),
+      nyere: hent('aaaa0000-0000-4000-8000-00000000e002'),
+      likt: hent('aaaa0000-0000-4000-8000-00000000e003'),
+      nyId, stempel,
+    };
+  });
+  const regKort = (n) => (n ? n.pos_ts + '/' + n.pos_org + '@' + (n.project_id || '').slice(-4) : 'mangler');
+  log(navn + ': posisjonsregisteret flyttes som ETT par, aldri halvt',
+    !!register.eldre &&
+    // eldre register → BEGGE feltene byttes til notatbokens
+    register.eldre.pos_ts === register.stempel && register.eldre.pos_org === 'z' &&
+    // nyere register → BEGGE feltene beholdes
+    register.nyere.pos_ts === register.stempel + 100 && register.nyere.pos_org === 'm' &&
+    // likt stempel → `org` bryter uavgjorten, og paret følger vinneren
+    register.likt.pos_ts === register.stempel && register.likt.pos_org === 'z' &&
+    // … og bokhyllen følger notatboken uansett hvem som vant registeret
+    [register.eldre, register.nyere, register.likt].every((n) => n.project_id === register.nyId),
+    [register.eldre, register.nyere, register.likt].map(regKort).join(' | ') +
+      ' (notatbok ' + register.stempel + '/z)');
   const konsistent = await p.evaluate(() => {
     const H = window.__huskis;
     const mappeAv = {};

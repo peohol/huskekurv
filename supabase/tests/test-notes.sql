@@ -63,6 +63,9 @@ grant execute on function public.t_fails_with(text, text, text) to public;
 \set F2 '6b000000-dddd-0000-0000-000000000011'
 \set N4 '6b000000-dddd-0000-0000-000000000012'
 \set N5 '6b000000-dddd-0000-0000-000000000013'
+-- N6/N7 = notatene som viser at posisjonsregisteret flyttes som ETT par.
+\set N6 '6b000000-dddd-0000-0000-000000000014'
+\set N7 '6b000000-dddd-0000-0000-000000000015'
 
 insert into auth.users (id, email) values
   (:'A', 'notat-a@example.com'), (:'B', 'notat-b@example.com')
@@ -225,24 +228,42 @@ select public.t_check('… og kan heller ikke skrives feil etterpå',
 
 -- FLYTTING AV EN NOTATBOK tar notatene med seg — serverside, ikke bare i
 -- klienten: enheten kan miste nettet mellom de to skrivingene.
+--
+-- `(pos_ts, pos_org)` ER ETT REGISTER: `reg_newer` ser på tidsstempelet først og
+-- lar `org` bryte uavgjort, så halvdelene kan ikke plukkes hver for seg. De tre
+-- notatene under dekker begge retninger OG uavgjort:
+--   N5  eldre register enn notatboken   → BEGGE feltene kopieres
+--   N6  nyere register enn notatboken   → BEGGE feltene beholdes
+--   N7  likt pos_ts, lavere pos_org     → notatbokens org vinner uavgjorten
 insert into public.notes (id, owner_id, project_id, folder_id, title, ts, org, pos_ts, pos_org) values
-  (:'N5', :'A', :'P2', :'F2', 'Blir med på flyttelasset', 1, 'a', 10, 'a');
+  (:'N5', :'A', :'P2', :'F2', 'Blir med på flyttelasset', 1, 'a', 10,   'a'),
+  (:'N6', :'A', :'P2', :'F2', 'Har nyere register',       1, 'a', 5000, 'm'),
+  (:'N7', :'A', :'P2', :'F2', 'Uavgjort på stempelet',    1, 'a', 900,  'b');
 update public.note_folders set project_id = :'P', pos_ts = 900, pos_org = 'z' where id = :'F2';
 select public.t_check('notatbokens notater fulgte med til den nye bokhyllen',
-  (select count(*) from public.notes where folder_id = :'F2' and project_id = :'P'::uuid) = 2);
-select public.t_check('… med posisjonsregisteret løftet til notatbokens, så andre enheter tar flyttingen inn',
-  (select min(pos_ts) from public.notes where folder_id = :'F2') >= 900
-  and (select count(distinct pos_org) from public.notes where folder_id = :'F2') = 1);
+  (select count(*) from public.notes where folder_id = :'F2' and project_id = :'P'::uuid) = 4);
+select public.t_check('et eldre register byttes ut med notatbokens — BEGGE feltene',
+  (select pos_ts from public.notes where id = :'N5') = 900
+  and (select pos_org from public.notes where id = :'N5') = 'z');
+select public.t_check('et NYERE register beholdes — BEGGE feltene, ikke bare stempelet',
+  (select pos_ts from public.notes where id = :'N6') = 5000
+  and (select pos_org from public.notes where id = :'N6') = 'm');
+select public.t_check('ved likt stempel bryter org uavgjorten, og paret følger vinneren',
+  (select pos_ts from public.notes where id = :'N7') = 900
+  and (select pos_org from public.notes where id = :'N7') = 'z');
+select public.t_check('… og bokhyllen følger notatboken uansett hvem som vant registeret',
+  (select count(*) from public.notes where id in (:'N5', :'N6', :'N7')
+    and project_id = :'P'::uuid) = 3);
 
 -- Og DA er den gamle bokhyllen ufarlig å slette: ingen av notatene peker på den.
 delete from public.note_projects where id = :'P2';
 select public.t_check('notatene overlevde slettingen av den GAMLE bokhyllen',
-  (select count(*) from public.notes where id in (:'N4', :'N5')) = 2);
+  (select count(*) from public.notes where id in (:'N4', :'N5', :'N6', :'N7')) = 4);
 select public.t_check('… og notatboken sto igjen i den nye bokhyllen',
   (select project_id from public.note_folders where id = :'F2') = :'P'::uuid);
 
 -- Rydd opp, så resten av suiten teller det den alltid har talt.
-delete from public.notes where id in (:'N4', :'N5');
+delete from public.notes where id in (:'N4', :'N5', :'N6', :'N7');
 delete from public.note_folders where id = :'F2';
 
 -- ---------- 6. En slettet mappe tar ALDRI notatene med seg ----------

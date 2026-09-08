@@ -115,7 +115,15 @@ under notatboken i B. To triggere håndhever invarianten:
 | Trigger | Gjør |
 |---|---|
 | `notes_parent_guard` / `notes_guard` (`notes_fix_parent`, og det samme leddet sist i `notes_before_update`) | ligger notatet i en notatbok, UTLEDES `project_id` av notatboken — ved både innsetting og oppdatering |
-| `note_folders_cascade` (`note_folders_after_update`) | flyttes en notatbok til en annen bokhylle, følger notatene med, med posisjonsregisteret løftet til notatbokens |
+| `note_folders_cascade` (`note_folders_after_update`) | flyttes en notatbok til en annen bokhylle, følger notatene med |
+
+`(pos_ts, pos_org)` er ETT UDELELIG REGISTER — `reg_newer` sammenligner
+tidsstempelet først og lar `org` bryte uavgjort — så kaskaden velger HELE PARET
+atomisk: er notatbokens register nyere, kopieres begge feltene; ellers beholdes
+begge. Å ta tidsstempelet fra det ene og `org` fra det andre ville laget et
+register som aldri har eksistert, og ved likt tidsstempel kunne det snudd hvem
+som vinner en senere skriving. `project_id` følger notatbokens bokhylle uansett:
+det er invarianten, ikke et register.
 
 Utledning, ikke avvisning: klienten skriver rad for rad gjennom PostgREST, hver
 skriving i sin egen transaksjon, så en avvisning ville gjort rekkefølgen mellom

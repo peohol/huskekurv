@@ -1406,13 +1406,17 @@
           var bok = (db.note_folders || []).find(function (f) { return f.id === row.folder_id; });
           if (bok) row.project_id = bok.project_id;
         }
-        /* … og flyttes en NOTATBOK, følger notatene med (note_folders_cascade). */
+        /* … og flyttes en NOTATBOK, følger notatene med (note_folders_cascade).
+           `(pos_ts, pos_org)` er ETT register: hele paret velges atomisk, aldri
+           tidsstempelet fra den ene og `org` fra den andre. */
         if (table === 'note_folders') {
           (db.notes || []).forEach(function (n) {
             if (n.folder_id !== row.id || n.project_id === row.project_id) return;
             n.project_id = row.project_id;
-            n.pos_ts = Math.max(n.pos_ts || 0, row.pos_ts || 0);
-            n.pos_org = row.pos_org;
+            if (regNewer(row.pos_ts, row.pos_org, n.pos_ts, n.pos_org)) {
+              n.pos_ts = row.pos_ts;
+              n.pos_org = row.pos_org;
+            }
           });
         }
         return;
