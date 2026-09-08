@@ -196,6 +196,8 @@ menyprikker) er uendret, `#c0c4c9`. Ingen av fyllene inverteres mellom drakter
 | Notat (`note`) | hvitt ark med brettet hjørne — samme hvite flate som lista, men motivet er et DOKUMENT |
 | Notatbok (`noteFolder`) | rød perm `#c15c56` med de hvite sidene stikkende fram til høyre |
 | Bokhylle (`noteProject`) | hvit reol med to hyller fargede bokrygger: `#c15c56 #6fa8e0 #e8bd3e #5da172` øverst, `#85adad #c9a06a #ad85ad #c96b45` nederst |
+| Arkiv (`archive`, notatenes arkiv) | lokket mappens manila-tan `#c9a06a`, kroppen hvit — ingen NY motivfarge: den skal kjennes igjen som beslektet med mappa, og skille seg fra søppelkassen ved siden av |
+| Kobling (`link`, Lister ↔ Notater) | ingen fyllflate — to ledd i strek, som «Flytt» |
 | Forstørrelsesglass (søk) | linsen klar «søkeblå» `#6fa8e0`, skaftet kun strek |
 | Varseltrekant (alert) | trekanten hvit, utropstegnet svart |
 | Start/påbegynt (play) | urskive hvit, trekanten svart — bevisst IKKE en hake |

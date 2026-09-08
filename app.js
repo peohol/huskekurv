@@ -15245,7 +15245,9 @@
     }
     // Menyknappen: den SAMME objektmenyen som resten av appen — arkiver,
     // koblinger, slett (docs/menus.md).
-    attachObjMenu(el.querySelector('.obj-menu-btn'), noteObjMenuSpec('note', note.id));
+    const noteMenu = el.querySelector('.obj-menu-btn');
+    attachObjMenu(noteMenu, noteObjMenuSpec('note', note.id));
+    labelBtn(noteMenu, tr(NOTE_MENU_LABEL.note, { name: quoted(noteDisplayTitle(note)) }));
     // Klikk åpner editoren; klikk-og-hold løfter kortet (dnd-kit eier gesten,
     // og klikk-vakten svelger klikket som ellers ville fulgt et slipp).
     el.addEventListener('click', (ev) => {
@@ -15467,7 +15469,9 @@
       closeNotesNav();
     });
     el.classList.toggle('is-active', state.activeFolder === f.id);
-    attachObjMenu(el.querySelector('.obj-menu-btn'), noteObjMenuSpec('noteFolder', f.id, rename));
+    const fMenu = el.querySelector('.obj-menu-btn');
+    attachObjMenu(fMenu, noteObjMenuSpec('noteFolder', f.id, rename));
+    labelBtn(fMenu, tr(NOTE_MENU_LABEL.noteFolder, { name: quoted(f.name) }));
     attachKeyHandle(el, 'noteFolder', () => f.id, { rename });
     return el;
   }
@@ -15551,7 +15555,9 @@
       ev.stopPropagation();
       addNoteFolder(p.id);
     });
-    attachObjMenu(el.querySelector('.obj-menu-btn'), noteObjMenuSpec('noteProject', p.id, rename));
+    const pMenu = el.querySelector('.obj-menu-btn');
+    attachObjMenu(pMenu, noteObjMenuSpec('noteProject', p.id, rename));
+    labelBtn(pMenu, tr(NOTE_MENU_LABEL.noteProject, { name: quoted(p.name) }));
     // Notatbok-kassen og -arkivet ligger i BOKHYLLEN sin, akkurat som
     // mappe-kassen ligger i områdekortet (docs/trash.md).
     buildNoteProjectCans(p, el.querySelector('.card-body'));
@@ -15670,6 +15676,11 @@
   // Kind → de tre oppslagene livssyklusen trenger. Ett sted, så «arkiver»,
   // «slett», «gjenopprett» og menyen ikke kan bli uenige om hva et objekt er.
   // Som `SEARCH_HINT_KEY`: hele nøkler, ikke satt sammen av biter.
+  const NOTE_MENU_LABEL = {
+    note: 'label.menuNote',
+    noteFolder: 'label.menuNoteFolder',
+    noteProject: 'label.menuNoteProject',
+  };
   const NOTE_DELETE_LABEL = {
     note: 'notes.delete.note',
     noteFolder: 'notes.delete.noteFolder',

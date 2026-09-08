@@ -434,11 +434,13 @@ window.ICONS = {
 
   /* ARKIVKASSEN (docs/notater-plan.md). Motivet er en kasse med lokk — noe
      som er lagt bort, ikke kastet: den skal ikke kunne forveksles med
-     søppelkassen ved siden av. Egne motivfarger som resten av ikonene
-     (docs/mork-drakt.md, «Ikonfargene»): tre i lokket, papp i kroppen. */
+     søppelkassen ved siden av. Ingen NY motivfarge: lokket er mappens
+     manila-tan (`#c9a06a`) og kroppen er «papir» (`#ffffff`), som snur med
+     drakten på samme måte som notatarket og listekortet
+     (docs/mork-drakt.md, «Ikonfargene»). */
   archive: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<rect x="3.2" y="4" width="17.6" height="4.4" rx="1.2" fill="#c9a06a"></rect>' +
-    '<path d="M4.8 8.4h14.4V19a1.6 1.6 0 0 1-1.6 1.6H6.4A1.6 1.6 0 0 1 4.8 19Z" fill="#e6d3b3"></path>' +
+    '<path d="M4.8 8.4h14.4V19a1.6 1.6 0 0 1-1.6 1.6H6.4A1.6 1.6 0 0 1 4.8 19Z" fill="#ffffff"></path>' +
     '<rect x="3.2" y="4" width="17.6" height="4.4" rx="1.2"></rect>' +
     '<path d="M4.8 8.4h14.4V19a1.6 1.6 0 0 1-1.6 1.6H6.4A1.6 1.6 0 0 1 4.8 19Z"></path>' +
     '<path d="M9.8 12.2h4.4"></path>' +
