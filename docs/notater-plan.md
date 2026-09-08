@@ -1,0 +1,275 @@
+# Notater — produkt- og implementeringsplan
+
+Dette dokumentet er den levende planen for den nye hoveddelen **Notater** i Huskis.
+Det beskriver målbildet, viktige produktvalg, leveransesteg og fremdrift. Når
+implementeringen endrer en eksisterende invariant, skal det autoritative
+dokumentet for det aktuelle området oppdateres i samme PR.
+
+## Målbilde
+
+Huskis deles i to hovedfaner helt øverst i visningsområdet:
+
+- **Lister** — dagens Huskis.
+- **Notater** — et nytt system for strukturerte notater.
+
+Fanene ligger over dagens rad med toppkontroller. Toppkontrollene tilhører hele
+Huskis og skal ikke dupliseres per fane. Lys/mørk drakt, språk, idéer, søk og
+konto gjelder derfor på tvers av Lister og Notater. Andre globale kontroller skal
+fortsette å fungere etter eksisterende regler med mindre funksjonen eksplisitt
+avgrenses senere.
+
+## Notathierarki
+
+Notater organiseres i:
+
+**Prosjekt > Mappe > Notat**
+
+Prosjekt og mappe skal så langt det er hensiktsmessig oppføre seg som Område og
+Mappe i listefanen. Navigasjon, omdøping, rekkefølge, DnD, aktiv plassering,
+responsiv oppførsel og øvrige kjente interaksjonsmønstre skal gjenbrukes fremfor
+å innføre et parallelt designspråk.
+
+Et notat kan ligge i en mappe eller være et fritt notat uten mappe. Et prosjekt
+kan dermed inneholde både mapper og frie notater. Mapper nøstes ikke i mapper i
+første versjon.
+
+## Notatoversikt
+
+Når brukeren åpner et prosjekt eller en mappe i Notater, vises notatene som kort:
+
+- flere kolonner på desktop, tilpasset tilgjengelig bredde;
+- én kolonne på mobil;
+- hvert kort viser minst tittel, et kort tekstutdrag og sist endret;
+- klikk på kortet åpner editoren;
+- klikk-og-hold / eksisterende pekersemantikk starter DnD;
+- omrokering skal bruke samme grunnprinsipp som omrokering av lister i en mappe.
+
+Et notatkort har en `×`-knapp som åpner en liten popover med **Arkiver** og
+**Slett**. Sletting bruker Huskis' søppelkassemodell. Arkivering flytter notatet
+til et arkiv hvor det kan gjenopprettes eller slettes videre.
+
+## Oppretting
+
+Oppretting skal være rask:
+
+- `+ Prosjekt` oppretter et prosjekt;
+- `+ Mappe` oppretter en mappe i aktivt prosjekt;
+- `+ Notat` oppretter et nytt notat og åpner editoren direkte.
+
+Tomt notat skal ikke kreve en eksplisitt lagrehandling før brukeren kan gå
+videre.
+
+## Editor
+
+Editoren åpnes som et eget fullskjermsbilde over den vanlige appflaten. Øverst
+ligger en verktøylinje og en tydelig tilbakeknapp. Tilbakeknappen skal returnere
+brukeren til nøyaktig kontekst før editoren ble åpnet, inkludert aktiv fane,
+prosjekt/mappe og så langt praktisk mulig scrollposisjon.
+
+Første versjon skal støtte:
+
+- tittel;
+- overskrift nivå 1–3;
+- fet;
+- kursiv;
+- understrek;
+- hevet skrift;
+- senket skrift;
+- lenker;
+- spesialsymboler;
+- punktlister;
+- nummererte lister;
+- horisontal skillelinje;
+- angre / gjør om igjen;
+- vanlige tastatursnarveier for grunnleggende formatering der dette er naturlig.
+
+Aktuelle editorfunksjoner og UX-mønstre kan gjenbrukes fra `peohol/mdeditz`, men
+Huskis skal ikke få unødvendig teknisk kompleksitet eller en egen tung editor-
+arkitektur dersom enklere gjenbruk er tilstrekkelig.
+
+## Lagring og synk
+
+Brukeren skal oppleve hvert notat som et selvstendig dokument, men notater skal
+ikke lagres som faktiske HTML-/Markdown-filer i Supabase Storage som primær
+persistensmodell.
+
+Notater skal integreres i Huskis' eksisterende konto-, lokalbuffer- og
+Supabase-synk på en måte som er konsistent med resten av appen. Innholdet skal
+lagres i et stabilt, strukturert riktekstformat som egner seg for:
+
+- videre redigering uten tap av struktur;
+- tekstuttrekk til globalt søk;
+- sikker rendring;
+- fremtidig deling;
+- eventuell senere eksport/import.
+
+HTML kan genereres for visning ved behov, men rå editor-HTML skal ikke være den
+autoritative datamodellen hvis en tryggere strukturert representasjon passer
+arkitekturen bedre.
+
+Editoren bruker **autosave**. Endringer lagres optimistisk lokalt og synkes uten
+egen Lagre-knapp. En diskret status kan vise `Lagrer …` / `Lagret` når det gir
+nyttig informasjon.
+
+Første versjon trenger ikke Google Docs-lignende samtidig tegn-for-tegn-
+redigering. Samtidig redigering av samme notat kan følge en dokumentbasert
+konfliktmodell som passer eksisterende synk. En eventuell CRDT-/sanntidseditor er
+et eget senere prosjekt.
+
+## Globalt søk
+
+Dagens globale søk utvides slik at det kan søke i både Lister og Notater.
+
+Søkemodalen får et enkelt scopevalg:
+
+**Alt | Lister | Notater**
+
+`Alt` er standard. Notatsøk skal minst indeksere tittel og lesbar tekst fra
+innholdet. Treffer skal navigere direkte til riktig objekt eller åpne riktig
+notat. Det skal ikke bygges en separat søkemotor for Notater dersom dagens
+søkemotor kan utvides.
+
+## Koblinger mellom Lister og Notater
+
+Lister og Notater skal kunne kobles på tvers.
+
+Et notat eller en notatmappe skal kunne kobles til relevante objekter i
+listefanen, minst område, mappe og liste. Koblinger skal kunne opprettes fra
+begge retninger.
+
+Koblinger er ekte objektrelasjoner, ikke bare tekst-URL-er. Modellen skal være
+mange-til-mange:
+
+- ett notat kan kobles til flere listeobjekter;
+- ett listeobjekt kan kobles til flere notater/notatmapper;
+- koblingen endrer ikke notatets faktiske plassering i notathierarkiet;
+- klikk på en kobling navigerer til det koblede objektet.
+
+Detaljert UI for koblinger avgjøres under implementering med gjenbruk av
+Huskis' eksisterende menyer og navigasjonsmønstre som førstevalg.
+
+## Arkiv og søppelkasse
+
+Notater får både arkiv og søppelkasse:
+
+- **Arkiver** skjuler notatet fra normalvisningen og gjør det tilgjengelig i et
+  eget arkiv;
+- fra arkivet kan notatet gjenopprettes eller slettes;
+- **Slett** følger Huskis' etablerte søppelkassemodell, inkludert trygg
+  gjenoppretting og permanent sletting etter eksisterende prinsipper.
+
+Prosjekter og mapper skal få konsistent livssyklus når det er nødvendig for en
+helhetlig brukeropplevelse. Implementeringen må unngå foreldreløse notater og
+uklare regler ved sletting/gjenoppretting av en forelder.
+
+## Deling og rettigheter
+
+Datamodellen skal fra starten unngå valg som gjør fremtidig deling vanskelig.
+Full deling av prosjekter, mapper og notater trenger likevel ikke inngå i første
+leveranse.
+
+Når deling implementeres, skal autorisasjon følge Huskis' eksisterende
+serverhåndhevede rettighetsmodell. Deling og samtidig redigering av riktekst må
+vurderes som et eget risikoområde og testes eksplisitt.
+
+## Leveranseplan
+
+### PR 1 — Fundament + fungerende Notater-fane
+
+**Mål:** Etter merging kan en innlogget bruker bruke Huskis til reelle,
+grunnleggende notater end-to-end.
+
+Omfang:
+
+- hovedfanene `Lister | Notater` over dagens toppkontroller;
+- dagens Lister-fane skal være funksjonelt uendret;
+- datamodell og Supabase-skjema for Prosjekt > Mappe > Notat;
+- lokal persistens, synk og nødvendige gravsteiner/konfliktregistre;
+- prosjekt- og mappenavigasjon med samme grunnmønster som Område/Mappe;
+- støtte for frie notater;
+- oppretting og omdøping;
+- responsiv notatoversikt med kort, tekstutdrag og sist endret;
+- DnD/rekkefølge for notatkort, med eksisterende DnD-mekanisme som utgangspunkt;
+- fullskjermseditor med tilbake til forrige kontekst;
+- alle formatteringsfunksjonene listet i Editor-seksjonen;
+- autosave;
+- norsk og engelsk brukerrettet tekst;
+- lys/mørk drakt;
+- relevante enhets-, synk-, nettleser- og responsive tester;
+- oppdatering av autoritative dokumenter for datamodell, database, konto/synk,
+  menyer, DnD, design, språk og tilgjengelighet der implementeringen faktisk
+  endrer kontraktene.
+
+**Akseptanse:**
+
+En bruker kan åpne Huskis, velge Notater, opprette prosjekt/mappe/notat, skrive
+og formatere innhold, gå tilbake, se notatkortet, omrokere det, reloade appen og
+finne igjen korrekt innhold og struktur. Det samme skal fungere etter normal
+synk mot konto. Mobilvisningen skal være reelt brukbar.
+
+**Ikke i PR 1:** arkiv, søppelkasse for notater, globalt notatsøk,
+koblinger Lister ↔ Notater og full notatdeling, med mindre en liten del er
+teknisk nødvendig for å etablere en trygg datamodell.
+
+Status: **ikke startet**.
+
+### PR 2 — Livssyklus + integrasjon mellom hoveddelene
+
+**Mål:** Notater blir integrert i Huskis som helhet, ikke bare en separat editor.
+
+Omfang:
+
+- arkiv, gjenoppretting og sletting;
+- notatsøppelkasse etter eksisterende Huskis-prinsipper;
+- globalt søk med `Alt | Lister | Notater`;
+- søk i notattittel og tekstinnhold;
+- direkte navigasjon fra søkeresultat til notat;
+- mange-til-mange-koblinger mellom Notater og område/mappe/liste;
+- oppretting og navigering av koblinger fra begge faner;
+- verifisering av at globale Huskis-funksjoner fungerer konsistent uavhengig av
+  aktiv hovedfane;
+- nødvendig dokumentasjon og regresjonstesting.
+
+Status: **ikke startet**.
+
+### PR 3 — Deling, robusthet og polering
+
+**Mål:** Gjøre Notater til en moden del av den delte og mobile Huskis-opplevelsen.
+
+Omfang vurderes mot faktisk produktbehov etter PR 1–2, men forventes å omfatte:
+
+- deling/rettigheter for prosjekt, mappe og notat;
+- flerbruker- og konfliktatferd;
+- offline/redigering under nettverksbrudd;
+- Android/Capacitor-regresjoner;
+- tilgjengelighet og tastaturnavigasjon;
+- endelig mobilpolering;
+- eventuell import/eksport av enkeltstående notater som filer.
+
+Sanntids samarbeid i samme dokument inngår ikke automatisk i dette steget.
+
+Status: **ikke startet**.
+
+## Prinsipper for gjennomføring
+
+- Bygg vertikale leveranser som kan testes end-to-end.
+- Gjenbruk eksisterende Huskis-mekanismer der semantikken faktisk er den samme;
+  ikke kopier kode bare for å få et parallelt Notes-system.
+- Samtidig skal eksisterende Liste-funksjonalitet beskyttes mot regresjoner.
+- Klient og database endres sammen når datakontrakten endres.
+- Rettigheter håndheves serverside.
+- Søk, DnD, sletting, språk, drakt og tilgjengelighet skal følge sine eksisterende
+  autoritative dokumenter.
+- Nye tekniske valg som ikke krever et produktvalg tas autonomt ut fra repoets
+  arkitektur og dokumenteres i PR-en.
+- Sikkerhet, personvern og datatap prioriteres over bekvemmelighet.
+
+## Fremdrift
+
+| Leveranse | Status |
+|---|---|
+| PR 1 — Fundament + fungerende Notater-fane | Ikke startet |
+| PR 2 — Livssyklus + integrasjon | Ikke startet |
+| PR 3 — Deling, robusthet og polering | Ikke startet |
+
+**Neste steg:** Implementer PR 1 som én sammenhengende, testbar leveranse.
