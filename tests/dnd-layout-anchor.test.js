@@ -570,6 +570,8 @@ async function sakteMotKassa(label, viewport) {
     prøver.push(await p.evaluate(() => ({
       kasse: document.body.classList.contains('is-over-trash'),
       y: window.scrollY,
+      // Ankerets EGEN scroll: den delen av bevegelsen som er kompensasjon.
+      egen: (window.__huskis.dragAnchor || { scroll: 0 }).scroll,
     })));
   }
   // Hvor mange ganger slår «pekeren er på kassa» av eller på? Én gang per kasse
@@ -578,10 +580,23 @@ async function sakteMotKassa(label, viewport) {
   prøver.forEach((s, i) => { if (i && s.kasse !== prøver[i - 1].kasse) vipp++; });
   log(label + ' 12: kassemarkeringen slår ikke av og på under sakte innmarsj (' + prøver.length + ' piksler)',
     vipp <= 4, JSON.stringify({ vipp, prøver: prøver.length }));
-  // …og scrollen skal ikke hoppe. Auto-scroll beveger noen få piksler per frame;
-  // klemmen ga et hopp på en hel radhøyde.
+  /* …og scrollen skal ikke hoppe. Auto-scroll beveger noen få piksler per
+     frame; klemmen ga et hopp på en hel radhøyde.
+
+     Målt er det UFORKLARTE skiftet: ankerets egen scroll (`dragAnchor.scroll`)
+     ER kompensasjon — flytter innholdet over siktet seg 49 px, skal siden
+     følge etter like mye, og siktet står da bom stille selv om `scrollY`
+     endret seg. Klemmen er nettopp den som IKKE er bokført: siden ble kortere,
+     nettleseren dro scrollen med seg, og ankeret vet ingenting om det. Uten
+     dette skillet var sjekken en funksjon av hvor mye ledig høyde viewportet
+     tilfeldigvis hadde — den ble rød da toppmenyen fikk fanerad, uten at noe
+     hoppet. */
   const hopp = [];
-  prøver.forEach((s, i) => { if (i && Math.abs(s.y - prøver[i - 1].y) > 20) hopp.push(prøver[i - 1].y + '→' + s.y); });
+  prøver.forEach((s, i) => {
+    if (!i) return;
+    const uforklart = (s.y - prøver[i - 1].y) - (s.egen - prøver[i - 1].egen);
+    if (Math.abs(uforklart) > 20) hopp.push(prøver[i - 1].y + '→' + s.y + ' (ubokført ' + Math.round(uforklart) + ')');
+  });
   log(label + ' 12: scrollen hopper ikke når lista komprimerer',
     hopp.length === 0, JSON.stringify(hopp.slice(0, 4)));
   await p.mouse.up(); await p.waitForTimeout(500);
@@ -589,17 +604,30 @@ async function sakteMotKassa(label, viewport) {
   await p.close(); await b.close();
 }
 
+/* Toppmenyen har fått ÉN RAD TIL — hovedfanene `Lister | Notater`
+   (docs/notater-plan.md) — og den raden koster board-et 48 px av høyden
+   (radens egen høyde pluss panelets radgap; les den ut av `--main-tabs-h`).
+   Fixturene her er tunet på hvor mye plass board-et har UNDER panelet, ikke på
+   viewportets egen høyde: sjekk 4 og 12 måler hvor draget havner i forhold til
+   kortene og til viewportets bunn. Viewportene får derfor den plassen tilbake.
+
+   VERIFISERT at det er panelhøyden og ikke noe annet: legger man like mye
+   padding på `.topbar` i et ELLERS uendret repo, feiler nøyaktig de samme tre
+   sjekkene, med de samme tallene. */
+const PANEL_FANERAD = 48;
+const vp = (width, height) => ({ width, height: height + PANEL_FANERAD });
+
 (async () => {
-  await nedover('desktop', { width: 1280, height: 900 });
-  await nedover('mobil', { width: 390, height: 780 });
-  await oppover('desktop', { width: 1280, height: 900 });
-  await oppover('mobil', { width: 390, height: 780 });
-  await komprimert('desktop', { width: 1280, height: 900 });
-  await komprimert('mobil', { width: 390, height: 780 });
-  await iRoOgUtenGap('desktop', { width: 1280, height: 900 });
-  await iRoOgUtenGap('mobil', { width: 390, height: 780 });
-  await sakteMotKassa('mobil', { width: 390, height: 700 });
-  await sakteMotKassa('desktop', { width: 540, height: 700 });
+  await nedover('desktop', vp(1280, 900));
+  await nedover('mobil', vp(390, 780));
+  await oppover('desktop', vp(1280, 900));
+  await oppover('mobil', vp(390, 780));
+  await komprimert('desktop', vp(1280, 900));
+  await komprimert('mobil', vp(390, 780));
+  await iRoOgUtenGap('desktop', vp(1280, 900));
+  await iRoOgUtenGap('mobil', vp(390, 780));
+  await sakteMotKassa('mobil', vp(390, 700));
+  await sakteMotKassa('desktop', vp(540, 700));
   const failed = results.filter((x) => !x).length;
   console.log('\n==== ' + (results.length - failed) + '/' + results.length + ' PASS ====');
   process.exit(failed ? 1 : 0);

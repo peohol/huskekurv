@@ -22,12 +22,14 @@ Huskis-regel, og standardverdiene ER Huskis' egne tall (`swapRatio` 0.2,
 `reverseRatio` 0.5, `reverseLockMs` 300, `mouseDistance` 5, `holdMs` 200,
 `holdTolerance` 10). Huskis sender derfor ingen av dem inn — de står i Smett.
 
-## De fem board-ene
+## De åtte board-ene
 
 Områder og mapper har ingen egen kode: et område ER et kort, en mappe ER en rad,
 en mappekategori ER en kategori. Idéene og idékategoriene er de samme radene
-igjen ([`ideer.md`](ideer.md)). Forskjellen er hvilket state-tre man slår opp i
-(`boardScope` / `navScope` / `ideaScope`) og hvor draget foregår.
+igjen ([`ideer.md`](ideer.md)), og notatenes prosjekter og mapper er de samme
+kortene og radene en gang til ([`notater-plan.md`](notater-plan.md)). Forskjellen
+er hvilket state-tre man slår opp i (`boardScope` / `navScope` / `ideaScope` /
+`notesScope` / `notesNavScope`) og hvor draget foregår.
 
 | Board | Elementer | Containere | Dra-sone | Soner |
 |---|---|---|---|---|
@@ -36,6 +38,30 @@ igjen ([`ideer.md`](ideer.md)). Forskjellen er hvilket state-tre man slår opp i
 | `boardCardBoard` | `#board .card` (lister) | `#board .board-col` | `.card-head` | `#trash-btn`, `#nav-crumb` |
 | `boardRowBoard` | `.items-container > .item`, `.items-container > .category`, `.cat-items > .item` | `.items-container`, `.cat-items` | `.item`, `.cat-head` | `.item-trash-btn` |
 | `ideaRowBoard` | de samme radene, i idémodalen | `.items-container`, `.cat-items` | `.item`, `.cat-head` | `.item-trash-btn` |
+| `notesCardBoard` | `#notes-board .note-card` (notater) | `#notes-board .board-col` | `.note-card` (hele kortet) | ingen |
+| `notesNavCardBoard` | `#notes-nav-board .card` (bokhyller) | `#notes-nav-board .board-col` | `.card-head` | ingen |
+| `notesNavRowBoard` | `#notes-nav-board .item` (notatbøker) | `#notes-nav-board .items-container` | `.item` | ingen |
+
+**Notat-scopene er de enkleste.** Ingen kategorier, ingen låser, ingen
+ekstrahering og — i PR 1 — ingen søppelkasse, så det eneste et slipp kan bety er
+ny plass i rekka (og for en notatbok i tillegg en ny bokhylle). NOTATKORTET
+er sin egen dra-sone i sin helhet: kortet har ingen indre kontroller å treffe, så
+klikk åpner editoren og klikk-og-hold løfter — dnd-kits egen aktiveringsterskel
+skiller de to, og klikk-vakten svelger klikket som ellers ville fulgt et slipp.
+Notatkortene fordeles av den SAMME kolonnemotoren som listene
+([`board-layout.md`](board-layout.md)); `.note-card` bærer derfor også klassen
+`.card`, som er det `boardRows` teller.
+
+Flytter en notatbok til en annen bokhylle, følger notatene med: de peker på
+notatboken, og `noteFolderMoved` retter `project`-pekeren deres i samme slipp,
+slik at plasseringen er hel i begge ender. Serveren gjør det samme uavhengig av
+klienten (`note_folders_cascade`), for enheten kan miste nettet mellom de to
+skrivingene — se [`arkitektur-brukere-deling.md`](arkitektur-brukere-deling.md).
+
+Raden «Frie notater» øverst i hver bokhylle er IKKE en rad i modellen: den har
+en syntetisk id (`free:<bokhylle>`) som aldri finnes i `rowPool()`, og bærer
+`data-dnd-ignore`, så den kan verken løftes eller telles med når rekkefølgen
+leses tilbake fra DOM-en.
 
 **Idé-scopet har ingen kortnivå-board**, og trenger ikke ett: det finnes
 nøyaktig ÉN beholder (`ideasCont`, id `__ideas__`), og den er ikke en `.card`.
@@ -55,8 +81,8 @@ nav-modalen: lista er én smal kolonne uten et eneste vannrett slippmål (se
 trykk: et trykk på en mapperad løfter mappen, ikke området den ligger i. Egne
 managere gir dessuten hvert nivå sine EGNE soner — område-kassen finnes ikke for
 et mappe-drag, og omvendt. Board-ene er dessuten scopet til hver sin ROT
-(`#board`, nav-modalens kropp, idémodalens kropp), så to board kan aldri
-registrere det samme elementet.
+(`#board`, `#notes-board`, nav-modalenes og idémodalens kropper), så to board kan
+aldri registrere det samme elementet.
 
 **Roten følger sonene, ikke board-et.** `boardCardBoard` har `document.body` som
 rot, fordi liste-søppelkassen og 📁-breadcrumben ligger i toppmenyen, utenfor
@@ -68,7 +94,8 @@ nav-board-ene har HELE nav-modalen (område-kassen ligger i modalens egen fot,
 utenfor både `#nav-board` og modalens rullende kropp).
 
 **Dra-tilstandene males på `.dnd-surface`.** Hver dra-rot — nøyaktig de
-elementene `scope.root` peker på (`#board`, `#nav-board`, `#ideas-body`) — bærer
+elementene `scope.root` peker på (`#board`, `#notes-board`, `#nav-board`,
+`#notes-nav-board`, `#ideas-body`) — bærer
 markørklassen `.dnd-surface`, og HELE dra-blokken i `styles.css` er scopet til
 den (det løftede objektet, hullet, søppel-vasken, kategoriens kompakte
 løfteform). Reglene sto tidligere på `.board`, og da fantes de bare der et board
@@ -81,7 +108,9 @@ appen en fjerde dra-flate, er markørklassen det ene den må ha.
 dem løfter ingenting.
 
 Identiteten leses fra DOM-en (`idAttribute: 'data-id'`). Containerne bærer
-`data-dnd-container`: nav-kolonnen `nav-col`, board-kolonnene sin INDEKS
+`data-dnd-container`: nav-kolonnen `nav-col`, notat-navigasjonens kolonne
+`notes-nav-col` (og hvert prosjekts `.items-container` prosjektets egen id),
+board-kolonnene sin INDEKS
 (`stampBoardColumns`), hvert områdes/korts `.items-container` sin egen id, hver
 kategoris `.cat-items` kategoriens id. Kassene og 📁-breadcrumben bærer
 `data-dnd-zone`.

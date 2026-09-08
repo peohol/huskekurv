@@ -207,6 +207,49 @@ window.ICONS = {
     '<path d="M10.5 12h7"></path>' +
     '</svg>',
 
+  // Notat: et ark med skrevne linjer og et brettet hjørne. Hvit flate som
+  // liste-ikonet, så de to hoveddelene leses som samme familie — men motivet er
+  // et DOKUMENT, ikke en rad med punkter (docs/notater-plan.md).
+  note: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M6 3h7.5L19 8.5V21H6Z" fill="#ffffff"></path>' +
+    '<path d="M13.5 3v5.5H19"></path>' +
+    '<path d="M8.8 12.5h6.4"></path>' +
+    '<path d="M8.8 15.5h6.4"></path>' +
+    '<path d="M8.8 18.5h3.6"></path>' +
+    '</svg>',
+
+  // Bokhylle: notatenes ØVERSTE nivå, slik området er listenes. Reolen er hvit
+  // som liste-/notatflatene, og bøkene bærer motivfargene fra settet — en
+  // hylle med flere fargede rygger leses som «her står bøkene mine» på et par
+  // titalls piksler, slik globusen leses som «område».
+  noteProject: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="3" y="3.5" width="18" height="17" rx="2" fill="#ffffff"></rect>' +
+    '<path d="M5.9 6.1h2v5.1h-2Z" fill="#c15c56"></path>' +
+    '<path d="M8.6 6.9h1.8v4.3H8.6Z" fill="#6fa8e0"></path>' +
+    '<path d="M11.1 6.1h2v5.1h-2Z" fill="#e8bd3e"></path>' +
+    '<path d="M13.8 7.3h2.1v3.9h-2.1Z" fill="#5da172"></path>' +
+    '<path d="M3 11.9h18"></path>' +
+    '<path d="M5.9 13.6h2v4.6h-2Z" fill="#85adad"></path>' +
+    '<path d="M8.6 14.3h1.8v3.9H8.6Z" fill="#c9a06a"></path>' +
+    '<path d="M11.1 13.6h2v4.6h-2Z" fill="#ad85ad"></path>' +
+    '<path d="M13.8 14.9h2.1v3.3h-2.1Z" fill="#c96b45"></path>' +
+    '<path d="M3 18.4h18"></path>' +
+    '<rect x="3" y="3.5" width="18" height="17" rx="2"></rect>' +
+    '</svg>',
+
+  // Notatbok: bokhyllens innhold og notatets forelder. Rød perm med de hvite
+  // sidene stikkende fram til høyre — det ene motivet som sier «bok» uten å
+  // kunne forveksles med et ark (`note`) eller en hylle (`noteProject`).
+  noteFolder: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4.5 5A1.5 1.5 0 0 1 6 3.5h13A1.5 1.5 0 0 1 20.5 5v14a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19Z" fill="#c15c56"></path>' +
+    '<path d="M8.5 3.5h10.5A1.5 1.5 0 0 1 20.5 5v14a1.5 1.5 0 0 1-1.5 1.5H8.5Z" fill="#ffffff"></path>' +
+    '<path d="M8.5 3.5v17"></path>' +
+    '<path d="M11 8.4h6.4"></path>' +
+    '<path d="M11 12h6.4"></path>' +
+    '<path d="M11 15.6h4"></path>' +
+    '<path d="M4.5 5A1.5 1.5 0 0 1 6 3.5h13A1.5 1.5 0 0 1 20.5 5v14a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19Z"></path>' +
+    '</svg>',
+
   // Kryss (×) for lukk-/slett-knapper: egen SVG med samme strek (1.05) og runde
   // ender som resten av settet. Bruker currentColor så CSS styrer farge (svart i
   // hvile, rød ved hover på slett-knappene — se .icon-btn/-delete i styles.css).

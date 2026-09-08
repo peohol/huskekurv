@@ -309,6 +309,24 @@ en av de tre navngitte redirect-hostene (se «Redirect til det kanoniske
 originet»). I mobilappen er verten `localhost`, som ikke står på den lista, så
 guarden gjør ingenting der — appen kan ikke navigere seg selv ut på nett.
 
+### Lenker i notater
+
+Notat-editoren har en **lenkeknapp** ([`notater-plan.md`](notater-plan.md)), og
+den bryter ikke regelen over: en lenke i et notat er MERKET TEKST, ikke et
+anker. Adressen bæres i `data-url` på et `<span class="note-link">`, vises i
+`title`, og kan leses, endres, kopieres og fjernes i lenke-panelet. Det finnes
+altså fortsatt ikke én `<a href>` med en absolutt adresse i noe Huskis rendrer,
+og begge vaktene (`tests/capacitor-android.test.js` del 12 og
+`tests/external-links.test.js`) står urørt.
+
+Adressen NORMALISERES når den lagres, i to lag: `safeNoteUrl()` fjerner
+kontrolltegn, gir en adresse uten skjema `https:`, og slipper bare gjennom
+`http:`, `https:` og `mailto:`. Alt annet — `javascript:`, `data:`, `blob:` —
+blir tom streng, både på vei inn i tilstanden og igjen når dokumentet rendres.
+
+Å ÅPNE en slik lenke er ikke innført. Det hører sammen med mobilskallets ruting
+(regelen under) og tas i det steget som også tar deling og Android-polering.
+
 ### Regelen
 
 Regelen gjelder uansett hvem som en gang måtte legge inn en lenke, og er

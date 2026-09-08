@@ -346,6 +346,96 @@ alter table public.items     enable row level security;
 alter table public.ideas     enable row level security;
 
 -- ------------------------------------------------------------
+-- 2c. NOTATER — Prosjekt > Mappe > Notat (docs/notater-plan.md)
+--
+--    Notater er Huskis' ANDRE hoveddel, ved siden av listene. Hierarkiet er
+--    Prosjekt > Mappe > Notat, og formen er listenes: samme to registre
+--    (innhold `ts/org`, posisjon `pos_ts/pos_org`), samme gravstein- og
+--    insert-vakt, samme 3-veis fletting i klienten.
+--
+--    EIERSKAPET ER AUTORISASJONEN, som for idéene: ingen medlemskap, ingen
+--    roller, ingen låser, og RLS er `owner_id = auth.uid()` på alle fire
+--    operasjonene. Deling av notater er et senere steg; modellen sperrer den
+--    ikke (rader med eier og forelder er nøyaktig det medlemskapstabellen
+--    allerede henger på for områder og mapper).
+--
+--    ET NOTAT HAR TO FORELDRE-PEKERE. `project_id` er alltid satt; `folder_id`
+--    er null for et FRITT notat som ligger rett i prosjektet. Mapper nøstes
+--    aldri i mapper, så to nivåer er hele treet. Begge pekerne rir på
+--    posisjonsregisteret (som `card_id`/`cat_id` på et listepunkt).
+--
+--    INNHOLDET ER STRUKTURERT, IKKE HTML. `body` er editorens dokument som
+--    jsonb: en blokkliste med inline-kjøringer. Det kan redigeres videre uten
+--    formattap, gjøres om til lesbar tekst for søk, og rendres trygt (klienten
+--    bygger noder, den setter aldri rå HTML). Konflikter løses per DOKUMENT
+--    (innholdsregisteret), ikke per tegn.
+--
+--    `deferrable initially deferred` på forelder-pekerne av samme grunn som på
+--    items: doc-rekkefølgen er vilkårlig, så et notat kan settes inn før
+--    mappen eller prosjektet det peker på.
+-- ------------------------------------------------------------
+
+create table if not exists public.note_projects (
+  id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references public.profiles (id) on delete cascade,
+  name       text not null default '',
+  collapsed  boolean not null default false,
+  trashed    boolean not null default false,
+  ts         bigint not null default 0,
+  org        text   not null default '',
+  pos        double precision not null default 0,
+  pos_ts     bigint not null default 0,
+  pos_org    text   not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.note_folders (
+  id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references public.profiles (id) on delete cascade,
+  project_id uuid not null references public.note_projects (id) on delete cascade deferrable initially deferred,
+  name       text not null default '',
+  trashed    boolean not null default false,
+  ts         bigint not null default 0,
+  org        text   not null default '',
+  pos        double precision not null default 0,
+  pos_ts     bigint not null default 0,
+  pos_org    text   not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.notes (
+  id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references public.profiles (id) on delete cascade,
+  project_id uuid not null references public.note_projects (id) on delete cascade deferrable initially deferred,
+  folder_id  uuid references public.note_folders (id) on delete set null deferrable initially deferred,
+  title      text not null default '',
+  -- Editorens dokument. Formen er klientens (`{v, blocks:[…]}`); databasen
+  -- lagrer den som jsonb og tolker den ikke.
+  body       jsonb not null default '{"v":1,"blocks":[]}'::jsonb,
+  trashed    boolean not null default false,
+  ts         bigint not null default 0,
+  org        text   not null default '',
+  pos        double precision not null default 0,
+  pos_ts     bigint not null default 0,
+  pos_org    text   not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists note_projects_owner_idx on public.note_projects (owner_id);
+create index if not exists note_folders_owner_idx  on public.note_folders (owner_id);
+create index if not exists note_folders_project_idx on public.note_folders (project_id);
+create index if not exists notes_owner_idx         on public.notes (owner_id);
+create index if not exists notes_project_idx       on public.notes (project_id);
+create index if not exists notes_folder_idx        on public.notes (folder_id);
+
+alter table public.note_projects enable row level security;
+alter table public.note_folders  enable row level security;
+alter table public.notes         enable row level security;
+
+-- ------------------------------------------------------------
 -- 3. ROLLER/MEDLEMSKAP og INVITASJONER
 -- ------------------------------------------------------------
 
@@ -438,20 +528,22 @@ alter table public.share_invites enable row level security;
 -- ------------------------------------------------------------
 
 create table if not exists public.tombstones (
-  resource_type text not null check (resource_type in ('universe', 'group', 'card', 'item', 'idea')),
+  resource_type text not null check (resource_type in ('universe', 'group', 'card', 'item', 'idea',
+                                                       'note_project', 'note_folder', 'note')),
   resource_id   uuid not null,
   ts            bigint not null default 0,   -- HLC-tid for slettingen
   deleted_at    timestamptz not null default now(),
   primary key (resource_type, resource_id)
 );
 
--- Idémptypen kom til etter at tabellen fantes: sjekk-vilkåret må utvides på
--- en EKSISTERENDE database også, ikke bare i `create table`-formen over.
--- Idempotent: constrainten droppes og settes tilbake med samme navn.
+-- Idé- og notattypene kom til etter at tabellen fantes: sjekk-vilkåret må
+-- utvides på en EKSISTERENDE database også, ikke bare i `create table`-formen
+-- over. Idempotent: constrainten droppes og settes tilbake med samme navn.
 do $$ begin
   alter table public.tombstones drop constraint if exists tombstones_resource_type_check;
   alter table public.tombstones add constraint tombstones_resource_type_check
-    check (resource_type in ('universe', 'group', 'card', 'item', 'idea'));
+    check (resource_type in ('universe', 'group', 'card', 'item', 'idea',
+                             'note_project', 'note_folder', 'note'));
 exception when others then null; end $$;
 
 create index if not exists tombstones_resource_idx on public.tombstones (resource_id);
@@ -467,6 +559,9 @@ declare
                   when 'cards'     then 'card'
                   when 'items'     then 'item'
                   when 'ideas'     then 'idea'
+                  when 'note_projects' then 'note_project'
+                  when 'note_folders'  then 'note_folder'
+                  when 'notes'         then 'note'
                 end;
 begin
   insert into public.tombstones (resource_type, resource_id, ts)
@@ -492,6 +587,15 @@ create trigger items_tombstone after delete on public.items
 drop trigger if exists ideas_tombstone on public.ideas;
 create trigger ideas_tombstone after delete on public.ideas
   for each row execute function public.write_tombstone();
+drop trigger if exists note_projects_tombstone on public.note_projects;
+create trigger note_projects_tombstone after delete on public.note_projects
+  for each row execute function public.write_tombstone();
+drop trigger if exists note_folders_tombstone on public.note_folders;
+create trigger note_folders_tombstone after delete on public.note_folders
+  for each row execute function public.write_tombstone();
+drop trigger if exists notes_tombstone on public.notes;
+create trigger notes_tombstone after delete on public.notes
+  for each row execute function public.write_tombstone();
 
 -- BEFORE INSERT-vakt på de fire objekttabellene. To ting, og begge må ligge i
 -- DATABASEN for å være noe verdt — en klient kan byttes ut, databasen ikke:
@@ -511,6 +615,9 @@ declare
                   when 'cards'     then 'card'
                   when 'items'     then 'item'
                   when 'ideas'     then 'idea'
+                  when 'note_projects' then 'note_project'
+                  when 'note_folders'  then 'note_folder'
+                  when 'notes'         then 'note'
                 end;
 begin
   if exists (select 1 from public.tombstones t
@@ -543,6 +650,15 @@ create trigger items_insert_guard before insert on public.items
   for each row execute function public.guard_object_insert();
 drop trigger if exists ideas_insert_guard on public.ideas;
 create trigger ideas_insert_guard before insert on public.ideas
+  for each row execute function public.guard_object_insert();
+drop trigger if exists note_projects_insert_guard on public.note_projects;
+create trigger note_projects_insert_guard before insert on public.note_projects
+  for each row execute function public.guard_object_insert();
+drop trigger if exists note_folders_insert_guard on public.note_folders;
+create trigger note_folders_insert_guard before insert on public.note_folders
+  for each row execute function public.guard_object_insert();
+drop trigger if exists notes_insert_guard on public.notes;
+create trigger notes_insert_guard before insert on public.notes
   for each row execute function public.guard_object_insert();
 
 -- ------------------------------------------------------------
@@ -929,6 +1045,18 @@ drop policy if exists ideas_select on public.ideas;
 drop policy if exists ideas_insert on public.ideas;
 drop policy if exists ideas_update on public.ideas;
 drop policy if exists ideas_delete on public.ideas;
+drop policy if exists note_projects_select on public.note_projects;
+drop policy if exists note_projects_insert on public.note_projects;
+drop policy if exists note_projects_update on public.note_projects;
+drop policy if exists note_projects_delete on public.note_projects;
+drop policy if exists note_folders_select on public.note_folders;
+drop policy if exists note_folders_insert on public.note_folders;
+drop policy if exists note_folders_update on public.note_folders;
+drop policy if exists note_folders_delete on public.note_folders;
+drop policy if exists notes_select on public.notes;
+drop policy if exists notes_insert on public.notes;
+drop policy if exists notes_update on public.notes;
+drop policy if exists notes_delete on public.notes;
 drop policy if exists memberships_select on public.memberships;
 drop policy if exists memberships_update on public.memberships;
 drop policy if exists memberships_delete on public.memberships;
@@ -1695,6 +1823,157 @@ drop trigger if exists ideas_guard on public.ideas;
 create trigger ideas_guard before update on public.ideas
   for each row execute function public.ideas_before_update();
 
+-- Notater: samme felt-nivå-LWW som idéene, og av samme grunn uten
+-- capability-spørsmål — RLS har allerede avgjort at raden er MIN. Igjen står
+-- registrene: en eldre skriving skal aldri kunne overskrive en nyere fra en
+-- annen enhet. Forelder-pekerne (`project_id`/`folder_id`) rir på
+-- posisjonsregisteret, som `card_id`/`cat_id` på et listepunkt.
+create or replace function public.note_projects_before_update()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.owner_id is distinct from old.owner_id and not public.in_privileged_op() then
+    raise exception 'owner_id (oppretter) kan ikke endres';
+  end if;
+  if not public.reg_newer(new.ts, new.org, old.ts, old.org) then
+    new.name := old.name; new.trashed := old.trashed; new.collapsed := old.collapsed;
+    new.ts := old.ts; new.org := old.org;
+  end if;
+  if not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
+    new.pos := old.pos; new.pos_ts := old.pos_ts; new.pos_org := old.pos_org;
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+create or replace function public.note_folders_before_update()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.owner_id is distinct from old.owner_id and not public.in_privileged_op() then
+    raise exception 'owner_id (oppretter) kan ikke endres';
+  end if;
+  if not public.reg_newer(new.ts, new.org, old.ts, old.org) then
+    new.name := old.name; new.trashed := old.trashed;
+    new.ts := old.ts; new.org := old.org;
+  end if;
+  if not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
+    new.project_id := old.project_id;
+    new.pos := old.pos; new.pos_ts := old.pos_ts; new.pos_org := old.pos_org;
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+-- ---- Notatets to forelder-pekere kan ikke motsi hverandre ----
+-- `notes` har to uavhengige fremmednøkler: `project_id` (bokhyllen) og
+-- `folder_id` (notatboken). RLS sier at BEGGE er mine, men ikke at de hører
+-- sammen — uten dette kunne den samme brukeren lagre et notat som peker på
+-- bokhylle A og en notatbok som står i bokhylle B. Det er ikke bare rotete:
+-- `project_id` har ON DELETE CASCADE, så en slik rad ville blitt SLETTET når
+-- bokhylle A forsvant, selv om notatet vises under en notatbok i bokhylle B.
+--
+-- INVARIANTEN: ligger notatet i en notatbok, er bokhyllen notatbokens.
+-- Den HÅNDHEVES ved å utlede `project_id`, ikke ved å avvise: klienten skriver
+-- rad for rad gjennom PostgREST (hver skriving sin egen transaksjon), så en
+-- avvisning ville gjort rekkefølgen mellom to uavhengige HTTP-kall til en del
+-- av kontrakten. Utledningen gir det samme svaret uansett rekkefølge, og er
+-- nøyaktig den samme regelen klienten leser med (`pruneNoteParents`: mappens
+-- prosjekt vinner). Et notat UTEN notatbok beholder sin egen bokhylle.
+create or replace function public.notes_fix_parent()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  if new.folder_id is null then
+    return new;
+  end if;
+  select f.project_id into v_project from public.note_folders f where f.id = new.folder_id;
+  if v_project is null then
+    -- Fremmednøkkelen er DEFERRABLE, så notatboken kan komme senere i samme
+    -- transaksjon. Da er det ingenting å utlede av ennå, og fremmednøkkelen
+    -- tar den ved commit.
+    return new;
+  end if;
+  new.project_id := v_project;
+  return new;
+end;
+$$;
+
+create or replace function public.notes_before_update()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare v_project uuid;
+begin
+  if new.owner_id is distinct from old.owner_id and not public.in_privileged_op() then
+    raise exception 'owner_id (oppretter) kan ikke endres';
+  end if;
+  if not public.reg_newer(new.ts, new.org, old.ts, old.org) then
+    new.title := old.title; new.body := old.body; new.trashed := old.trashed;
+    new.ts := old.ts; new.org := old.org;
+  end if;
+  if not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
+    new.project_id := old.project_id; new.folder_id := old.folder_id;
+    new.pos := old.pos; new.pos_ts := old.pos_ts; new.pos_org := old.pos_org;
+  end if;
+  -- SIST, på den ferdige raden: LWW-vakten over kan ha rullet tilbake den ene
+  -- av de to pekerne, og invarianten gjelder resultatet.
+  if new.folder_id is not null then
+    select f.project_id into v_project from public.note_folders f where f.id = new.folder_id;
+    if v_project is not null then new.project_id := v_project; end if;
+  end if;
+  new.updated_at := now();
+  return new;
+end;
+$$;
+
+-- Flyttes en NOTATBOK til en annen bokhylle, følger notatene med. Klienten gjør
+-- det samme lokalt (noteFolderMoved), men serveren kan ikke stole på at den
+-- rekker det: enheten kan miste nettet mellom de to skrivingene, og da ville
+-- notatene blitt liggende igjen i den gamle bokhyllen — og forsvunnet med den.
+--
+-- `(pos_ts, pos_org)` ER ETT UDELELIG REGISTER: `reg_newer` sammenligner
+-- tidsstempelet først og lar `org` bryte uavgjort. Halvdelene kan derfor ikke
+-- plukkes hver for seg — et notat med nyere `pos_ts` enn notatboken ville ellers
+-- endt med sitt eget tidsstempel og notatbokens `org`, en kombinasjon som aldri
+-- har eksistert, og som kan snu hvem som vinner en senere skriving med likt
+-- tidsstempel. Hele paret velges derfor atomisk: er notatbokens register nyere,
+-- kopieres BEGGE feltene; ellers beholdes BEGGE. `project_id` følger
+-- notatbokens bokhylle uansett — det er invarianten, ikke et register.
+create or replace function public.note_folders_after_update()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.project_id is distinct from old.project_id then
+    update public.notes n
+       set project_id = new.project_id,
+           pos_ts  = case when public.reg_newer(new.pos_ts, new.pos_org, n.pos_ts, n.pos_org)
+                          then new.pos_ts else n.pos_ts end,
+           pos_org = case when public.reg_newer(new.pos_ts, new.pos_org, n.pos_ts, n.pos_org)
+                          then new.pos_org else n.pos_org end
+     where n.folder_id = new.id
+       and n.project_id is distinct from new.project_id;
+  end if;
+  return null;
+end;
+$$;
+
+drop trigger if exists note_projects_guard on public.note_projects;
+create trigger note_projects_guard before update on public.note_projects
+  for each row execute function public.note_projects_before_update();
+drop trigger if exists note_folders_guard on public.note_folders;
+create trigger note_folders_guard before update on public.note_folders
+  for each row execute function public.note_folders_before_update();
+drop trigger if exists notes_guard on public.notes;
+create trigger notes_guard before update on public.notes
+  for each row execute function public.notes_before_update();
+-- Navnet er valgt slik at den kjører ETTER `notes_insert_guard` (BEFORE-
+-- triggere fyrer i navnerekkefølge): gravsteinsvakten skal få avvise en
+-- gjenoppstanden rad før vi begynner å utlede foreldre for den.
+drop trigger if exists notes_parent_guard on public.notes;
+create trigger notes_parent_guard before insert on public.notes
+  for each row execute function public.notes_fix_parent();
+drop trigger if exists note_folders_cascade on public.note_folders;
+create trigger note_folders_cascade after update on public.note_folders
+  for each row execute function public.note_folders_after_update();
+
 -- ---- Medlemskaps-/rolle-vakter ----
 -- Rollen er MUTABEL, men kun gjennom set_member_role()/accept_share_invite()
 -- (som setter privilegert kontekst etter å ha kontrollert myndigheten). En rå
@@ -1828,6 +2107,73 @@ create policy ideas_update on public.ideas
   for update using (owner_id = auth.uid()) with check (owner_id = auth.uid());
 create policy ideas_delete on public.ideas
   for delete using (owner_id = auth.uid());
+
+-- note_projects/note_folders/notes: kontoens egne notater. Som idéene — ingen
+-- deling, ingen roller, ingen låser — så eierskapet er hele autorisasjonen, og
+-- det samme vilkåret gjelder alle fire operasjonene. Skrivevaktene
+-- (`*_before_update`) tar LWW-en; her holder eierskapet. At forelderen er MIN
+-- følger av det samme vilkåret på forelderraden: en bruker kan ikke skrive en
+-- rad som peker inn i et prosjekt hen ikke eier uten selv å eie raden, og
+-- forelderen er uansett usynlig for hen.
+-- `(select auth.uid())`, IKKE `auth.uid()`. Bar `auth.uid()` er en volatil
+-- funksjon i policy-uttrykket, og planleggeren kan da kalle den PER RAD; pakket
+-- i et skalar-subselect blir den en InitPlan som kjøres ÉN gang per statement.
+-- Svaret er det samme (økten er den samme gjennom hele statementet), men
+-- kostnaden vokser med tabellen — det er nettopp dette Supabases
+-- `auth_rls_initplan` peker på. Det gjelder også inne i `exists`-sjekkene.
+create policy note_projects_select on public.note_projects
+  for select using (owner_id = (select auth.uid()));
+create policy note_projects_insert on public.note_projects
+  for insert with check (owner_id = (select auth.uid()));
+create policy note_projects_update on public.note_projects
+  for update using (owner_id = (select auth.uid())) with check (owner_id = (select auth.uid()));
+create policy note_projects_delete on public.note_projects
+  for delete using (owner_id = (select auth.uid()));
+
+-- Forelderen må være MIN. Uten det kunne en rad hektes inn i et prosjekt/en
+-- mappe som tilhører noen andre: raden ville vært usynlig for eieren av
+-- forelderen (RLS filtrerer på `owner_id`), men fremmednøkkelen ville bundet
+-- forelderen til en rad hen ikke kan se. Vilkåret gjelder både insert og
+-- update, slik at en flytting heller ikke kan krysse kontogrensen.
+create policy note_folders_select on public.note_folders
+  for select using (owner_id = (select auth.uid()));
+create policy note_folders_insert on public.note_folders
+  for insert with check (owner_id = (select auth.uid())
+                         and exists (select 1 from public.note_projects p
+                                      where p.id = project_id
+                                        and p.owner_id = (select auth.uid())));
+create policy note_folders_update on public.note_folders
+  for update using (owner_id = (select auth.uid()))
+  with check (owner_id = (select auth.uid())
+              and exists (select 1 from public.note_projects p
+                           where p.id = project_id
+                             and p.owner_id = (select auth.uid())));
+create policy note_folders_delete on public.note_folders
+  for delete using (owner_id = (select auth.uid()));
+
+create policy notes_select on public.notes
+  for select using (owner_id = (select auth.uid()));
+create policy notes_insert on public.notes
+  for insert with check (owner_id = (select auth.uid())
+                         and exists (select 1 from public.note_projects p
+                                      where p.id = project_id
+                                        and p.owner_id = (select auth.uid()))
+                         and (folder_id is null
+                              or exists (select 1 from public.note_folders f
+                                          where f.id = folder_id
+                                            and f.owner_id = (select auth.uid()))));
+create policy notes_update on public.notes
+  for update using (owner_id = (select auth.uid()))
+  with check (owner_id = (select auth.uid())
+              and exists (select 1 from public.note_projects p
+                           where p.id = project_id
+                             and p.owner_id = (select auth.uid()))
+              and (folder_id is null
+                   or exists (select 1 from public.note_folders f
+                               where f.id = folder_id
+                                 and f.owner_id = (select auth.uid()))));
+create policy notes_delete on public.notes
+  for delete using (owner_id = (select auth.uid()));
 
 -- memberships: egen rad (personlig posisjon, forlate) + eiere som administrerer
 -- medlemslisten. Opprettelse skjer KUN via SECURITY DEFINER-veiene (aksept av
@@ -2793,6 +3139,11 @@ begin
   -- ville tatt dem uansett, men ryddingen skal være lesbar. AFTER DELETE-
   -- triggeren skriver gravstein per rad, som for alt annet innhold.
   delete from public.ideas where owner_id = uid;
+  -- Notatene er MINE ALENE på nøyaktig samme måte (docs/notater-plan.md).
+  -- Rekkefølgen er nedenfra og opp så kaskadene ikke må rydde etter oss.
+  delete from public.notes where owner_id = uid;
+  delete from public.note_folders where owner_id = uid;
+  delete from public.note_projects where owner_id = uid;
   -- Varselhistorikken og preferansene er mine alene. Kaskaden fra auth.users
   -- ville tatt dem uansett; de står her fordi ryddingen skal være lesbar.
   delete from public.notifications where user_id = uid;
@@ -4366,6 +4717,16 @@ begin
   -- Idéer henger på KONTOEN, ikke på hierarkiet: ingen join, bare eierskap.
   my_ideas as (
     select d.* from public.ideas d where d.owner_id = uid
+  ),
+  -- Notatene likeså (docs/notater-plan.md): tre flate uttrekk på eierskap.
+  my_note_projects as (
+    select np.* from public.note_projects np where np.owner_id = uid
+  ),
+  my_note_folders as (
+    select nf.* from public.note_folders nf where nf.owner_id = uid
+  ),
+  my_notes as (
+    select n.* from public.notes n where n.owner_id = uid
   )
   select jsonb_build_object(
     'user', (select jsonb_build_object('id', pr.id, 'email', pr.email,
@@ -4425,6 +4786,22 @@ begin
         'text', d.text, 'trashed', d.trashed,
         'ts', d.ts, 'org', d.org,
         'pos', d.pos, 'posTs', d.pos_ts, 'posOrg', d.pos_org)) from my_ideas d), '[]'::jsonb),
+    'noteProjects', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', np.id, 'creator', np.owner_id, 'createdByMe', true,
+        'name', np.name, 'collapsed', np.collapsed, 'trashed', np.trashed,
+        'ts', np.ts, 'org', np.org,
+        'pos', np.pos, 'posTs', np.pos_ts, 'posOrg', np.pos_org)) from my_note_projects np), '[]'::jsonb),
+    'noteFolders', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', nf.id, 'creator', nf.owner_id, 'createdByMe', true,
+        'project', nf.project_id, 'name', nf.name, 'trashed', nf.trashed,
+        'ts', nf.ts, 'org', nf.org,
+        'pos', nf.pos, 'posTs', nf.pos_ts, 'posOrg', nf.pos_org)) from my_note_folders nf), '[]'::jsonb),
+    'notes', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', n.id, 'creator', n.owner_id, 'createdByMe', true,
+        'project', n.project_id, 'folder', n.folder_id,
+        'title', n.title, 'body', n.body, 'trashed', n.trashed,
+        'ts', n.ts, 'org', n.org,
+        'pos', n.pos, 'posTs', n.pos_ts, 'posOrg', n.pos_org)) from my_notes n), '[]'::jsonb),
     'invites_in', coalesce((select jsonb_agg(jsonb_build_object(
         'id', s.id,
         'type', case when s.universe_id is not null then 'universe' else 'group' end,
@@ -5036,7 +5413,8 @@ drop index if exists public.share_invites_card_pending_key;
 -- ------------------------------------------------------------
 
 revoke all on public.profiles, public.universes, public.groups, public.cards,
-              public.items, public.ideas, public.memberships, public.share_invites,
+              public.items, public.ideas, public.note_projects, public.note_folders,
+              public.notes, public.memberships, public.share_invites,
               public.tombstones, public.notifications,
               public.notification_prefs, public.push_subscriptions,
               public.device_sessions, public.native_notif_devices from anon;
@@ -5050,7 +5428,8 @@ revoke update on public.profiles from authenticated;
 grant update (display_name, avatar) on public.profiles to authenticated;
 grant select, insert, update, delete on public.universes, public.groups,
                                         public.cards, public.items,
-                                        public.ideas to authenticated;
+                                        public.ideas, public.note_projects,
+                                        public.note_folders, public.notes to authenticated;
 -- Å UTELATE en grant er ikke nok i Supabase: prosjektet har
 -- `alter default privileges in schema public grant all on tables to anon,
 -- authenticated`, så en ny tabell får ALL — inkludert INSERT — i det den
@@ -5064,7 +5443,10 @@ grant select, insert, update, delete on public.universes, public.groups,
 --   tabell         | S | I | U | D | hvem som ellers skriver
 --   ---------------+---+---+---+---+---------------------------------------
 --   universes …    | ✓ | ✓ | ✓ | ✓ | rad-CRUD i synk-motoren (opQueue)
---   items, ideas   |   |   |   |   |
+--   items, ideas,  |   |   |   |   |
+--   note_projects, |   |   |   |   |
+--   note_folders,  |   |   |   |   |
+--   notes          |   |   |   |   |
 --   profiles       | ✓ | – | ✓*| – | *kun display_name/avatar; e-post speiles
 --                  |   |   |   |   |  fra auth.users av triggerne
 --   memberships    | ✓ | – | ✓*| – | *kun `pos` (personlig rekkefølge).
@@ -5196,6 +5578,30 @@ revoke all on function public.native_notif_active(uuid) from public, anon, authe
 revoke all on function public.session_alive(uuid) from public, anon, authenticated;
 revoke all on function public.current_session_id() from public, anon, authenticated;
 
+-- TRIGGERFUNKSJONENE er ikke RPC-er. Alle er `security definer` og gjør
+-- privilegerte ting (vakter, gravsteiner, kaskader) uten en egen
+-- autorisasjonssjekk — myndigheten ligger i skrivingen som utløste triggeren.
+-- PostgreSQL gir hver ny funksjon EXECUTE til `public` som standard, og
+-- Supabases Security Advisor flagger dem derfor som direkte kallbare.
+--
+-- Regelen er GENERISK, ikke en liste: alt i `public` som returnerer `trigger`
+-- mister EXECUTE. En liste ville råtnet neste gang noen legger til en trigger;
+-- dette dekker også den. Selve triggerkjøringen er upåvirket — den sjekker
+-- TRIGGER-rettigheten på TABELLEN, ikke EXECUTE på funksjonen
+-- (smoke-testens seksjon 6 og hele SQL-suiten kjører triggerne etterpå).
+do $$
+declare fn text;
+begin
+  for fn in
+    select p.oid::regprocedure::text
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.prorettype = 'trigger'::regtype
+  loop
+    execute format('revoke all on function %s from public, anon, authenticated', fn);
+  end loop;
+end $$;
+
 -- SENDERENS to funksjoner leser og skriver ANDRE brukeres leveringer. De skal
 -- derfor ikke kunne kalles med anon-nøkkelen eller av en innlogget bruker —
 -- kun av service_role, som bare senderen har. Rollesjekken inne i funksjonene
@@ -5222,6 +5628,7 @@ declare t text;
 begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
     foreach t in array array['universes', 'groups', 'cards', 'items', 'ideas',
+                             'note_projects', 'note_folders', 'notes',
                              'memberships', 'share_invites'] loop
       if not exists (
         select 1 from pg_publication_tables

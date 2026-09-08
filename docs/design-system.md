@@ -193,6 +193,9 @@ menyprikker) er uendret, `#c0c4c9`. Ingen av fyllene inverteres mellom drakter
 | Mappe (`folder`, og mappa nedskalert inn i `groupCategory`) | varm manila-tan `#c9a06a` |
 | Liste | hvit flate, svarte punkter/linjer |
 | Listepunkt (item) | hvit plate, svart punkt + linje — samme motiv som lista, én rad i stedet for tre |
+| Notat (`note`) | hvitt ark med brettet hjørne — samme hvite flate som lista, men motivet er et DOKUMENT |
+| Notatbok (`noteFolder`) | rød perm `#c15c56` med de hvite sidene stikkende fram til høyre |
+| Bokhylle (`noteProject`) | hvit reol med to hyller fargede bokrygger: `#c15c56 #6fa8e0 #e8bd3e #5da172` øverst, `#85adad #c9a06a #ad85ad #c96b45` nederst |
 | Forstørrelsesglass (søk) | linsen klar «søkeblå» `#6fa8e0`, skaftet kun strek |
 | Varseltrekant (alert) | trekanten hvit, utropstegnet svart |
 | Start/påbegynt (play) | urskive hvit, trekanten svart — bevisst IKKE en hake |
@@ -321,7 +324,24 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   listefunksjoner.
 - `.crumb-btn`: navigasjonsknappen i toppmenyen — ÉN knapp med begge nivåene
   (bare navn, uten ikoner, på flate-mønsteret; `.crumb-name` med ellipsis);
-  `.crumb-sep` er ›-skilletegnet mellom dem.
+  `.crumb-sep` er ›-skilletegnet mellom dem. Notatfanen har sin egen
+  (`#notes-crumb`, `[bokhylle] › [notatbok]`) med nøyaktig den samme klassen.
+- `.main-tabs` + `.main-tab`: hovedbryteren `Lister ↔ Notater` — ÉN segmentert
+  kontroll (pilleformet flate med to segmenter inni), sentrert på panelets
+  FØRSTE rad (`.topbar-row-tabs`), i hele bredden. Hjørnegruppen skyves ned
+  under den (`--main-tabs-h`, målt i `syncTopChrome`), så bryteren ligger alene
+  øverst. Den aktive halvdelen er den eneste massive flaten: kortflate + tyngre
+  skrift + skygge — forskjellen bæres av mer enn fargen alene. Semantisk er den
+  fortsatt en `tablist` med to `tab`-er (`docs/tilgjengelighet.md`).
+  `.topbar-row` er den aktive fanens egen rad.
+- `.note-card`: notatkortet ER et listekort — samme `.card`-flate, samme
+  `.card-head` (notatikon + tittel til venstre, «sist endret» som `.meta-chip`
+  til høyre) og samme posisjonsbaserte palettfarge fra `paintCardColor`.
+  Utdraget står i «…» på en `--plate` i kortkroppen, klippet til tre linjer av
+  `-webkit-line-clamp` på en INDRE node (`.note-card-excerpt-text`) — `overflow`
+  klipper ved padding-boksen, så en klipping på platen selv ville latt den
+  fjerde linjen stå synlig i bunnpolstringen. Hele kortet er klikkflate og
+  dra-sone, så det har pekehånd og `:focus-visible`-ring.
 - `.trashcan`: ALLE søppelkasse-knapper — hvit avrundet beholder, antall i grå
   sirkel (`.trashcan-count`), **skjult (`hidden`) når tom**.
 - `.corner-controls` + `.corner-btn`: toppkontrollgruppen i øvre høyre hjørne
@@ -652,6 +672,51 @@ konto» i konto-modalen: «Forlat» bruker dør-ut-ikonet (`ICONS.logout`), «Sl
 … for alle» søppelkassen (`ICONS.trashGlyph`). Hver har sitt eget `aria-label`,
 så skjermlesere aldri forveksler dem — og de fire endelige/reversible
 handlingene i appen får samme form uansett hvilken modal de står i.
+
+## Notat-editoren (`.note-editor`)
+
+Et eget fullskjermsbilde OVER hele appflaten — også over toppkontrollene, som er
+`z-index: 35`; editoren er 60, og `body.note-editing` skjuler gruppen så den
+ikke ligger oppå verktøylinjen. Den sikre sonen legges på editorens egne kanter
+(baren og kroppen), ikke på barna.
+
+Editoren festes til det SYNLIGE feltet — `top: var(--viewport-top)` og
+`height: var(--viewport-h)`, målt av `visualViewport` — ikke til
+layoutviewporten. Mobiltastaturet krymper det ene uten å røre det andre, og med
+`100dvh` ville verktøylinjen glidd ut over toppkanten. Verdiene har CSS-hvile
+(`100dvh`/`0px`), så en nettleser uten `visualViewport` får riktig oppførsel
+likevel.
+
+ARKET er papiret (`.note-sheet`, `--surface` med `--line`-kant og
+`--shadow-sm`), ikke hele flaten: editorbakgrunnen er board-flaten (`--bg`).
+Brødteksten er `--ink` på arket, og det paret er det som er målt i begge
+draktene (`docs/tilgjengelighet.md`). Notatets tittel ligger OVER arket, med
+notatikonet foran seg, i hvit skrift med skygge som alt annet på board-flaten —
+den er notatets NAVN, ikke dokumentets første overskrift. Verktøylinjen står på
+`--surface-2` med en `--line`-kant under.
+
+- Linjen er delt i tre: `.note-back` (Huskis' vanlige `.btn`-flate, ikke
+  verktøyenes) alene til venstre, `.note-tools` sentrert i midten, og
+  `.note-editor-aside` til høyre med lagringsstatusen, idéknappen og
+  draktknappen — de to siste er hjørnegruppens knapper, i editorens egen linje.
+- `.note-tools` BRYTER over flere linjer når den ikke får plass. Den ruller
+  aldri vannrett: et verktøy man må lete etter er et verktøy man ikke bruker.
+  På telefon i portrett får den hele bredden på sin egen rad.
+- `.note-tool` er en flat ikon-/tegnknapp; `.is-on` (+ `aria-pressed`) viser at
+  markeringen står i den tilstanden. `.note-tool-sep` er den tynne
+  gruppeskilleren. `.note-tool-h1/-h2/-h3` er tre ulike skriftstørrelser, så
+  knappene VISER rangordenen dokumentets egne overskrifter har.
+- `.note-panel` (lenke og spesialtegn) er `position: fixed` og FORANKRES under
+  knappen sin av `placeNotePanel()`, som klemmer panelet innenfor det synlige
+  feltet og snur det over knappen når det ikke er plass under.
+- `.note-doc` er `white-space: pre-wrap` — linjeskift inne i en blokk bæres som
+  et tegn i dokumentmodellen. `.note-link` er MERKET tekst med adressen i
+  `data-url`, ikke et anker (`docs/domains-and-urls.md`).
+- OVERSKRIFTSHIERARKIET VISES SOM INNRYKK: en overskrift eier innholdet fram til
+  neste overskrift på samme eller høyere nivå, og hvert nøstede nivå rykkes ett
+  `--note-indent` inn (litt mindre på telefon). Nivået er en AVLEDET VISNING —
+  `noteApplyIndent()` regner det ut av blokkrekkefølgen og skriver `data-lvl`;
+  dokumentmodellen lagrer det ikke.
 
 ## Flate-mønsteret
 

@@ -54,6 +54,7 @@ declare
 begin
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
+    'note_projects', 'note_folders', 'notes',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs',
     'push_subscriptions', 'push_deliveries', 'device_sessions',
@@ -108,6 +109,21 @@ begin
     'ideas:id', 'ideas:owner_id', 'ideas:text', 'ideas:trashed',
     'ideas:cat_id', 'ideas:is_cat', 'ideas:collapsed',
     'ideas:ts', 'ideas:org', 'ideas:pos', 'ideas:pos_ts', 'ideas:pos_org',
+
+    -- Notater (docs/notater-plan.md): Prosjekt > Mappe > Notat, kontoens egne
+    -- rader. `folder_id` er null for et fritt notat rett i prosjektet.
+    'note_projects:id', 'note_projects:owner_id', 'note_projects:name',
+    'note_projects:collapsed', 'note_projects:trashed',
+    'note_projects:ts', 'note_projects:org',
+    'note_projects:pos', 'note_projects:pos_ts', 'note_projects:pos_org',
+
+    'note_folders:id', 'note_folders:owner_id', 'note_folders:project_id',
+    'note_folders:name', 'note_folders:trashed', 'note_folders:ts', 'note_folders:org',
+    'note_folders:pos', 'note_folders:pos_ts', 'note_folders:pos_org',
+
+    'notes:id', 'notes:owner_id', 'notes:project_id', 'notes:folder_id',
+    'notes:title', 'notes:body', 'notes:trashed', 'notes:ts', 'notes:org',
+    'notes:pos', 'notes:pos_ts', 'notes:pos_org',
 
     'memberships:id', 'memberships:user_id', 'memberships:universe_id',
     'memberships:group_id', 'memberships:role', 'memberships:pos',
@@ -190,6 +206,7 @@ declare
 begin
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
+    'note_projects', 'note_folders', 'notes',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs',
     'push_subscriptions', 'push_deliveries', 'device_sessions',
@@ -228,6 +245,12 @@ begin
     'items:items_update', 'items:items_delete',
     'ideas:ideas_select', 'ideas:ideas_insert',
     'ideas:ideas_update', 'ideas:ideas_delete',
+    'note_projects:note_projects_select', 'note_projects:note_projects_insert',
+    'note_projects:note_projects_update', 'note_projects:note_projects_delete',
+    'note_folders:note_folders_select', 'note_folders:note_folders_insert',
+    'note_folders:note_folders_update', 'note_folders:note_folders_delete',
+    'notes:notes_select', 'notes:notes_insert',
+    'notes:notes_update', 'notes:notes_delete',
     'memberships:memberships_select', 'memberships:memberships_update',
     'memberships:memberships_delete',
     'share_invites:share_invites_select', 'share_invites:share_invites_delete',
@@ -379,16 +402,63 @@ begin
     end if;
   end loop;
 
+  /* RLS-UTTRYKKENE PÅ NOTATTABELLENE SKAL BRUKE `(select auth.uid())`.
+     Bar `auth.uid()` er volatil, og planleggeren kan kalle den PER RAD;
+     pakket i et skalar-subselect blir den en InitPlan som kjøres én gang per
+     statement (Supabases `auth_rls_initplan`). Svaret er det samme — økten er
+     den samme gjennom hele statementet — men kostnaden vokser med tabellen.
+     Sjekken teller: hver forekomst av `auth.uid()` i policy-uttrykket må være
+     en `SELECT auth.uid()`. De eldre tabellenes policyer er utenfor denne
+     sjekken; her voktes de nye. */
+  for tg in
+    with uttrykk as (
+      select p.tablename || ':' || p.policyname as navn,
+             coalesce(p.qual, '') || ' ' || coalesce(p.with_check, '') as txt
+        from pg_policies p
+       where p.schemaname = 'public'
+         and p.tablename in ('note_projects', 'note_folders', 'notes')
+    )
+    select navn from uttrykk
+     -- antall `auth.uid()` i det hele tatt  vs.  antall som står i et subselect
+     where (length(txt) - length(replace(txt, 'auth.uid()', ''))) / length('auth.uid()')
+        <> (length(txt) - length(replace(txt, 'SELECT auth.uid()', ''))) / length('SELECT auth.uid()')
+  loop
+    feil := array_append(feil, 'policyen ' || tg || ' kaller auth.uid() direkte (skal være (select auth.uid()))');
+  end loop;
+
+  /* TRIGGERFUNKSJONENE ER IKKE RPC-ER. Alle er `security definer` og gjør
+     privilegerte ting uten en egen autorisasjonssjekk, og PostgreSQL gir hver
+     ny funksjon EXECUTE til `public` som standard. Sjekken er GENERISK — alt i
+     `public` som returnerer `trigger` — så en ny trigger ikke kan komme inn
+     uten låsen (users-and-sharing.sql, seksjon 12). */
+  for tg in
+    select p.oid::regprocedure::text
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.prorettype = 'trigger'::regtype
+       and (has_function_privilege('authenticated', p.oid, 'EXECUTE')
+            or has_function_privilege('anon', p.oid, 'EXECUTE'))
+  loop
+    feil := array_append(feil, 'triggerfunksjonen ' || tg || ' er kallbar som RPC (skal være intern)');
+  end loop;
+
   -- Vaktene og gravsteinstriggerne: uten dem er skjemaet på plass, men
   -- reglene håndheves ikke.
   foreach tg in array array[
     'universes:universes_guard', 'groups:groups_guard',
     'cards:cards_guard', 'items:items_guard', 'ideas:ideas_guard',
+    'note_projects:note_projects_guard', 'note_folders:note_folders_guard',
+    'notes:notes_guard',
     'universes:universes_tombstone', 'groups:groups_tombstone',
     'cards:cards_tombstone', 'items:items_tombstone', 'ideas:ideas_tombstone',
+    'note_projects:note_projects_tombstone', 'note_folders:note_folders_tombstone',
+    'notes:notes_tombstone',
     'universes:universes_insert_guard', 'groups:groups_insert_guard',
     'cards:cards_insert_guard', 'items:items_insert_guard',
     'ideas:ideas_insert_guard',
+    'note_projects:note_projects_insert_guard',
+    'note_folders:note_folders_insert_guard', 'notes:notes_insert_guard',
+    'notes:notes_parent_guard', 'note_folders:note_folders_cascade',
     'universes:universes_owner_seed', 'groups:groups_owner_seed',
     'memberships:memberships_guard', 'memberships:memberships_last_owner_guard',
     'share_invites:on_share_invite_created'
@@ -416,7 +486,8 @@ declare
   feil text[] := '{}';
   t text;
 begin
-  foreach t in array array['universes', 'groups', 'cards', 'items', 'ideas'] loop
+  foreach t in array array['universes', 'groups', 'cards', 'items', 'ideas',
+                           'note_projects', 'note_folders', 'notes'] loop
     if not has_table_privilege('authenticated', 'public.' || t, 'SELECT, INSERT, UPDATE, DELETE') then
       feil := array_append(feil, 'authenticated mangler CRUD på public.' || t);
     end if;
@@ -529,6 +600,7 @@ begin
   -- anon skal ikke se noe som helst.
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
+    'note_projects', 'note_folders', 'notes',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs', 'push_subscriptions', 'push_deliveries',
     'device_sessions', 'native_notif_devices'
@@ -560,7 +632,8 @@ begin
     return;
   end if;
   foreach t in array array[
-    'universes', 'groups', 'cards', 'items', 'ideas', 'memberships', 'share_invites'
+    'universes', 'groups', 'cards', 'items', 'ideas',
+    'note_projects', 'note_folders', 'notes', 'memberships', 'share_invites'
   ] loop
     select count(*) into n from pg_publication_tables
      where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t;
@@ -572,7 +645,7 @@ begin
     perform set_config('huskis.smoke_feil',
       current_setting('huskis.smoke_feil', true) || array_to_string(feil, E'\n') || E'\n', false);
   else
-    raise notice '  ✓ alle sju tabellene er i supabase_realtime';
+    raise notice '  ✓ alle ti tabellene er i supabase_realtime';
   end if;
 end $$;
 

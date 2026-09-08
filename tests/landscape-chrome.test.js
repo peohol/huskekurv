@@ -96,11 +96,14 @@ async function seed(p) {
 const topbarGeo = (p) => p.evaluate(() => {
   const r = (s) => { const el = document.querySelector(s); return el ? el.getBoundingClientRect() : null; };
   const bar = r('#topbar'), crumb = r('#nav-crumb'), add = r('#add-card-btn'), acc = r('#account-btn');
+  const faner = r('#main-tabs');
   const trashEl = document.getElementById('trash-btn');
   const trash = trashEl && !trashEl.hidden ? trashEl.getBoundingClientRect() : null;
   const sisteHøyre = Math.max(add.right, trash ? trash.right : 0);
   return {
     barH: Math.round(bar.height),
+    faneH: Math.round(faner.height),
+    faneTop: Math.round(faner.top),
     kontrollH: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--control-h')),
     sammeLinje: Math.abs(add.top - crumb.top) < 2,
     addTop: Math.round(add.top), crumbTop: Math.round(crumb.top),
@@ -211,8 +214,14 @@ async function landskap() {
   const g = await topbarGeo(p);
   log('landskap: breadcrumb og listefunksjoner på samme linje', g.sammeLinje,
     'crumb topp ' + g.crumbTop + ', ＋ Liste topp ' + g.addTop);
-  log('landskap: panelet er én kontrollhøyde, ikke to', g.barH < g.kontrollH * 2,
-    'panel ' + g.barH + ' px, kontrollhøyde ' + g.kontrollH + ' px');
+  /* Panelet har hovedfanene på sin egen (kompakte) første rad, og den aktive
+     fanens kontroller på den neste (docs/notater-plan.md). Kravet er derfor
+     ikke lenger «én kontrollhøyde», men at kontrollraden ikke deler seg i to:
+     fanene + ÉN kontrollrad, ikke fanene + to. */
+  log('landskap: panelet er fanerad + én kontrollrad, ikke to', g.barH < g.faneH + g.kontrollH * 2,
+    'panel ' + g.barH + ' px, fanerad ' + g.faneH + ' px, kontrollhøyde ' + g.kontrollH + ' px');
+  log('landskap: hovedfanene ligger over kontrollraden', g.faneTop < g.crumbTop,
+    'fanerad topp ' + g.faneTop + ', crumb topp ' + g.crumbTop);
   log('landskap: listefunksjonene står rett til høyre for nav-knappen',
     Math.abs(g.avstandTilAdd - g.panelGap) <= 1,
     'avstand ' + g.avstandTilAdd + ' px, panelets gap ' + g.panelGap + ' px');

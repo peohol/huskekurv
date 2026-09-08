@@ -142,8 +142,36 @@ oppført i konto-modalens Tips-skuff (`.menu-keys`, se `docs/menus.md`).
 | `Alt` + `↑` / `↓` (og `←` / `→`) | flytt objektet ett hakk — **sortering** |
 | `Alt` + `M` | «Flytt til …» — ny forelder (for en idé: hvilken idékategori, [`ideer.md`](ideer.md)) |
 | `F2` | endre navn — på ALLE nivåer (klikk på navnet omdøper nå bare listepunkter, idéer og kategorier) |
-| `Enter` / `Mellomrom` | på et korthode: kollaps/utvid. På en mapperad: naviger. På et listepunkt eller en idé: endre navn |
-| `Escape` | lukk øverste modal — eller avbryt en navneendring |
+| `Enter` / `Mellomrom` | på et korthode: kollaps/utvid. På en mapperad: naviger. På et listepunkt eller en idé: endre navn. **På et notatkort: åpne editoren** |
+| `Escape` | lukk øverste modal — eller avbryt en navneendring. **I notat-editoren: lukk et åpent panel, ellers gå tilbake** |
+
+**Hovedbryteren er en `tablist`.** `Lister ↔ Notater` er tegnet som ÉN
+segmentert kontroll, men semantikken er uendret og følger WAI-ARIA-mønsteret:
+`role="tablist"`/`role="tab"` med `aria-selected`, `aria-controls` mot hver sin
+`role="tabpanel"`, venstre/høyre piltast bytter, og bare den aktive halvdelen er
+i tabbrekkefølgen (`tabindex="-1"` på den andre) — så Tab går VIDERE til
+innholdet i stedet for mellom to knapper.
+
+**Notatene har de samme snarveiene som alt annet.** `Alt`+pil flytter et
+notatkort, en notatbok eller en bokhylle ett hakk (`canReorderObj` svarer
+alltid ja der: notatene er kontoens egne, det finnes ingen lås å spørre om).
+Bokhyllehodet er et trekkspill som områdekortets: `Enter`/`Mellomrom` åpner og
+lukker den, og `aria-expanded` sier hvilken tilstand den står i. Raden «Frie
+notater» er en vanlig `role="button"`-rad som fører til bokhyllens egen plass.
+Notatkortets håndtak er hele kortet — det er også dra-sonen — og `Enter`/
+`Mellomrom` åpner editoren, så `F2` er ikke bundet der: tittelen redigeres i
+editoren.
+
+**I editoren** flytter Tab som vanlig mellom tilbakeknapp, verktøylinje,
+idé-/draktknappen, tittel og skrivefeltet. Verktøylinjen BRYTER over flere
+linjer i stedet for å rulle vannrett, så hvert verktøy er synlig og treffbart
+uten å måtte letes fram — også på telefon. Overskriftsknappene har tre ulike
+skriftstørrelser, så rangordenen er synlig og ikke bare navngitt. Verktøyknappene tar ALDRI markeringen fra dokumentet
+(`mousedown` er avvist, og den siste markeringen i dokumentet legges tilbake før
+hver kommando), så `Cmd/Ctrl`+`B`/`I`/`U`/`K` og knappene gjør nøyaktig det
+samme. `Cmd/Ctrl`+`Z` angrer, `Cmd/Ctrl`+`Shift`+`Z` (og `Ctrl`+`Y`) gjør om
+igjen. Lagringsstatusen er et `role="status"` med `aria-live="polite"`, så
+«Lagrer …»/«Lagret» leses opp uten å avbryte.
 
 **Sortering = bytt plass.** `Alt`+pil bytter objektet med naboen, som er
 nøyaktig dra-motorens egen semantikk («≥ 20 % overlapp bytter plass»,

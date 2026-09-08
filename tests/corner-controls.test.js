@@ -120,10 +120,15 @@ const geo = (p) => p.evaluate(() => {
     token: parseFloat(rootCs.getPropertyValue('--corner-btns-w')),
     padTop: parseFloat(rootCs.getPropertyValue('--board-pad-top')),
     barBottom: Math.round(bar.bottom),
-    // Panelets INNHOLDSHØYDE (uten padding): så mange gruppe-rader kan ligge
-    // ved siden av det uten at noe må skyves ned.
+    /* Panelets INNHOLDSHØYDE (uten padding) MINUS hovedbryterens rad: så mange
+       gruppe-rader kan ligge ved siden av panelet uten at noe må skyves ned.
+       Bryteren (`Lister ↔ Notater`, docs/notater-plan.md) ligger ALENE på
+       panelets øverste linje, sentrert i hele bredden, og hjørnegruppen
+       begynner først UNDER den (--main-tabs-h, styles.css) — den raden er
+       derfor ikke plass gruppen kan legge seg ved siden av. */
     barContent: Math.round(document.getElementById('topbar').clientHeight
-      - parseFloat(barCs.paddingTop) - parseFloat(barCs.paddingBottom)),
+      - parseFloat(barCs.paddingTop) - parseFloat(barCs.paddingBottom)
+      - (parseFloat(rootCs.getPropertyValue('--main-tabs-h')) || 0)),
     barPadRight: parseFloat(barCs.paddingRight),
     crumbRight: høyreKant('#nav-crumb'),
     crumbPadRight: parseFloat(getComputedStyle(document.querySelector('.breadcrumb')).paddingRight),

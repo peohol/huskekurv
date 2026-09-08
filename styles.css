@@ -178,6 +178,10 @@
      i dag; `syncTopChrome()` i app.js MÅLER gruppen og skriver den faktiske
      bredden, slik at en ny knapp ikke krever en ny utregning her. */
   --corner-btns-w: calc(var(--control-h) * 3 + var(--corner-btns-gap) * 3);
+  /* Høyden hovedbryteren (`.topbar-row-tabs`) legger beslag på øverst i
+     panelet, medregnet radgapet under den. MÅLES i syncTopChrome; verdien her
+     er reserven fram til den første målingen. */
+  --main-tabs-h: 0px;
   /* Ett tall for ALT luft-mellomrom i listevisningen: board-ets venstre/høyre/
      bunn-padding, kolonne-gap OG kort-til-kort-avstand — samme verdi overalt gir
      identisk luft rundt og mellom listekortene. Bunn-padding-effekten kommer fra
@@ -865,6 +869,18 @@ body {
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--line);
+  /* Panelet er en KOLONNE: hovedfanene (Lister | Notater) på den første raden,
+     den aktive fanens egne kontroller på den neste (docs/notater-plan.md).
+     Hver rad holder selv av plassen hjørnegruppen tar (--corner-btns-w). */
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Én rad i panelet — den aktive fanens breadcrumb + knapper. */
+.topbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* Breadcrumb: ÉN knapp med de to navnenivåene, skilt med › — bare navn, ingen
@@ -1001,8 +1017,11 @@ body {
 .corner-controls {
   position: fixed;
   /* Samme sikre sone som toppmenyen gruppen flukter med — den ligger utenfor
-     panelets flyt og må derfor legge på inset-ene selv. */
-  top: calc(12px + var(--safe-top));
+     panelets flyt og må derfor legge på inset-ene selv. PLUSS høyden på
+     hovedbryteren (`--main-tabs-h`, målt i syncTopChrome): den raden er
+     panelets øverste og skal ligge alene, sentrert i hele bredden, så gruppen
+     begynner først under den. */
+  top: calc(12px + var(--safe-top) + var(--main-tabs-h, 0px));
   right: calc(var(--toolbar-pad) + var(--safe-right));
   z-index: 35;
   display: flex;
@@ -3250,7 +3269,9 @@ body.tour-demo .trash-row button:not(.tour-live) { opacity: 0.35; }
    ved siden av listefunksjonene — og da slipper panelet å skyves ned for
    gruppens andre rad (se `--corner-btns-overflow`, syncTopChrome). */
 @media (max-width: 620px) {
-  .topbar { flex-direction: column; align-items: stretch; }
+  /* Panelet er alltid en kolonne (fanene øverst) — her stables i tillegg den
+     AKTIVE fanens egen rad, så breadcrumb-navnene ikke kappes bort. */
+  .topbar-row { flex-direction: column; align-items: stretch; }
   .breadcrumb { padding-right: var(--corner-btns-w); }
   .toolbar { margin-right: var(--corner-btns-w); flex-wrap: wrap; }
 
@@ -5000,3 +5021,391 @@ body.no-auth .corner-controls { display: none; }
    `.card-head` — hodet kollapser fortsatt ved klikk her også). */
 .free-groups-card .card-title { color: var(--ink); text-shadow: none; -webkit-text-stroke: none; }
 
+/* ============================================================
+   NOTATER — hovedbryter, notatkort og editor
+   ------------------------------------------------------------
+   Autoritativt for produktet: docs/notater-plan.md. Alt her gjenbruker
+   designsystemets tokens (`--control-h`, `--radius`, `--surface*`, `--ink*`,
+   `--line`, `--shadow-*`) — ingen egne farger, ingen ad hoc-gradienter. Begge
+   draktene faller derfor ut av tokenene, uten en eneste `[data-theme]`-regel
+   her (docs/mork-drakt.md).
+   ============================================================ */
+
+/* Det SYNLIGE feltet, målt av `visualViewport` (trackVisualViewport i app.js).
+   Mobiltastaturet krymper det uten å røre layoutviewporten, så `100dvh` blir
+   stående like høy som før og editorens verktøylinje glir ut over toppkanten.
+   Verdiene her er hvilen — de gjelder når tastaturet er nede, og når
+   nettleseren ikke har `visualViewport` i det hele tatt. */
+:root {
+  --viewport-h: 100dvh;
+  --viewport-top: 0px;
+  --keyboard-inset: 0px;
+}
+
+/* HOVEDBRYTEREN: Lister ↔ Notater, ÉN segmentert kontroll på panelets egen
+   øverste linje — sentrert i HELE headerens bredde, ikke skjøvet til side av
+   hjørnegruppen. Gruppen skyves i stedet ned like mye som denne raden er høy
+   (`--main-tabs-h`, målt i syncTopChrome), så bryteren ligger alene øverst.
+   Kompakt med vilje: høyde er mangelvaren i landskap (se .topbar). */
+/* Bryteren midtstilles både når raden er vannrett (bred skjerm) og når
+   `.topbar-row` stables til en kolonne under 620 px. */
+.topbar-row-tabs { justify-content: center; align-items: center; }
+.main-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--control-bg);
+  box-shadow: var(--shadow-sm);
+}
+.main-tab {
+  appearance: none;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-soft);
+  transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+}
+.main-tab:hover { color: var(--ink); }
+/* Den AKTIVE halvdelen er den eneste massive flaten i bryteren: full kortflate,
+   mørkt blekk og en tydelig skygge, mot den gjennomsiktige hvilen. Forskjellen
+   må bæres av mer enn fargen alene — derfor også vekten. */
+.main-tab.is-active {
+  background: var(--surface);
+  color: var(--ink);
+  font-weight: 800;
+  box-shadow: var(--shadow-sm);
+}
+.main-tab:not(.is-active) { opacity: 0.72; }
+.main-tab:not(.is-active):hover { opacity: 1; }
+.main-tab:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 2px; }
+.main-tab > .icon { width: 20px; height: 20px; flex: none; }
+
+/* NOTATKORTET er et LISTEKORT: samme `.card`-flate, samme korthode, samme
+   palettfarge fra posisjonen (colorForIndex/paintCardColor), og innholdet på
+   en `--plate` i kroppen. Ingen egne kontrastregler — det er nøyaktig de
+   flatene tests/a11y-contrast.test.js allerede måler. Hele kortet er
+   klikkflate (åpner editoren) og dra-sone. */
+.note-card { cursor: pointer; }
+.note-card:focus-visible {
+  outline: var(--focus-w) solid var(--focus);
+  outline-offset: 2px;
+}
+.note-card-head { align-items: flex-start; }
+.note-card-title {
+  /* `.card-title` gir hvit skrift med skygge på korthodet; her bare linjefallet
+     for en tittel som kan gå over flere linjer. */
+  overflow-wrap: anywhere;
+}
+/* «Sist endret» øverst til HØYRE i hodet — samme chip som listenes meta-rad,
+   men den er ren informasjon og skal ikke se ut som en knapp. */
+.note-card-meta {
+  flex: 0 0 auto;
+  cursor: inherit;
+  align-self: flex-start;
+}
+/* IKKE flex: `.card-body` er det, og en flex-item BLOKKIFISERES — da faller
+   `-webkit-box` (og dermed linjeklippingen på utdraget) bort. */
+.note-card-body { display: block; padding: 0 10px 10px; }
+/* Utdraget står på listepunktets plate — den flaten brødtekst i `--ink` er
+   målt mot i begge drakter, oppå kortets egen palettfarge. */
+.note-card-excerpt {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--plate);
+  font-size: var(--fs-sm);
+  color: var(--ink);
+}
+/* LINJEKLIPPINGEN LIGGER PÅ EN INDRE NODE, ikke på platen selv: `overflow`
+   klipper ved PADDING-boksen, så en linje utover klippet ville blitt stående
+   synlig i platens egen bunnpolstring. Tre linjer holder kortene noenlunde
+   like høye uten å kappe et utdrag som så vidt får plass. */
+.note-card-excerpt-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.note-card-excerpt[hidden] { display: none; }
+
+/* BOKHYLLEN i nav-modalen: områdekortet, uten deling og kategorier. Hodet er
+   et trekkspill som områdenes, og tittelen står på kortfargen som deres. */
+.note-project-card .card-body { padding-bottom: 6px; }
+.notes-add-project { display: flex; justify-content: center; margin: 4px 0 2px; }
+.note-book-icon { flex: none; }
+/* «Frie notater»-raden er bokhyllens EGEN plass — den står først, og skiller
+   seg fra notatbøkene med kursiv tittel og ingen tellepille når den er tom. */
+.note-free-row .item-text { font-style: italic; }
+
+/* ------------------------------------------------------------
+   EDITOREN
+   ------------------------------------------------------------
+   Et eget fullskjermsbilde OVER hele appflaten — også over toppkontrollene,
+   som er `z-index: 35`. Flaten festes til det SYNLIGE feltet (`--viewport-*`),
+   ikke til layoutviewporten: med mobiltastaturet oppe er de to ikke det samme,
+   og verktøylinjen skal bli stående synlig. Den sikre sonen legges på her,
+   ikke på barna: baren skal ikke ligge under statusfeltet, og teksten ikke
+   under gestelinjen. */
+.note-editor {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--viewport-top);
+  height: var(--viewport-h);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  /* Bakgrunnen er board-flaten: selve ARKET under er papiret (se .note-sheet). */
+  background: var(--bg);
+}
+/* Hjørnegruppen ville ellers ligget oppå verktøylinjen — idéer og drakt finnes
+   i stedet i editorens egen linje (.note-editor-aside). */
+body.note-editing .corner-controls { display: none; }
+.note-editor-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: calc(10px + var(--safe-top)) calc(10px + var(--safe-right))
+           10px calc(10px + var(--safe-left));
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--line);
+}
+.note-back { flex: 0 0 auto; }
+/* VERKTØYENE BRYTES, DE RULLER ALDRI. Et verktøy man må lete etter er et
+   verktøy man ikke bruker: får ikke knappene plass på én linje, legger de seg
+   på flere. Gruppen er sentrert i plassen mellom tilbakeknappen og
+   høyresiden. */
+.note-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.note-editor-aside {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Idé- og draktknappen i editoren er hjørnegruppens knapper, i editorens egen
+   linje. Samme flate, samme mål, samme ikon. */
+.note-editor-btn { flex: 0 0 auto; }
+.note-tool {
+  appearance: none;
+  cursor: pointer;
+  flex: 0 0 auto;
+  min-width: 38px;
+  height: 38px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  transition: background 0.15s, color 0.15s;
+}
+.note-tool:hover { background: var(--control-bg); color: var(--ink); }
+.note-tool.is-on { background: var(--control-bg-hover); color: var(--ink); box-shadow: var(--shadow-sm); }
+.note-tool:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 1px; }
+.note-tool .icon { width: 20px; height: 20px; }
+.note-tool-text { font-weight: 700; }
+/* Overskriftsknappene VISER de tre nivåene: H1 er størst, H3 minst — samme
+   rangorden som dokumentets egne overskrifter (.note-doc h1–h3). Uten det er
+   tre like store knapper bare tre etiketter. */
+.note-tool-h1 { font-size: 1.15em; font-weight: 800; }
+.note-tool-h2 { font-size: 1em; font-weight: 700; }
+.note-tool-h3 { font-size: 0.86em; font-weight: 600; }
+.note-tool-b { font-weight: 800; }
+.note-tool-i { font-style: italic; }
+.note-tool-u { text-decoration: underline; }
+.note-tool-sep {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 22px;
+  margin: 0 2px;
+  background: var(--line);
+}
+.note-save-status {
+  flex: 0 0 auto;
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+  min-width: 5.5em;
+  text-align: right;
+}
+
+/* PANELENE (lenke og spesialtegn) FORANKRES UNDER KNAPPEN SIN. Posisjonen
+   settes i JS (placeNotePanel), som også klemmer panelet innenfor det synlige
+   feltet og snur det over knappen når det ikke er plass under. Her står bare
+   flaten. */
+.note-panel {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 2;
+  width: max-content;
+  max-width: min(520px, calc(100vw - 20px));
+  padding: 10px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  border: 1px solid var(--line);
+}
+.note-link-panel { display: flex; flex-direction: column; gap: 8px; width: 320px; }
+.note-panel-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.note-symbol-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: 360px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+.note-symbol {
+  appearance: none;
+  cursor: pointer;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--control-bg);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: var(--fs-base);
+}
+.note-symbol:hover { background: var(--control-bg-hover); }
+.note-symbol:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 1px; }
+
+.note-editor-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 18px calc(18px + var(--safe-right)) calc(24px + var(--safe-bottom))
+           calc(18px + var(--safe-left));
+}
+.note-sheet-wrap {
+  width: 100%;
+  max-width: 760px;
+  margin: 0 auto;
+}
+/* TITTELEN LIGGER OVER ARKET, med notatikonet foran seg — den er notatets NAVN,
+   ikke dokumentets første overskrift, og skal ikke kunne forveksles med en H1
+   inne i teksten. Den står på board-flaten, ikke på papiret, så den bærer den
+   samme hvite skriften med skygge som alt annet på den flaten
+   (.card-title, .empty-state). */
+.note-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 4px;
+  margin: 0 0 10px;
+}
+.note-title-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  font-size: var(--fs-xl);
+  line-height: 1;
+}
+.note-title-input {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: #fff;
+  text-shadow: var(--text-shadow);
+  font-family: inherit;
+  font-size: var(--fs-xl);
+  font-weight: 700;
+  padding: 4px 2px;
+}
+.note-title-input::placeholder { color: rgba(255, 255, 255, 0.72); }
+.note-title-input:focus { outline: none; }
+.note-title-input:focus-visible {
+  outline: var(--focus-w) solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+/* ARKET: et tydelig avgrenset kort som VOKSER med innholdet. Minstehøyden er
+   en halv skjerm, så et tomt notat fortsatt ser ut som et ark. */
+.note-sheet {
+  padding: 20px 22px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.note-doc {
+  /* Innrykket per overskriftsnivå. Ett trinn, litt mindre på telefon. */
+  --note-indent: 22px;
+  min-height: 42vh;
+  font-size: var(--fs-base);
+  color: var(--ink);
+  line-height: 1.55;
+  /* Linjeskift inne i en blokk bæres som et tegn i dokumentmodellen. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.note-doc:focus { outline: none; }
+.note-doc h1 { font-size: 1.6em; font-weight: 800; margin: 0.7em 0 0.3em; }
+.note-doc h2 { font-size: 1.35em; font-weight: 700; margin: 0.7em 0 0.3em; }
+.note-doc h3 { font-size: 1.15em; font-weight: 700; margin: 0.7em 0 0.3em; }
+.note-doc p { margin: 0 0 0.6em; }
+.note-doc ul, .note-doc ol { margin: 0 0 0.6em; padding-left: 1.6em; }
+.note-doc li { margin: 0 0 0.2em; }
+.note-doc hr { border: none; border-top: 1px solid var(--line); margin: 1em 0; }
+/* OVERSKRIFTSHIERARKIET SES SOM INNRYKK. En overskrift eier innholdet fram til
+   neste overskrift på samme eller høyere nivå, og hvert nøstede nivå rykkes ett
+   trinn inn. Nivået er en AVLEDET VISNING — `noteApplyIndent()` regner det ut
+   av blokkrekkefølgen og skriver `data-lvl`; dokumentmodellen lagrer det ikke.
+   Ingen trekkspill, trekanter eller nivåfarger: bare innrykket. */
+.note-doc > [data-lvl="1"] { margin-left: var(--note-indent); }
+.note-doc > [data-lvl="2"] { margin-left: calc(var(--note-indent) * 2); }
+.note-doc > [data-lvl="3"] { margin-left: calc(var(--note-indent) * 3); }
+/* Lenken er MERKET tekst med adressen i `data-url` — ikke et anker. Se
+   docs/domains-and-urls.md og noteRunNode() i app.js. */
+.note-doc .note-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* Telefon i portrett: verktøyene får HELE bredden på sin egen rad under
+   tilbakeknappen og høyresiden. De brytes uansett (aldri rull), men på en
+   delt rad ville de brutt til fem korte linjer i stedet for to lange.
+   Tilbakeknappen viser bare pilen — teksten ville spist plassen. Innrykket
+   blir ett hakk mindre. */
+@media (max-width: 560px) {
+  .note-editor-bar { flex-wrap: wrap; }
+  .note-tools { order: 3; flex: 1 1 100%; }
+  .note-editor-aside { margin-left: auto; }
+  .note-back > span { display: none; }
+  .note-editor-body { padding-left: calc(12px + var(--safe-left)); padding-right: calc(12px + var(--safe-right)); }
+  .note-sheet { padding: 14px 14px; }
+  .note-doc { --note-indent: 14px; }
+  .note-link-panel, .note-symbol-panel { width: auto; }
+}

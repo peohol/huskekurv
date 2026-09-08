@@ -169,6 +169,29 @@
        under kun under 560 px (telefon i portrett). All navigering/redigering/
        deling av områder og mapper skjer i nav-modalen, ikke her. -->
   <header class="topbar" id="topbar">
+    <!-- HOVEDFANENE: Lister ↔ Notater, ÉN segmentert kontroll (modusbryter)
+         sentrert på panelets egen ØVERSTE linje — over alt annet, også over
+         toppkontrollene, som skyves ned like mye (--main-tabs-h, syncTopChrome).
+         Toppkontrollene (varsler, kalender, søk, idéer, drakt, konto) tilhører
+         hele appen og dupliseres ikke per fane. Visuelt er den én bryter;
+         semantisk er den fortsatt en tablist med to tab-er.
+         Se docs/notater-plan.md og docs/menus.md. -->
+    <div class="topbar-row topbar-row-tabs">
+    <div class="main-tabs" id="main-tabs" role="tablist" data-i18n-aria-label="tabs.aria">
+      <button class="main-tab is-active" id="tab-lists" type="button" role="tab"
+              data-tab="lists" aria-selected="true" aria-controls="board">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4.5" fill="#ffffff"></rect><circle cx="8" cy="8.5" r="0.7" fill="#111" stroke="none"></circle><circle cx="8" cy="12" r="0.7" fill="#111" stroke="none"></circle><circle cx="8" cy="15.5" r="0.7" fill="#111" stroke="none"></circle><path d="M11.5 8.5h5.5"></path><path d="M11.5 12h5.5"></path><path d="M11.5 15.5h5.5"></path></svg>
+        <span data-i18n="tabs.lists">Lister</span>
+      </button>
+      <button class="main-tab" id="tab-notes" type="button" role="tab"
+              data-tab="notes" aria-selected="false" aria-controls="notes-board" tabindex="-1">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h7.5L19 8.5V21H6Z" fill="#ffffff"></path><path d="M13.5 3v5.5H19"></path><path d="M8.8 12.5h6.4"></path><path d="M8.8 15.5h6.4"></path><path d="M8.8 18.5h3.6"></path></svg>
+        <span data-i18n="tabs.notes">Notater</span>
+      </button>
+    </div>
+    </div>
+    <!-- Listefanens rad: breadcrumb + listefunksjoner. -->
+    <div class="topbar-row" id="topbar-row-lists">
     <nav class="breadcrumb" data-i18n-aria-label="crumb.youAreHere">
       <!-- Semantisk slippmål for et liste-drag (Smett: `zoneSelector`) — slipp
            her åpner «Flytt … til» (se «BOARD-SCOPETS KORTNIVÅ PÅ dnd-kit» i
@@ -194,10 +217,29 @@
           <span class="trashcan-count" id="trash-count">0</span>
         </button>
     </div>
+    </div>
+    <!-- Notatfanens rad: bokhylle › notatbok + «＋ Notat». -->
+    <div class="topbar-row" id="topbar-row-notes" hidden>
+      <nav class="breadcrumb" data-i18n-aria-label="crumb.youAreHere">
+        <button class="crumb-btn nav-crumb" id="notes-crumb" type="button"
+                data-i18n-title="notes.crumbTitle" aria-haspopup="dialog">
+          <span class="crumb-name" id="crumb-project-name" data-i18n="kind.noteProject">Bokhylle</span>
+          <span class="crumb-sep" aria-hidden="true">›</span>
+          <span class="crumb-name" id="crumb-note-folder-name" data-i18n="notes.freeNotes">Frie notater</span>
+        </button>
+      </nav>
+      <div class="panel-actions toolbar">
+        <button class="btn-add btn-solid btn-green" id="add-note-btn" type="button" data-i18n-title="notes.newNote" data-i18n-aria-label="notes.newNote"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5v15"></path><path d="M4.5 12h15"></path></svg> <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3h7.5L19 8.5V21H6Z" fill="#ffffff"></path><path d="M13.5 3v5.5H19"></path><path d="M8.8 12.5h6.4"></path><path d="M8.8 15.5h6.4"></path><path d="M8.8 18.5h3.6"></path></svg></button>
+      </div>
+    </div>
   </header>
 
   <main class="app-main">
-    <section class="board dnd-surface" id="board" aria-live="polite"></section>
+    <section class="board dnd-surface" id="board" aria-live="polite"
+             role="tabpanel" aria-labelledby="tab-lists"></section>
+    <!-- Notatfanens flate: notatkortene i de samme kolonnene som listene. -->
+    <section class="board notes-board dnd-surface" id="notes-board" aria-live="polite"
+             role="tabpanel" aria-labelledby="tab-notes" hidden></section>
   </main>
 
   <!-- Navigasjonsmodal (åpnes fra nav-knappen i toppmenyen): områder og
@@ -247,6 +289,25 @@
        trekkspill-skuffer (kontoopplysninger, tips, logg ut/slett konto) og
        språkvelgeren. Skuffene er lukket når modalen åpnes, og kun ÉN kan være
        åpen om gangen — se docs/menus.md. -->
+  <!-- Notat-navigasjon (åpnes fra notatfanens breadcrumb): bokhyller som kort,
+       notatbøker som rader — nøyaktig samme oppsett som områder og mapper, bare
+       uten kategorier, deling og låser. Se docs/notater-plan.md. -->
+  <div class="modal-overlay" id="notes-nav-modal" hidden>
+    <div class="modal menu-modal nav-modal" role="dialog" aria-modal="true" aria-labelledby="notes-nav-title">
+      <header class="modal-head">
+        <h2 id="notes-nav-title">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3.5" width="18" height="17" rx="2" fill="#ffffff"></rect><path d="M5.9 6.1h2v5.1h-2Z" fill="#c15c56"></path><path d="M8.6 6.9h1.8v4.3H8.6Z" fill="#6fa8e0"></path><path d="M11.1 6.1h2v5.1h-2Z" fill="#e8bd3e"></path><path d="M13.8 7.3h2.1v3.9h-2.1Z" fill="#5da172"></path><path d="M3 11.9h18"></path><path d="M5.9 13.6h2v4.6h-2Z" fill="#85adad"></path><path d="M8.6 14.3h1.8v3.9H8.6Z" fill="#c9a06a"></path><path d="M11.1 13.6h2v4.6h-2Z" fill="#ad85ad"></path><path d="M13.8 14.9h2.1v3.3h-2.1Z" fill="#c96b45"></path><path d="M3 18.4h18"></path><rect x="3" y="3.5" width="18" height="17" rx="2"></rect></svg>
+          <span data-i18n="notes.navTitleA">Bokhyller og</span>
+          <span data-i18n="notes.navTitleB">notatbøker</span>
+        </h2>
+        <button class="icon-btn" id="notes-nav-close" type="button" data-i18n-title="common.close" data-i18n-aria-label="common.close"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5"></path><path d="M17.5 6.5 6.5 17.5"></path></svg></button>
+      </header>
+      <div class="modal-body menu-body nav-body" id="notes-nav-body">
+        <section class="board nav-board dnd-surface" id="notes-nav-board" aria-live="polite"></section>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-overlay" id="account-modal" hidden>
     <div class="modal menu-modal" role="dialog" aria-modal="true" aria-labelledby="account-title">
       <header class="modal-head">
@@ -870,6 +931,65 @@
     </li>
   </template>
 
+  <!-- Notatkortet: NØYAKTIG samme oppbygning som et listekort — korthode med
+       ikon + tittel (og «sist endret» øverst til høyre), og innholdet på en
+       plate i kortkroppen. Kortet bærer palettfargen sin som listene, så
+       tittelen er hvit-med-skygge på korthodet og utdraget står på `--plate`;
+       begge kontrastene er de listene allerede måles på
+       (tests/a11y-contrast.test.js). Hele kortet er klikkflate (åpner
+       editoren) og dra-sone. -->
+  <template id="note-card-template">
+    <article class="card note-card" tabindex="0" role="button">
+      <header class="card-head note-card-head">
+        <span class="kind-icon note-card-icon" aria-hidden="true"></span>
+        <div class="card-title-wrap">
+          <div class="title-line">
+            <h3 class="card-title note-card-title"></h3>
+          </div>
+        </div>
+        <span class="meta-chip note-card-meta"></span>
+      </header>
+      <div class="card-body note-card-body">
+        <p class="note-card-excerpt"><span class="note-card-excerpt-text"></span></p>
+      </div>
+    </article>
+  </template>
+
+  <!-- Bokhylle (nav-modalen): områdekortet uten deling og kategorier. Hodet er
+       et TREKKSPILL som områdekortets — det åpner/lukker bokhyllen og lukker
+       ikke modalen. Veien til bokhyllens frie notater er en egen rad inne i
+       den (`notes.freeNotes`). -->
+  <template id="note-project-template">
+    <article class="card uni-card note-project-card" tabindex="-1">
+      <header class="card-head" role="button" tabindex="0">
+        <span class="kind-icon uni-icon" aria-hidden="true"></span>
+        <div class="card-title-wrap">
+          <div class="title-line">
+            <h2 class="card-title" data-i18n-title="edit.clickToRename"></h2>
+          </div>
+        </div>
+      </header>
+      <div class="card-body">
+        <ul class="items-container"></ul>
+        <div class="add-item-row">
+          <button class="btn-add btn-solid btn-green add-item-btn" type="button" data-i18n-title="notes.addFolder" data-i18n-aria-label="notes.addFolder"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5v15"></path><path d="M4.5 12h15"></path></svg> <span class="add-kind-icon" aria-hidden="true"></span></button>
+        </div>
+      </div>
+    </article>
+  </template>
+
+  <!-- Notatbok (rad i et bokhyllekort): mapperaden uten deling. -->
+  <template id="note-folder-template">
+    <li class="item group-row note-folder-row" role="button" tabindex="0">
+      <span class="kind-icon note-book-icon" aria-hidden="true"></span>
+      <div class="item-main">
+        <div class="title-line">
+          <span class="item-text" data-i18n-title="edit.clickToRename"></span>
+        </div>
+      </div>
+    </li>
+  </template>
+
   <!-- OBJEKTMENYEN: én meny for ALLE seks objekttypene (område, mappe,
        mappekategori, liste, listepunkt, kategori). Popover ved menyknappen på
        desktop, sentrert ark på mobil — samme .switcher-*-skall som ansvarlig-
@@ -1121,6 +1241,85 @@
        dermed ingen eksterne skriptkilder i det hele tatt — `script-src 'self'`.
        Oppgraderingsrutinen: docs/sikkerhetsheadere.md. config.js holder dine
        verdier. -->
+  <!-- NOTAT-EDITOREN: et eget fullskjermsbilde over den vanlige appflaten.
+       Tilbakeknapp og verktøylinje øverst, tittel og dokument under. Se
+       docs/notater-plan.md. Verktøyknappene bærer `data-cmd`; app.js kobler
+       dem til én kommandotabell. -->
+  <div class="note-editor" id="note-editor" hidden>
+    <header class="note-editor-bar">
+      <!-- Tilbake er en HANDLING, ikke et formatteringsverktøy: den står alene
+           til venstre og bærer Huskis' vanlige knappeflate, så den ikke leses
+           som en av knappene i verktøygruppen. -->
+      <button class="btn btn-ghost btn-small note-back" id="note-back" type="button"
+              data-i18n-title="notes.back" data-i18n-aria-label="notes.back">
+        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 8 12l7 7"></path></svg>
+        <span data-i18n="notes.back">Tilbake</span>
+      </button>
+      <div class="note-tools" id="note-tools" role="toolbar" data-i18n-aria-label="notes.toolbar">
+        <button class="note-tool" type="button" data-cmd="h1" aria-pressed="false" data-i18n-title="notes.h1" data-i18n-aria-label="notes.h1"><span class="note-tool-text note-tool-h1">H1</span></button>
+        <button class="note-tool" type="button" data-cmd="h2" aria-pressed="false" data-i18n-title="notes.h2" data-i18n-aria-label="notes.h2"><span class="note-tool-text note-tool-h2">H2</span></button>
+        <button class="note-tool" type="button" data-cmd="h3" aria-pressed="false" data-i18n-title="notes.h3" data-i18n-aria-label="notes.h3"><span class="note-tool-text note-tool-h3">H3</span></button>
+        <span class="note-tool-sep" aria-hidden="true"></span>
+        <button class="note-tool" type="button" data-cmd="bold" aria-pressed="false" data-i18n-title="notes.bold" data-i18n-aria-label="notes.bold"><span class="note-tool-text note-tool-b">B</span></button>
+        <button class="note-tool" type="button" data-cmd="italic" aria-pressed="false" data-i18n-title="notes.italic" data-i18n-aria-label="notes.italic"><span class="note-tool-text note-tool-i">I</span></button>
+        <button class="note-tool" type="button" data-cmd="underline" aria-pressed="false" data-i18n-title="notes.underline" data-i18n-aria-label="notes.underline"><span class="note-tool-text note-tool-u">U</span></button>
+        <button class="note-tool" type="button" data-cmd="superscript" aria-pressed="false" data-i18n-title="notes.superscript" data-i18n-aria-label="notes.superscript"><span class="note-tool-text">x<sup>2</sup></span></button>
+        <button class="note-tool" type="button" data-cmd="subscript" aria-pressed="false" data-i18n-title="notes.subscript" data-i18n-aria-label="notes.subscript"><span class="note-tool-text">x<sub>2</sub></span></button>
+        <span class="note-tool-sep" aria-hidden="true"></span>
+        <button class="note-tool" type="button" data-cmd="link" aria-pressed="false" data-i18n-title="notes.link" data-i18n-aria-label="notes.link"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13.5a3.6 3.6 0 0 0 5.1 0l2.6-2.6a3.6 3.6 0 0 0-5.1-5.1L11.4 7"></path><path d="M14 10.5a3.6 3.6 0 0 0-5.1 0l-2.6 2.6a3.6 3.6 0 0 0 5.1 5.1L12.6 17"></path></svg></button>
+        <button class="note-tool" type="button" data-cmd="symbol" aria-pressed="false" data-i18n-title="notes.symbol" data-i18n-aria-label="notes.symbol"><span class="note-tool-text">Ω</span></button>
+        <span class="note-tool-sep" aria-hidden="true"></span>
+        <button class="note-tool" type="button" data-cmd="ul" aria-pressed="false" data-i18n-title="notes.bullets" data-i18n-aria-label="notes.bullets"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5.5" cy="7" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="5.5" cy="12" r="1.2" fill="currentColor" stroke="none"></circle><circle cx="5.5" cy="17" r="1.2" fill="currentColor" stroke="none"></circle><path d="M9.5 7h9"></path><path d="M9.5 12h9"></path><path d="M9.5 17h9"></path></svg></button>
+        <button class="note-tool" type="button" data-cmd="ol" aria-pressed="false" data-i18n-title="notes.numbers" data-i18n-aria-label="notes.numbers"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h1.2V9"></path><path d="M3.6 13.2h2.2L3.6 16h2.4"></path><path d="M9.5 7h9"></path><path d="M9.5 12h9"></path><path d="M9.5 17h9"></path></svg></button>
+        <button class="note-tool" type="button" data-cmd="hr" aria-pressed="false" data-i18n-title="notes.hr" data-i18n-aria-label="notes.hr"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h16"></path></svg></button>
+        <span class="note-tool-sep" aria-hidden="true"></span>
+        <button class="note-tool" type="button" data-cmd="undo" aria-pressed="false" data-i18n-title="notes.undo" data-i18n-aria-label="notes.undo"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8.5 7 4.5 11l4 4"></path><path d="M4.5 11h9a5.5 5.5 0 0 1 0 11H9"></path></svg></button>
+        <button class="note-tool" type="button" data-cmd="redo" aria-pressed="false" data-i18n-title="notes.redo" data-i18n-aria-label="notes.redo"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.5 7l4 4-4 4"></path><path d="M19.5 11h-9a5.5 5.5 0 0 0 0 11H15"></path></svg></button>
+      </div>
+      <!-- IDÉER og DRAKT tilhører HELE Huskis, ikke listefanen: de er derfor
+           med her også, koblet til nøyaktig de samme funksjonene og den samme
+           tilstanden som hjørnegruppens knapper (docs/notater-plan.md). -->
+      <div class="note-editor-aside">
+        <span class="note-save-status" id="note-save-status" role="status" aria-live="polite"></span>
+        <button class="corner-btn note-editor-btn" id="note-ideas-btn" type="button"
+                data-i18n-title="ideas.title" data-i18n-aria-label="ideas.open"
+                aria-haspopup="dialog">
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.2a5.8 5.8 0 0 0-3.4 10.5c.5.36.8.95.8 1.57v.51h5.2v-.51c0-.62.3-1.21.8-1.57A5.8 5.8 0 0 0 12 3.2Z" fill="#f0d772"></path><path d="M9.4 18.2h5.2"></path><path d="M10.6 20.8h2.8"></path></svg>
+        </button>
+        <button class="corner-btn note-editor-btn" id="note-theme-btn" type="button"></button>
+      </div>
+    </header>
+    <!-- Lenke-panelet: adressen ses, endres, kopieres og fjernes her. Huskis'
+         UI produserer ingen utgående lenker (docs/domains-and-urls.md), så
+         lenken i et notat er MERKET tekst med adressen i data-url. -->
+    <div class="note-panel note-link-panel" id="note-link-panel" role="dialog" data-i18n-aria-label="notes.link" hidden>
+      <input class="field note-link-input" id="note-link-input" type="text" inputmode="url"
+             data-i18n-placeholder="notes.linkPlaceholder" data-i18n-aria-label="notes.linkAddress" />
+      <div class="note-panel-actions">
+        <button class="btn btn-solid btn-accent btn-small" id="note-link-apply" type="button" data-i18n="notes.linkApply">Bruk</button>
+        <button class="btn btn-ghost btn-small" id="note-link-copy" type="button" data-i18n="notes.linkCopy" hidden>Kopier</button>
+        <button class="btn btn-ghost btn-small" id="note-link-remove" type="button" data-i18n="notes.linkRemove" hidden>Fjern lenke</button>
+      </div>
+    </div>
+    <div class="note-panel note-symbol-panel" id="note-symbol-panel" role="dialog" data-i18n-aria-label="notes.symbol" hidden></div>
+    <div class="note-editor-body" id="note-editor-body">
+      <!-- Tittelen står OVER arket — den er notatets navn, ikke dokumentets
+           første overskrift. Arket under er et tydelig avgrenset kort som
+           vokser med innholdet. -->
+      <div class="note-sheet-wrap">
+        <div class="note-title-row">
+          <span class="kind-icon note-title-icon" aria-hidden="true"></span>
+          <input class="note-title-input" id="note-title-input" type="text"
+                 data-i18n-placeholder="notes.titlePlaceholder" data-i18n-aria-label="notes.title" />
+        </div>
+        <div class="note-sheet">
+          <div class="note-doc" id="note-doc" contenteditable="true" role="textbox"
+               aria-multiline="true" data-i18n-aria-label="notes.body" spellcheck="true"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="vendor/supabase-js-2.111.0.js"></script>
   <!-- Dra-og-slipp-motoren (Smett over dnd-kit), samme opplegg som Supabase:
        en innsjekket kopi i repoet, versjonen i filnavnet, ingen CDN. Filen er

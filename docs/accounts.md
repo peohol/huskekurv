@@ -86,7 +86,8 @@ hvilken versjon (`user_metadata.onboarding`) — og hvilke gest-tips som er vist
 `docs/introduksjon.md` (autoritativ).
 
 **Aktiv posisjon på kontoen**: hvilket område/mappe man står i lagres i
-`user_metadata.nav = {u,g}` via `auth.updateUser({ data })` (debouncet,
+`user_metadata.nav = {u,g,np,nf}` via `auth.updateUser({ data })` — `u`/`g` er
+listefanens område og mappe, `np`/`nf` notatfanens bokhylle og notatbok (debouncet,
 `saveNavPref`), og gjenopprettes ved første pull (`restoreNavPref`). Se
 `docs/data-model.md` for semantikken. Mock-backenden speiler dette:
 `user_metadata` ligger på profilen i den delte «databasen», settes av
@@ -241,7 +242,8 @@ samme nested `state` som før; synken går slik (`cloudCycle`):
 
 1. **Pull**: `get_my_doc()` → ett flatt doc (universes/groups/cards/items —
    pluss `ideas`, kontoens egne rader uten forelder i hierarkiet, se
-   [`ideer.md`](ideer.md)), med
+   [`ideer.md`](ideer.md), og `noteProjects`/`noteFolders`/`notes`, notatenes
+   eget tre, se [`notater-plan.md`](notater-plan.md)), med
    ekstra felt per rad: `creator`/`role`/`free`/`caps`/`locked`/`shared`/
    `personalPos`/`ownerKey`, samt
    `invites_in`/`invites_out`. Rader med en optimistisk forlatt deling
@@ -250,8 +252,10 @@ samme nested `state` som før; synken går slik (`cloudCycle`):
    lokalt eller pusher delete på eierens rader mens `leave_share` er underveis.
 2. **3-veis fletting** (`reconcile(base, local, remote, opts)`) mot en
    base-snapshot (forrige serverkjente doc): felt-nivå LWW (gjenbruker
-   `merge*Scalar`/`mergeItem` fra v1, og `mergeIdea` for idéene) for rader som
-   finnes begge steder;
+   `merge*Scalar`/`mergeItem` fra v1, `mergeIdea` for idéene og
+   `mergeNoteProject`/`mergeNoteFolder`/`mergeNote` for notatene) for rader som
+   finnes begge steder; et NOTATDOKUMENT flettes som ÉN verdi på
+   innholdsregisteret — konflikten avgjøres per dokument, ikke per tegn;
    eksistens avgjøres 3-veis (base skiller «lokalt slettet» fra
    «fjern-opprettet»). `opts` bærer de tre vaktene under (gravsteiner, kjent
    base, fremmede rader).
@@ -269,6 +273,14 @@ samme nested `state` som før; synken går slik (`cloudCycle`):
    og med en ubetinget `cloudAgain` ble det en varm løkke som hamret
    `get_my_doc` + den samme avvisningen ~1 gang i sekundet. Blir noe avvist,
    overlates neste forsøk til det vanlige pollet.
+
+   Notatradene sorteres inn i den samme foreldre-før-barn-rekkefølgen
+   (bokhylle → notatbok → notat), og `pruneNoteParents` gjør for dem det
+   `pruneDanglingCats` gjør for kategoriene: en notatbok-peker som ikke treffer
+   nulles (notatet blir fritt), og en rad uten lesbar bokhylle tas ut av
+   doc-en i stedet for å bli hengende i en usynlig retry-løkke. Peker notatet
+   på en notatbok som FINNES, vinner notatbokens bokhylle — den samme regelen
+   serveren håndhever (`notes_fix_parent`), så de to kan ikke bli uenige.
 
    **Rekkefølge innen en tabell**: `items.cat_id`/`groups.cat_id` er
    fremmednøkler til SIN EGEN tabell, så `pushOps` sorterer kategorier FØR

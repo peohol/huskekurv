@@ -43,8 +43,9 @@ beskriver databasesiden.
 ## Datamodell
 
 Fire objekttabeller — `universes` > `groups` > `cards` (= «lister» i UI-et)
-> `items` — med `on delete cascade` nedover. (`ideas` er en femte innholdstabell
-uten forelder; se «Flere tabeller hører til BRUKEREN» under.) Hver rad har:
+> `items` — med `on delete cascade` nedover. (`ideas` og de tre notattabellene
+er innholdstabeller uten plass i dette treet; se «Flere tabeller hører til
+BRUKEREN» under.) Hver rad har:
 
 - `owner_id` — **oppretteren** (`created_by`). Uforanderlig (trigger-vakt), og
   gir **ingen** rettigheter. Kolonnenavnet er beholdt av migreringshensyn.
@@ -67,6 +68,7 @@ for et objekt to brukere har sammen:
 | Tabell | Hva den er | Klientvei |
 |---|---|---|
 | `ideas` | kontoens idéer og idékategorier ([`ideer.md`](ideer.md)) | RLS `owner_id = auth.uid()` |
+| `note_projects`, `note_folders`, `notes` | kontoens notater, Bokhylle > Notatbok > Notat ([`notater-plan.md`](notater-plan.md)) | RLS `owner_id = auth.uid()` |
 | `notifications` | varselhistorikken | RLS `user_id = auth.uid()` |
 | `notification_prefs` | de fire varselvalgene + generator-markøren | RLS `user_id = auth.uid()` |
 | `push_subscriptions` | ett abonnement per nettleserkontekst, med gjenkjennelig metadata | RLS på egne rader; skrives kun av RPC-ene |
@@ -80,6 +82,54 @@ tilgang fra — derfor står den her og ikke over. Skrivevakten
 (`ideas_before_update`) gjør bare det RLS ikke kan: holder registrene i orden
 og hindrer at oppretteren endres. `cat_id` peker på tabellens egen id
 (`on delete set null`, `deferrable initially deferred`).
+
+**De tre notattabellene** er innhold på samme måte som `ideas`: de er med i
+synk-doc-et, har de samme to LWW-registrene, og de samme gravstein- og
+insert-vaktene. Formen er notatenes eget tre:
+
+| Tabell | Forelder | Merk |
+|---|---|---|
+| `note_projects` | ingen | notatenes øverste nivå, som et område |
+| `note_folders` | `project_id` (`on delete cascade`) | mapper nøstes aldri i mapper |
+| `notes` | `project_id` (cascade) + `folder_id` (`on delete set null`) | `folder_id = null` → et FRITT notat rett i prosjektet |
+
+Begge forelder-pekerne følger POSISJONSREGISTERET (som `card_id`/`cat_id` på et
+listepunkt), og begge er `deferrable initially deferred` — doc-rekkefølgen er
+vilkårlig. `notes.body` er editorens dokument som `jsonb`; databasen lagrer det
+og tolker det ikke, og hele verdien rir på INNHOLDSREGISTERET, altså er
+konfliktmodellen per dokument.
+
+At notatboken og notatet ligger i MIN bokhylle er en egen betingelse i
+`note_folders_insert`/`notes_insert`/`-_update` (`exists (… owner_id =
+auth.uid())`), ikke bare i eierskapet på raden selv: uten den kunne en bruker
+hekte sin egen rad inn i en bokhylle hen ikke eier — usynlig for eieren, men
+bundet til raden hans av fremmednøkkelen. `supabase/tests/test-notes.sql` prøver
+nettopp det, i begge retninger.
+
+**De to forelder-pekerne på et notat kan heller ikke motsi hverandre.** RLS sier
+at både bokhyllen og notatboken er mine, men ikke at de hører sammen — og siden
+`notes.project_id` er `on delete cascade`, ville et notat som pekte på bokhylle
+A og en notatbok i bokhylle B blitt SLETTET når A forsvant, mens UI-et viste det
+under notatboken i B. To triggere håndhever invarianten:
+
+| Trigger | Gjør |
+|---|---|
+| `notes_parent_guard` / `notes_guard` (`notes_fix_parent`, og det samme leddet sist i `notes_before_update`) | ligger notatet i en notatbok, UTLEDES `project_id` av notatboken — ved både innsetting og oppdatering |
+| `note_folders_cascade` (`note_folders_after_update`) | flyttes en notatbok til en annen bokhylle, følger notatene med |
+
+`(pos_ts, pos_org)` er ETT UDELELIG REGISTER — `reg_newer` sammenligner
+tidsstempelet først og lar `org` bryte uavgjort — så kaskaden velger HELE PARET
+atomisk: er notatbokens register nyere, kopieres begge feltene; ellers beholdes
+begge. Å ta tidsstempelet fra det ene og `org` fra det andre ville laget et
+register som aldri har eksistert, og ved likt tidsstempel kunne det snudd hvem
+som vinner en senere skriving. `project_id` følger notatbokens bokhylle uansett:
+det er invarianten, ikke et register.
+
+Utledning, ikke avvisning: klienten skriver rad for rad gjennom PostgREST, hver
+skriving i sin egen transaksjon, så en avvisning ville gjort rekkefølgen mellom
+to uavhengige HTTP-kall til en del av kontrakten. Utledningen gir det samme
+svaret uansett rekkefølge, og er nøyaktig den samme regelen klienten leser med
+(`pruneNoteParents`).
 
 De to låste tabellene har ingen klientvei i det hele tatt: `push_deliveries`
 røres kun av senderens funksjoner (`service_role`), og `device_sessions` kun av
@@ -163,6 +213,25 @@ ALL i det den opprettes. Hver rettighet klienten ikke skal ha må trekkes
 tilbake med en eksplisitt `revoke` i `users-and-sharing.sql`. Matrisen står som
 kommentar rett over de setningene, og både smoke-testen og SQL-suiten har
 negative sjekker som slår ut hvis en `revoke` forsvinner.
+
+**RLS-uttrykk kaller `(select auth.uid())`, ikke `auth.uid()`.** Bar
+`auth.uid()` er volatil i et policy-uttrykk, og planleggeren kan kalle den PER
+RAD; pakket i et skalar-subselect blir den en InitPlan som kjøres én gang per
+statement. Svaret er det samme — økten er den samme gjennom hele statementet —
+men kostnaden vokser med tabellen, og Supabases `auth_rls_initplan` peker på
+nettopp det. Det gjelder også inne i `exists`-sjekkene for foreldre.
+Notattabellenes policyer voktes av smoke-testen, som teller at hver forekomst av
+`auth.uid()` i uttrykket står i et subselect.
+
+**Det samme gjelder FUNKSJONER, og der er standarden verre**: PostgreSQL gir
+hver ny funksjon EXECUTE til `public`. Triggerfunksjonene er `security definer`
+og gjør privilegerte ting (vakter, gravsteiner, kaskader) uten en egen
+autorisasjonssjekk — myndigheten ligger i skrivingen som utløste dem — så de
+skal ALDRI kunne kalles som RPC. Låsen er derfor GENERISK og ikke en liste:
+alt i `public` som returnerer `trigger` mister EXECUTE. En liste ville råtnet
+neste gang noen legger til en trigger. Smoke-testen sjekker det samme settet
+generisk, så en ny triggerfunksjon ikke kan komme inn ulåst. Triggerkjøringen
+er upåvirket — den hviler på TRIGGER-rettigheten på TABELLEN, ikke på EXECUTE.
 
 ## Deling (invitasjon → aksept → rolle)
 
@@ -287,7 +356,7 @@ Full modell: [`rettigheter-og-deling.md`](rettigheter-og-deling.md).
 | Kall | Rolle |
 |---|---|
 | `supabase.auth.signUp/signInWithPassword/…` | registrering/innlogging (bekreftelses-e-post håndteres av Supabase) |
-| `get_my_doc()` | hele brukerens datasett som ETT flatt jsonb-doc: universes/groups/cards/items + `role`, `free`, `personalPos`, `ownerKey`, `shared` og `caps` + invitasjoner + varsler/varselvalg |
+| `get_my_doc()` | hele brukerens datasett som ETT flatt jsonb-doc: universes/groups/cards/items + `role`, `free`, `personalPos`, `ownerKey`, `shared` og `caps` + idéer + noteProjects/noteFolders/notes + invitasjoner + varsler/varselvalg |
 | vanlige `insert/update/delete` på tabellene | CRUD med RLS + server-side LWW; klienten stempler `ts/org`-registrene som i dag |
 | `import_doc(doc)` | engangs-migrering av lokalt/legacy doc til egne data (deterministiske id-er per bruker, idempotent) |
 | `create_share_invite(type, id, email, role)` / `accept_share_invite(invite)` / `decline_share_invite` / `revoke_share_invite` | delingsflyt, medlem eller eierskap; aksept krever ingen plassering |
