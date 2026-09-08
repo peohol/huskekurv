@@ -214,6 +214,15 @@ tilbake med en eksplisitt `revoke` i `users-and-sharing.sql`. Matrisen står som
 kommentar rett over de setningene, og både smoke-testen og SQL-suiten har
 negative sjekker som slår ut hvis en `revoke` forsvinner.
 
+**RLS-uttrykk kaller `(select auth.uid())`, ikke `auth.uid()`.** Bar
+`auth.uid()` er volatil i et policy-uttrykk, og planleggeren kan kalle den PER
+RAD; pakket i et skalar-subselect blir den en InitPlan som kjøres én gang per
+statement. Svaret er det samme — økten er den samme gjennom hele statementet —
+men kostnaden vokser med tabellen, og Supabases `auth_rls_initplan` peker på
+nettopp det. Det gjelder også inne i `exists`-sjekkene for foreldre.
+Notattabellenes policyer voktes av smoke-testen, som teller at hver forekomst av
+`auth.uid()` i uttrykket står i et subselect.
+
 **Det samme gjelder FUNKSJONER, og der er standarden verre**: PostgreSQL gir
 hver ny funksjon EXECUTE til `public`. Triggerfunksjonene er `security definer`
 og gjør privilegerte ting (vakter, gravsteiner, kaskader) uten en egen

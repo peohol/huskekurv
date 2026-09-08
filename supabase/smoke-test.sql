@@ -402,6 +402,30 @@ begin
     end if;
   end loop;
 
+  /* RLS-UTTRYKKENE PÅ NOTATTABELLENE SKAL BRUKE `(select auth.uid())`.
+     Bar `auth.uid()` er volatil, og planleggeren kan kalle den PER RAD;
+     pakket i et skalar-subselect blir den en InitPlan som kjøres én gang per
+     statement (Supabases `auth_rls_initplan`). Svaret er det samme — økten er
+     den samme gjennom hele statementet — men kostnaden vokser med tabellen.
+     Sjekken teller: hver forekomst av `auth.uid()` i policy-uttrykket må være
+     en `SELECT auth.uid()`. De eldre tabellenes policyer er utenfor denne
+     sjekken; her voktes de nye. */
+  for tg in
+    with uttrykk as (
+      select p.tablename || ':' || p.policyname as navn,
+             coalesce(p.qual, '') || ' ' || coalesce(p.with_check, '') as txt
+        from pg_policies p
+       where p.schemaname = 'public'
+         and p.tablename in ('note_projects', 'note_folders', 'notes')
+    )
+    select navn from uttrykk
+     -- antall `auth.uid()` i det hele tatt  vs.  antall som står i et subselect
+     where (length(txt) - length(replace(txt, 'auth.uid()', ''))) / length('auth.uid()')
+        <> (length(txt) - length(replace(txt, 'SELECT auth.uid()', ''))) / length('SELECT auth.uid()')
+  loop
+    feil := array_append(feil, 'policyen ' || tg || ' kaller auth.uid() direkte (skal være (select auth.uid()))');
+  end loop;
+
   /* TRIGGERFUNKSJONENE ER IKKE RPC-ER. Alle er `security definer` og gjør
      privilegerte ting uten en egen autorisasjonssjekk, og PostgreSQL gir hver
      ny funksjon EXECUTE til `public` som standard. Sjekken er GENERISK — alt i

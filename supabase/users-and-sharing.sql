@@ -2115,14 +2115,20 @@ create policy ideas_delete on public.ideas
 -- følger av det samme vilkåret på forelderraden: en bruker kan ikke skrive en
 -- rad som peker inn i et prosjekt hen ikke eier uten selv å eie raden, og
 -- forelderen er uansett usynlig for hen.
+-- `(select auth.uid())`, IKKE `auth.uid()`. Bar `auth.uid()` er en volatil
+-- funksjon i policy-uttrykket, og planleggeren kan da kalle den PER RAD; pakket
+-- i et skalar-subselect blir den en InitPlan som kjøres ÉN gang per statement.
+-- Svaret er det samme (økten er den samme gjennom hele statementet), men
+-- kostnaden vokser med tabellen — det er nettopp dette Supabases
+-- `auth_rls_initplan` peker på. Det gjelder også inne i `exists`-sjekkene.
 create policy note_projects_select on public.note_projects
-  for select using (owner_id = auth.uid());
+  for select using (owner_id = (select auth.uid()));
 create policy note_projects_insert on public.note_projects
-  for insert with check (owner_id = auth.uid());
+  for insert with check (owner_id = (select auth.uid()));
 create policy note_projects_update on public.note_projects
-  for update using (owner_id = auth.uid()) with check (owner_id = auth.uid());
+  for update using (owner_id = (select auth.uid())) with check (owner_id = (select auth.uid()));
 create policy note_projects_delete on public.note_projects
-  for delete using (owner_id = auth.uid());
+  for delete using (owner_id = (select auth.uid()));
 
 -- Forelderen må være MIN. Uten det kunne en rad hektes inn i et prosjekt/en
 -- mappe som tilhører noen andre: raden ville vært usynlig for eieren av
@@ -2130,38 +2136,44 @@ create policy note_projects_delete on public.note_projects
 -- forelderen til en rad hen ikke kan se. Vilkåret gjelder både insert og
 -- update, slik at en flytting heller ikke kan krysse kontogrensen.
 create policy note_folders_select on public.note_folders
-  for select using (owner_id = auth.uid());
+  for select using (owner_id = (select auth.uid()));
 create policy note_folders_insert on public.note_folders
-  for insert with check (owner_id = auth.uid()
+  for insert with check (owner_id = (select auth.uid())
                          and exists (select 1 from public.note_projects p
-                                      where p.id = project_id and p.owner_id = auth.uid()));
+                                      where p.id = project_id
+                                        and p.owner_id = (select auth.uid())));
 create policy note_folders_update on public.note_folders
-  for update using (owner_id = auth.uid())
-  with check (owner_id = auth.uid()
+  for update using (owner_id = (select auth.uid()))
+  with check (owner_id = (select auth.uid())
               and exists (select 1 from public.note_projects p
-                           where p.id = project_id and p.owner_id = auth.uid()));
+                           where p.id = project_id
+                             and p.owner_id = (select auth.uid())));
 create policy note_folders_delete on public.note_folders
-  for delete using (owner_id = auth.uid());
+  for delete using (owner_id = (select auth.uid()));
 
 create policy notes_select on public.notes
-  for select using (owner_id = auth.uid());
+  for select using (owner_id = (select auth.uid()));
 create policy notes_insert on public.notes
-  for insert with check (owner_id = auth.uid()
+  for insert with check (owner_id = (select auth.uid())
                          and exists (select 1 from public.note_projects p
-                                      where p.id = project_id and p.owner_id = auth.uid())
+                                      where p.id = project_id
+                                        and p.owner_id = (select auth.uid()))
                          and (folder_id is null
                               or exists (select 1 from public.note_folders f
-                                          where f.id = folder_id and f.owner_id = auth.uid())));
+                                          where f.id = folder_id
+                                            and f.owner_id = (select auth.uid()))));
 create policy notes_update on public.notes
-  for update using (owner_id = auth.uid())
-  with check (owner_id = auth.uid()
+  for update using (owner_id = (select auth.uid()))
+  with check (owner_id = (select auth.uid())
               and exists (select 1 from public.note_projects p
-                           where p.id = project_id and p.owner_id = auth.uid())
+                           where p.id = project_id
+                             and p.owner_id = (select auth.uid()))
               and (folder_id is null
                    or exists (select 1 from public.note_folders f
-                               where f.id = folder_id and f.owner_id = auth.uid())));
+                               where f.id = folder_id
+                                 and f.owner_id = (select auth.uid()))));
 create policy notes_delete on public.notes
-  for delete using (owner_id = auth.uid());
+  for delete using (owner_id = (select auth.uid()));
 
 -- memberships: egen rad (personlig posisjon, forlate) + eiere som administrerer
 -- medlemslisten. Opprettelse skjer KUN via SECURITY DEFINER-veiene (aksept av
