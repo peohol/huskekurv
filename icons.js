@@ -431,4 +431,27 @@ window.ICONS = {
     '<path d="M6.3 7.5l.9 11a2 2 0 0 0 2 1.9h5.6a2 2 0 0 0 2-1.9l.9-11"></path>' +
     '<path d="M9.7 11v6"></path><path d="M12 11v6"></path><path d="M14.3 11v6"></path>' +
     '</svg>',
+
+  /* ARKIVKASSEN (docs/notater-plan.md). Motivet er en kasse med lokk — noe
+     som er lagt bort, ikke kastet: den skal ikke kunne forveksles med
+     søppelkassen ved siden av. Ingen NY motivfarge: lokket er mappens
+     manila-tan (`#c9a06a`) og kroppen er «papir» (`#ffffff`), som snur med
+     drakten på samme måte som notatarket og listekortet
+     (docs/mork-drakt.md, «Ikonfargene»). */
+  archive: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="3.2" y="4" width="17.6" height="4.4" rx="1.2" fill="#c9a06a"></rect>' +
+    '<path d="M4.8 8.4h14.4V19a1.6 1.6 0 0 1-1.6 1.6H6.4A1.6 1.6 0 0 1 4.8 19Z" fill="#ffffff"></path>' +
+    '<rect x="3.2" y="4" width="17.6" height="4.4" rx="1.2"></rect>' +
+    '<path d="M4.8 8.4h14.4V19a1.6 1.6 0 0 1-1.6 1.6H6.4A1.6 1.6 0 0 1 4.8 19Z"></path>' +
+    '<path d="M9.8 12.2h4.4"></path>' +
+    '</svg>',
+
+  /* KOBLINGEN mellom en liste og et notat: to ledd som griper i hverandre.
+     Samme tegning som lenkeverktøyet i notat-editoren, men med Huskis'
+     ikonstrek og uten `currentColor` — den står i chips og menyrader, ikke i
+     en verktøylinje. */
+  link: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.35" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M10 13.5a3.6 3.6 0 0 0 5.1 0l2.6-2.6a3.6 3.6 0 0 0-5.1-5.1L11.4 7"></path>' +
+    '<path d="M14 10.5a3.6 3.6 0 0 0-5.1 0l-2.6 2.6a3.6 3.6 0 0 0 5.1 5.1L12.6 17"></path>' +
+    '</svg>',
 };

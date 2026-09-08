@@ -478,6 +478,19 @@ function firstWhere(samples, pred) {
     log('E3 ingen flimring gjennom tom + ettradig liste', new Set(visits).size === visits.length, dedup.join(' → '));
     await ptr(p, 'pointercancel', z.x, z.y, 'touch'); await p.waitForTimeout(200);
 
+    /* Et AVBRUTT drag skal ikke etterlate ekstraheringsmodus. dnd-kit kan
+       levere et `dragmove`/`dragover` ETTER `dragend` (retur-animasjonen er
+       fortsatt på vei), og en politikkrunde der malte modusen på nytt: både
+       `is-extracting` og ny-liste-stripa ble stående på et board i hvile, og
+       NESTE drag startet i feil modus — raden under landet da ikke i den tomme
+       lista. `dndRowPolicy` gjør derfor ingenting når draget er over. */
+    const etterAvbrudd = await p.evaluate(() => ({
+      kl: [...document.body.classList].filter((c) => c.indexOf('is-') === 0),
+      stripe: !!document.querySelector('.new-list-placeholder'),
+    }));
+    log('E0 et avbrutt drag lar ingen ekstraheringsmodus bli stående',
+      etterAvbrudd.kl.length === 0 && !etterAvbrudd.stripe, JSON.stringify(etterAvbrudd));
+
     // …og et slipp midt i den tomme lista lander faktisk der.
     const z3 = await liftItem(p, '.item[data-id="card-0-b"]', 'touch');
     const empty = await centerOf(p, '.card[data-id="card-1"]');

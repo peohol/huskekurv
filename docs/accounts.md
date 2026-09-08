@@ -242,8 +242,9 @@ samme nested `state` som før; synken går slik (`cloudCycle`):
 
 1. **Pull**: `get_my_doc()` → ett flatt doc (universes/groups/cards/items —
    pluss `ideas`, kontoens egne rader uten forelder i hierarkiet, se
-   [`ideer.md`](ideer.md), og `noteProjects`/`noteFolders`/`notes`, notatenes
-   eget tre, se [`notater-plan.md`](notater-plan.md)), med
+   [`ideer.md`](ideer.md), `noteProjects`/`noteFolders`/`notes`, notatenes
+   eget tre, og `links`, koblingene mellom de to hoveddelene — se
+   [`notater-plan.md`](notater-plan.md)), med
    ekstra felt per rad: `creator`/`role`/`free`/`caps`/`locked`/`shared`/
    `personalPos`/`ownerKey`, samt
    `invites_in`/`invites_out`. Rader med en optimistisk forlatt deling
@@ -255,7 +256,9 @@ samme nested `state` som før; synken går slik (`cloudCycle`):
    `merge*Scalar`/`mergeItem` fra v1, `mergeIdea` for idéene og
    `mergeNoteProject`/`mergeNoteFolder`/`mergeNote` for notatene) for rader som
    finnes begge steder; et NOTATDOKUMENT flettes som ÉN verdi på
-   innholdsregisteret — konflikten avgjøres per dokument, ikke per tegn;
+   innholdsregisteret — konflikten avgjøres per dokument, ikke per tegn; en
+   KOBLING har ingen felter å flette (`mergeLink` tar serverens rad uendret),
+   så den skriver aldri en update — der er det gravsteinene som avgjør;
    eksistens avgjøres 3-veis (base skiller «lokalt slettet» fra
    «fjern-opprettet»). `opts` bærer de tre vaktene under (gravsteiner, kjent
    base, fremmede rader).

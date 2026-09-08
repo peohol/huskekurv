@@ -140,6 +140,22 @@ async function settle(p, rounds = 3) {
     await syncIdle(p);
   }
 }
+/* Vent til klienten FAKTISK har raden, ikke bare til pillen står stille.
+   `syncIdle` svelger sin egen timeout (6 s) med vilje — den er en «gi runden en
+   sjanse», ikke et bevis — så på en travel CI-runner kan alle tre rundene i
+   `settle` ende som «ventet forgjeves» og la påstanden kjøre før den andre
+   delte mappen har landet. Det er akkurat den forvekslingen tests/CLAUDE.md
+   advarer mot: vent på TILSTAND, ikke på klokka. Runder kjøres videre til
+   raden er der. Selve påstanden står urørt — er raden aldri der, går den rødt
+   som før. */
+async function waitForLocalCard(p, id, ms = 20000) {
+  const t0 = Date.now();
+  for (;;) {
+    if (await localCard(p, id)) return true;
+    if (Date.now() - t0 > ms) return false;
+    await settle(p, 1);
+  }
+}
 async function waitForServerRow(p, id, ms = 14000) {
   const t0 = Date.now();
   for (;;) {
@@ -190,6 +206,8 @@ async function run(label, vp, mobile) {
     for (const id of ids) await H.client.rpc('accept_share_invite', { p_invite: id });
   }, invites);
   await settle(recip);
+  await waitForLocalCard(recip, ID.shared);
+  await waitForLocalCard(recip, ID.revoked);
   log(label + ' 0: mottakeren ser begge de delte listene',
     await localCard(recip, ID.shared) && await localCard(recip, ID.revoked));
   log(label + ' 0: … og vet at de tilhører en annen (_createdByMe = false)',

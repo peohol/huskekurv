@@ -53,11 +53,11 @@ kort — de SAMME kortene som listene, ikke en egen korttype:
 - klikk-og-hold / eksisterende pekersemantikk starter DnD;
 - omrokering skal bruke samme grunnprinsipp som omrokering av lister i en mappe.
 
-Et notatkort skal få en `×`-knapp som åpner en liten popover med **Arkiver** og
-**Slett** (PR 2). Sletting bruker Huskis' søppelkassemodell. Arkivering flytter
-notatet til et arkiv hvor det kan gjenopprettes eller slettes videre. I PR 1
-finnes ingen av dem: `trashed` ligger i modellen, men det er ingen vei til den
-fra UI-et.
+Notatkortet har den SAMME menyknappen som resten av appen (tre prikker,
+`.obj-menu-btn` → `#obj-menu`): der ligger «Endre navn», «Flytt», «Koblinger»,
+«Arkiver» og «Slett». Ingen egen popover-type ble innført —
+[`menus.md`](menus.md) er autoritativ for radene. Har notatet koblinger, står
+det en liten chip med antallet i kortkroppen, under utdraget.
 
 ## Oppretting
 
@@ -148,51 +148,104 @@ et eget senere prosjekt.
 
 ## Globalt søk
 
-Dagens globale søk utvides slik at det kan søke i både Lister og Notater.
+Det globale søket dekker BEGGE hoveddelene, og det er fortsatt ÉN funksjon:
+én indeks, én rangering, én resultatliste. Scopevalget **Alt | Lister |
+Notater** er et filter over den samme indeksen, ikke en andre søkemotor. `Alt`
+er standard.
 
-Søkemodalen får et enkelt scopevalg:
+Notatsiden bidrar med tre typer — bokhylle, notatbok og notat — og notatet er
+den eneste typen med et ANDRE felt å matche mot: den lesbare teksten i
+dokumentet. Et teksttreff rangeres etter alle navnetreff og viser setningen i
+et utdrag, så raden forklarer seg selv.
 
-**Alt | Lister | Notater**
+Et treff åpner riktig objekt uansett hvilken fane man står i: `navigateToObject`
+bytter hoveddel selv. Et notattreff åpner EDITOREN — kortet er en
+forhåndsvisning, notatet er editoren.
 
-`Alt` er standard. Notatsøk skal minst indeksere tittel og lesbar tekst fra
-innholdet. Treffer skal navigere direkte til riktig objekt eller åpne riktig
-notat. Det skal ikke bygges en separat søkemotor for Notater dersom dagens
-søkemotor kan utvides.
+Autoritativt: [`sok-og-navigering.md`](sok-og-navigering.md).
 
 ## Koblinger mellom Lister og Notater
 
-Lister og Notater skal kunne kobles på tvers.
+En **kobling** er en RELASJON mellom ett objekt på notatsiden (bokhylle,
+notatbok, notat) og ett på listesiden (område, mappe, liste). Den flytter
+ingenting og eier ingenting: begge objektene beholder foreldrene sine, og begge
+kan inngå i vilkårlig mange koblinger — mange-til-mange, begge veier.
 
-Et notat eller en notatbok skal kunne kobles til relevante objekter i
-listefanen, minst område, mappe og liste. Koblinger skal kunne opprettes fra
-begge retninger.
+**Modellen er (type, id) på hver side**, ikke et felt på objektet. Det er dét
+som gjør den utvidbar: en ny koblingsbar type senere er ett ord i
+`LINK_NOTE_KINDS`/`LINK_LIST_KINDS` og én kolonne i databasen, ikke en
+ombygging av koblingssystemet.
 
-Koblinger er ekte objektrelasjoner, ikke bare tekst-URL-er. Modellen skal være
-mange-til-mange:
+I databasen er hver side sin EGEN fremmednøkkel (`object_links`, seks nullbare
+kolonner med nøyaktig én satt per side og `on delete cascade` på alle). Det
+koster tre kolonner per side, men gir noe et tekstpar aldri kan gi: databasen
+selv garanterer at et koblingsmål finnes, og en kobling til noe som slettes for
+godt forsvinner i samme øyeblikk — med sin egen gravstein. Det finnes derfor
+ingen hengende koblinger å rydde, verken i klienten eller på serveren.
+Autoritativt: [`arkitektur-brukere-deling.md`](arkitektur-brukere-deling.md).
 
-- ett notat kan kobles til flere listeobjekter;
-- ett listeobjekt kan kobles til flere notater/notatbøker;
-- koblingen endrer ikke notatets faktiske plassering i notathierarkiet;
-- klikk på en kobling navigerer til det koblede objektet.
+**Koblingen har ingen mutable felter**: den finnes eller den finnes ikke.
+Derfor ingen UPDATE-policy, ingen UPDATE-grant og ingen konfliktfletting —
+konflikten avgjøres av gravsteinene, som for et permanent slettet objekt. Det
+finnes heller ingen unik indeks på paret: to enheter som lager den samme
+koblingen offline ville ellers fått den ene skrivingen permanent avvist. Klienten
+viser og fjerner koblinger PER PAR, så en dublett er usynlig.
 
-Detaljert UI for koblinger avgjøres under implementering med gjenbruk av
-Huskis' eksisterende menyer og navigasjonsmønstre som førstevalg.
+**UI-et er én modal og én rad.** «Koblinger» i objektmenyen (på begge sider)
+åpner `#links-modal`: øverst koblingene som finnes — trykk åpner målet, ✕
+fjerner koblingen — og under dem det GLOBALE SØKET scopet til den andre siden.
+Å velge et treff lager koblingen. Ingen egen søkemotor, ingen ny modaltype. En
+chip med antallet står på objektet når det har koblinger.
+
+**Oppførsel ved livssyklus:**
+
+| Hendelse | Hva som skjer med koblingen |
+|---|---|
+| målet **flyttes** | ingenting — koblingen peker på id-en, ikke på plasseringen |
+| målet **arkiveres** eller **legges i søppelkassen** | koblingen består, men raden vises som «Ikke tilgjengelig» og kan ikke åpnes; den kommer tilbake når målet gjør det |
+| målet **gjenopprettes** | koblingen virker igjen, uendret |
+| målet **slettes for godt** | koblingen slettes av databasens kaskade, og id-en gravlegges |
+| målet er **utilgjengelig for meg** (et delt område jeg har mistet tilgangen til) | samme visning som over — raden står, men kan ikke åpnes |
+| **samtidige endringer** | opprett vinner over ingenting; en fjerning gravlegger id-en, og en enhet som fortsatt har den lokalt får PT409 og gravlegger den selv |
+
+En innsetting som likevel skulle møte et mål som er borte (kappløpet mellom to
+synk-runder) avvises av fremmednøkkelen (23503). Klienten behandler DET som et
+endelig svar for en kobling — den gravlegger raden lokalt i stedet for å prøve
+igjen i det uendelige, nøyaktig som for en gravlagt id.
 
 ## Arkiv og søppelkasse
 
-Notater får både arkiv og søppelkasse:
+Alle tre nivåene — bokhylle, notatbok og notat — har BEGGE deler, som to
+uavhengige tilstander på den samme raden (`archived` og `trashed`, begge på
+innholdsregisteret):
 
-- **Arkiver** skjuler notatet fra normalvisningen og gjør det tilgjengelig i et
-  eget arkiv;
-- fra arkivet kan notatet gjenopprettes eller slettes;
-- **Slett** følger Huskis' etablerte søppelkassemodell, inkludert trygg
-  gjenoppretting og permanent sletting etter eksisterende prinsipper.
+- **Arkiver** legger objektet til side. Det er fortsatt levende innhold; det
+  står bare ikke i normalvisningen. Veien tilbake er arkivet, som ligger som en
+  egen knapp rett ved siden av søppelkassen på samme nivå.
+- **Slett** følger Huskis' etablerte søppelkassemodell uendret: optimistisk
+  sletting med angre-toast, gjenoppretting, og gravstein først ved tømming.
 
-Livssyklusen gjelder ALLE TRE NIVÅENE — bokhylle, notatbok og notat. Ingen av
-dem kan fjernes i dag, og PR 2 skal dekke dem alle: arkiv og søppelkasse for
-notatet, og en konsistent sletting/gjenoppretting for de to foreldrenivåene.
-Implementeringen må unngå foreldreløse notater og uklare regler ved
-sletting/gjenoppretting av en forelder.
+De to kan stå samtidig: et arkivert notat kan legges i søppelkassen og
+gjenopprettes tilbake til arkivet det lå i.
+
+**Begge er slippmål.** Drar man et objekt, folder BEGGE kassene seg ut — også
+den tomme — og et slipp i arkivet arkiverer akkurat som et slipp i kassen
+sletter. Det er det samme maskineriet med to betydninger og to farger
+([`drag-and-drop.md`](drag-and-drop.md)).
+
+**Flaggene arves ikke nedover.** En bortlagt bokhylle skjuler notatbøkene og
+notatene sine uten å flagge dem — akkurat som en slettet mappe skjuler listene
+sine — og gir dem tilbake ved gjenoppretting. Derfor er hver kasse og hvert
+arkiv scopet til en LEVENDE forelder, så en gjenoppretting alltid gjør objektet
+synlig igjen. Et notat i en bortlagt notatbok blir heller ikke et fritt notat:
+det følger notatboken ut av visningen.
+
+**Tømmingen er det ene stedet hierarkiet er rekursivt**, og den følger
+databasens kaskader: en tømt bokhylle tar notatbøkene og notatene med seg, mens
+en tømt NOTATBOK etterlater notatene som frie notater i bokhyllen. Et notat er
+et dokument brukeren har skrevet; notatboken er hylla det sto i.
+
+Autoritativt for hele mekanikken: [`trash.md`](trash.md).
 
 ## Deling og rettigheter
 
@@ -266,16 +319,17 @@ Slik ble det:
 - **Editoren** er én `contenteditable` med nettleserens egen `execCommand`
   (tagger, ikke inline-stiler), og alt som kommer inn — innliming inkludert —
   leses tilbake gjennom den samme trakten. Autosave, ingen Lagre-knapp.
-- **Lenker** er merket tekst med adressen i `data-url`, ikke ankere: Huskis'
-  UI produserer fortsatt ingen utgående lenker
-  ([`domains-and-urls.md`](domains-and-urls.md)). Å ÅPNE en notatlenke hører til
-  PR 3, sammen med mobilskallets ruting.
+- **Lenker i notatteksten** er merket tekst med adressen i `data-url`, ikke
+  ankere: Huskis' UI produserer fortsatt ingen utgående lenker
+  ([`domains-and-urls.md`](domains-and-urls.md)). Å ÅPNE en slik lenke hører
+  til PR 3, sammen med mobilskallets ruting. (Det er noe helt annet enn
+  KOBLINGENE i PR 2, som peker på Huskis' egne objekter.)
 - **Notatkortene er LISTEKORT**: samme kolonnemotor, samme pakkerekkefølge
   (venstre kolonne først) og samme posisjonsbaserte palettfarge — ingen
   særregler for notater ([`board-layout.md`](board-layout.md)).
-- **Sletting av notater/notatbøker/bokhyller er IKKE med.** Den hører sammen med
-  arkivet og søppelkassen i PR 2, og en «slett» uten en kasse å hente fra igjen
-  ville vært tap av data uten vei tilbake.
+- **Sletting av notater/notatbøker/bokhyller var IKKE med.** Den hørte sammen
+  med arkivet og søppelkassen, og en «slett» uten en kasse å hente fra igjen
+  ville vært tap av data uten vei tilbake. Begge kom i PR 2.
 
 Dekket av `tests/notes-tab.test.js` (nettleser, desktop + mobil) og
 `supabase/tests/test-notes.sql` (RLS, LWW, forelder-invarianten, gravsteiner,
@@ -288,7 +342,7 @@ kontosletting).
 Omfang:
 
 - arkiv, gjenoppretting og sletting for ALLE TRE NIVÅENE — bokhylle, notatbok
-  og notat. Ingen av dem kan fjernes i dag;
+  og notat;
 - notatsøppelkasse etter eksisterende Huskis-prinsipper;
 - globalt søk med `Alt | Lister | Notater`;
 - søk i notattittel og tekstinnhold;
@@ -299,7 +353,41 @@ Omfang:
   aktiv hovedfane;
 - nødvendig dokumentasjon og regresjonstesting.
 
-Status: **ikke startet**.
+Status: **gjennomført**.
+
+Slik ble det:
+
+- **To uavhengige tilstander per notatobjekt**, begge på innholdsregisteret:
+  `archived` (lagt til side) og `trashed` (søppelkassen). Et arkivert notat kan
+  legges i søppelkassen og komme tilbake til arkivet det lå i. Ingen av
+  flaggene arves nedover — en bortlagt forelder skjuler innholdet sitt uten å
+  flagge det, og gir det tilbake ved gjenoppretting, akkurat som en slettet
+  mappe skjuler listene sine.
+- **Tømmingen følger databasens kaskader, ikke omvendt.** En tømt bokhylle tar
+  notatbøkene og notatene med seg (`notes.project_id` er `not null` + cascade);
+  en tømt NOTATBOK etterlater notatene som frie notater (`folder_id` er
+  `on delete set null`). Et notat er et dokument brukeren har skrevet, og en
+  notatbok er hylla det sto i.
+- **Ingen nye kontrollmønstre.** Kassene og arkivene er `.trashcan` på de samme
+  tre plassene listenes kasser står ([`trash.md`](trash.md)), arkivet låner
+  søppelkasse-modalen, og alle tre notatnivåene fikk den eksisterende
+  objektmenyen ([`menus.md`](menus.md)). Dra-til-kassen OG dra-til-arkivet
+  virker på alle tre.
+- **Søket er fortsatt ÉN funksjon.** Scopevalget er et filter over den samme
+  indeksen, og `navigateToObject` bytter hoveddel selv — et treff virker
+  uansett hvilken fane man står i.
+- **Koblingene er en egen tabell med én fremmednøkkel per side**
+  (`object_links`), ikke et felt på objektene. Databasen garanterer dermed at et
+  koblingsmål finnes, og `on delete cascade` gjør en hengende kobling umulig.
+  Raden har ingen mutable felter, så den har verken UPDATE-policy eller
+  konfliktfletting — gravsteinene avgjør.
+- **Deling er fortsatt ikke med.** Notatene hører til kontoen alene, og
+  koblingene er den enkelte brukerens egne krysshenvisninger.
+
+Dekket av `tests/notes-lifecycle-links.test.js` (nettleser, desktop + mobil),
+`supabase/tests/test-note-links.sql` (arkivregisteret, RLS mellom to brukere,
+kaskadene, gravsteinene, kontosletting) og
+`tests/notes-tab.test.js` som regresjonsvern for PR 1.
 
 ### PR 3 — Deling, robusthet og polering
 
@@ -307,12 +395,15 @@ Status: **ikke startet**.
 
 Omfang vurderes mot faktisk produktbehov etter PR 1–2, men forventes å omfatte:
 
-- deling/rettigheter for bokhylle, notatbok og notat;
+- deling/rettigheter for bokhylle, notatbok og notat — og hva en kobling betyr
+  når det ene objektet er delt og det andre ikke er det;
 - flerbruker- og konfliktatferd;
 - offline/redigering under nettverksbrudd;
 - Android/Capacitor-regresjoner;
 - tilgjengelighet og tastaturnavigasjon;
 - endelig mobilpolering;
+- å ÅPNE en lenke i et notat, sammen med mobilskallets ruting (PR 1 lot
+  adressen ligge i `data-url` uten en vei ut);
 - eventuell import/eksport av enkeltstående notater som filer.
 
 Sanntids samarbeid i samme dokument inngår ikke automatisk i dette steget.
@@ -346,10 +437,21 @@ databasekontrakten; døp dem ikke om.
 | Leveranse | Status |
 |---|---|
 | PR 1 — Fundament + fungerende Notater-fane | **Gjennomført** |
-| PR 2 — Livssyklus + integrasjon | Ikke startet |
+| PR 2 — Livssyklus + integrasjon | **Gjennomført** |
 | PR 3 — Deling, robusthet og polering | Ikke startet |
 
-**Neste steg:** PR 2 — livssyklus og integrasjon. Det første som mangler for en
-bruker er å kunne FJERNE noe: arkiv og søppelkasse hører sammen, og PR 1 lot
-begge stå ute med vilje. Livssyklusen i PR 2 gjelder alle tre nivåene — bokhylle,
-notatbok og notat.
+**Neste steg:** PR 3 — deling, robusthet og polering. Notatene er nå en hel del
+av appen for ÉN bruker: de kan legges bort og hentes fram igjen, de finnes i
+søket, og de henger sammen med listene. Det som står igjen er å slippe andre
+til — og da må det avgjøres hva en kobling betyr når det ene objektet er delt
+og det andre ikke er det.
+
+**Datamodellen forbereder ting som IKKE er implementert.** Det er ikke det
+samme som ferdig:
+
+- `object_links` kan bære flere typer per side enn de seks som finnes i dag —
+  men bare de seks er koblingsbare nå.
+- Notatradene har `owner_id` og de samme registrene som delt innhold — men det
+  finnes ingen roller, ingen capabilities og ingen delings-UI for dem.
+- Lenker i et notat lagres med adressen i `data-url` — men UI-et åpner dem
+  fortsatt ikke.

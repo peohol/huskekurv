@@ -17,6 +17,12 @@
      `!important`, så en rotasjon lagt der ville forsvunnet uten at noe annet
      feilet. Nav-modalens to nivåer måles motsatt: der er draget låst til én
      akse, og da males det UTEN rotasjon (`dnd-vertical-axis`).
+     Og løftet gjelder HELE den malte flaten, ikke bare det ytterste laget:
+     notatkortet er tre flater oppå hverandre (kortfargen, korthodet, platen
+     utdraget står på), og med bare den ytterste sluppet gjennom leser det
+     løftede kortet som ugjennomsiktig. Måles på notatkortet i BEGGE drakter og
+     på BEGGE viewportene — hodet er ugjennomsiktig i lys drakt uten regelen,
+     platen i mørk.
   7. To hvile-regler må vike for det LØFTEDE objektet, og de sier det med
      dnd-kits krok — ikke med en klasse:
        a) MØRK drakt gir et hvilende listepunkt en svak inset-kant
@@ -91,6 +97,33 @@ async function seed(p, cards) {
     H.render();
   }, cards);
   await p.waitForTimeout(300);
+}
+
+/* Ett notatkort med utdrag: notatfanens kort er det eneste stedet der alle tre
+   malte lagene (kortflaten, hodet, platen) står oppå hverandre på ett objekt. */
+async function seedNote(p) {
+  const id = await p.evaluate(() => {
+    const H = window.__huskis;
+    H.setMainTab('notes');
+    const proj = H.addNoteProject();
+    proj.name = 'Fagstoff';
+    H.setActiveProject(proj.id);
+    H.setActiveNoteFolder(null);
+    const n = H.addNote();
+    H.closeNoteEditor();
+    n.title = 'Blodprøver';
+    n.doc = { v: 1, blocks: [{ t: 'p', c: [{ s: 'Hemoglobin og ferritin måles på nytt.' }] }] };
+    H.save();
+    H.renderNotes();
+    return n.id;
+  });
+  await p.evaluate(() => window.__huskis.closeNotesNav());
+  // Utdraget MÅ stå malt: uten det finnes ikke platen denne sjekken måler.
+  await p.waitForFunction((id) => {
+    const el = document.querySelector('#notes-board .note-card[data-id="' + id + '"] .note-card-excerpt');
+    return !!el && !el.hidden;
+  }, id, { timeout: 6000, polling: 100 });
+  return id;
 }
 
 const centerOf = (p, sel) => p.evaluate((sel) => {
@@ -347,6 +380,55 @@ const log = (n, ok, x = '') => { results.push(ok); console.log((ok ? 'PASS' : 'F
     await p.waitForTimeout(600);
 
     log('6 ingen JS-feil', errs.length === 0, errs.join(' | '));
+    await p.close();
+  }
+
+  /* ===== 6 notat) HELE den malte flaten slipper lys gjennom =====
+
+     Notatkortet er tre flater oppå hverandre — kortfargen, korthodets eget hakk
+     og platen utdraget står på — og hodet + platen dekker nesten hele kortet.
+     Slipper bare den ytterste gjennom, er løftet i praksis ugjennomsiktig og
+     man ser ikke hvor slippet lander. Begge drakter måles: uten regelen er
+     HODET ugjennomsiktig i lys drakt og PLATEN i mørk (`--plate` er hvitt med
+     alfa i lys, en solid tone i mørk). Begge viewportene måles fordi
+     notatfanen er det ene board-et som også står alene på mobil. */
+  for (const M of [{ n: 'desktop', vw: 1200, vh: 900, mob: false },
+                   { n: 'mobil', vw: 390, vh: 780, mob: true }]) {
+    const p = await b.newPage({ viewport: { width: M.vw, height: M.vh }, hasTouch: true, isMobile: M.mob });
+    const errs = []; p.on('pageerror', (e) => errs.push(e.message));
+    await register(p);
+    const nid = await seedNote(p);
+    const sel = '#notes-board .note-card[data-dnd-dragging]';
+
+    for (const drakt of ['light', 'dark']) {
+      // Eksplisitt valg, ikke systemets (docs/mork-drakt.md).
+      await p.evaluate((d) => document.documentElement.setAttribute('data-theme', d), drakt);
+      await p.waitForTimeout(180);
+      const c = await centerOf(p, '#notes-board .note-card[data-id="' + nid + '"] .note-card-head');
+      await G.lift(p, { x: c.x, y: c.y }, true);
+      await G.touchMove(p, c.x, c.y + 40); await p.waitForTimeout(120);
+      const lag = {
+        kort: await paintOf(p, sel),
+        hode: await paintOf(p, sel + ' .card-head'),
+        plate: await paintOf(p, sel + ' .note-card-excerpt'),
+      };
+      const gjennom = (x) => !!x && x.alfa > 0.3 && x.alfa < 0.9 && x.opacity === '1';
+      log('6 notat ' + M.n + ' ' + drakt + ': kortflaten er halvgjennomsiktig med bakgrunnsslør',
+        gjennom(lag.kort) && /blur\(2px\)/.test(lag.kort.slor), JSON.stringify(lag.kort));
+      log('6 notat ' + M.n + ' ' + drakt + ': korthodet slipper lys gjennom (ikke via `opacity`)',
+        gjennom(lag.hode), JSON.stringify(lag.hode));
+      log('6 notat ' + M.n + ' ' + drakt + ': utdragsplaten slipper lys gjennom (ikke via `opacity`)',
+        gjennom(lag.plate), JSON.stringify(lag.plate));
+      await G.drop(p, undefined, true);
+      await p.waitForFunction(() => !document.querySelector('[data-dnd-dragging]'), null, { timeout: 4000 });
+      await p.waitForTimeout(250);
+      // … og i HVILE er lagene tilbake på sin egen farge.
+      const hvile = await paintOf(p, '#notes-board .note-card[data-id="' + nid + '"] .card-head');
+      log('6 notat ' + M.n + ' ' + drakt + ': hodet er ugjennomsiktig igjen etter slippet',
+        !!hvile && hvile.alfa === 1, JSON.stringify(hvile));
+    }
+
+    log('6 notat ' + M.n + ': ingen JS-feil', errs.length === 0, errs.join(' | '));
     await p.close();
   }
 

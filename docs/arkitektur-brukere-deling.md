@@ -69,6 +69,7 @@ for et objekt to brukere har sammen:
 |---|---|---|
 | `ideas` | kontoens idéer og idékategorier ([`ideer.md`](ideer.md)) | RLS `owner_id = auth.uid()` |
 | `note_projects`, `note_folders`, `notes` | kontoens notater, Bokhylle > Notatbok > Notat ([`notater-plan.md`](notater-plan.md)) | RLS `owner_id = auth.uid()` |
+| `object_links` | koblinger mellom notatsiden og listesiden ([`notater-plan.md`](notater-plan.md)) | RLS `owner_id = auth.uid()`; INSERT krever i tillegg at notatsiden er min og listesiden lesbar |
 | `notifications` | varselhistorikken | RLS `user_id = auth.uid()` |
 | `notification_prefs` | de fire varselvalgene + generator-markøren | RLS `user_id = auth.uid()` |
 | `push_subscriptions` | ett abonnement per nettleserkontekst, med gjenkjennelig metadata | RLS på egne rader; skrives kun av RPC-ene |
@@ -93,6 +94,17 @@ insert-vaktene. Formen er notatenes eget tre:
 | `note_folders` | `project_id` (`on delete cascade`) | mapper nøstes aldri i mapper |
 | `notes` | `project_id` (cascade) + `folder_id` (`on delete set null`) | `folder_id = null` → et FRITT notat rett i prosjektet |
 
+`archived` står ved siden av `trashed` på alle tre, og rir på det samme
+INNHOLDS-registeret: arkivet er «lagt til side», søppelkassen er «slettet», og
+de er uavhengige tilstander på samme rad. Skrivevaktene ruller begge tilbake
+sammen når en skriving er eldre enn radens register.
+
+Merk asymmetrien i kaskadene, og at den er tilsiktet: et notat UTEN bokhylle
+finnes ikke (`project_id` er `not null`), så en slettet bokhylle tar notatene
+med seg. En slettet NOTATBOK gjør det ikke — `folder_id` er `on delete set
+null`, og notatene blir frie notater i bokhyllen sin. En notatbok er hylla
+dokumentet sto i, ikke dokumentet.
+
 Begge forelder-pekerne følger POSISJONSREGISTERET (som `card_id`/`cat_id` på et
 listepunkt), og begge er `deferrable initially deferred` — doc-rekkefølgen er
 vilkårlig. `notes.body` er editorens dokument som `jsonb`; databasen lagrer det
@@ -116,6 +128,21 @@ under notatboken i B. To triggere håndhever invarianten:
 |---|---|
 | `notes_parent_guard` / `notes_guard` (`notes_fix_parent`, og det samme leddet sist i `notes_before_update`) | ligger notatet i en notatbok, UTLEDES `project_id` av notatboken — ved både innsetting og oppdatering |
 | `note_folders_cascade` (`note_folders_after_update`) | flyttes en notatbok til en annen bokhylle, følger notatene med |
+
+**Koblingene** (`object_links`) er den ene tabellen som er innhold uten å ha et
+register å flette: den har ingen mutable felter. Hver side er sin EGEN
+fremmednøkkel — `note_project_id`/`note_folder_id`/`note_id` mot
+`universe_id`/`group_id`/`card_id` — med nøyaktig én satt per side (to
+check-constrainter) og `on delete cascade` på alle seks. Det er dét som gjør en
+hengende kobling umulig: forsvinner målet, forsvinner koblingen, og AFTER
+DELETE-triggeren (`write_link_tombstone`) skriver en gravstein av typen
+`object_link` slik at en offline klient ikke kan sette den inn igjen. Tabellen
+har ingen UPDATE-policy og ingen UPDATE-grant. Det finnes heller INGEN unik
+indeks på paret, med vilje: to enheter som lager den samme koblingen offline
+ville ellers fått den ene skrivingen permanent avvist (23505) og prøvd igjen i
+det uendelige — klienten viser og fjerner koblinger PER PAR, så en dublett er
+usynlig og forsvinner ved første fjerning. `supabase/tests/test-note-links.sql`
+dekker begge sider, RLS mellom to brukere, kaskadene og gravsteinene.
 
 `(pos_ts, pos_org)` er ETT UDELELIG REGISTER — `reg_newer` sammenligner
 tidsstempelet først og lar `org` bryte uavgjort — så kaskaden velger HELE PARET

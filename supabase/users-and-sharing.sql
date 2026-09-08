@@ -435,6 +435,89 @@ alter table public.note_projects enable row level security;
 alter table public.note_folders  enable row level security;
 alter table public.notes         enable row level security;
 
+-- ARKIVERING (docs/notater-plan.md). Et arkivert objekt er levende innhold som
+-- er lagt til side: det vises ikke i normalvisningen, men det ligger ikke i
+-- søppelkassen og kan hentes fram igjen uten å ha vært innom den. Flagget rir
+-- på INNHOLDS-registeret (ts/org), akkurat som `trashed` — det er en egenskap
+-- ved objektet, ikke ved plasseringen. De to er uavhengige: et arkivert objekt
+-- kan legges i søppelkassen, og et objekt kan gjenopprettes fra søppelkassen
+-- tilbake til arkivet det lå i. Idempotent for eldre databaser.
+alter table public.note_projects add column if not exists archived boolean not null default false;
+alter table public.note_folders  add column if not exists archived boolean not null default false;
+alter table public.notes         add column if not exists archived boolean not null default false;
+
+-- ------------------------------------------------------------
+-- 2c. KOBLINGER MELLOM NOTATER OG LISTER — public.object_links
+--
+--    En kobling er en RELASJON, ikke en plassering: den flytter ingenting og
+--    eier ingenting. Notatsiden (bokhylle/notatbok/notat) og listesiden
+--    (område/mappe/liste) beholder sine vanlige foreldre, og et objekt kan
+--    inngå i vilkårlig mange koblinger — mange-til-mange begge veier.
+--
+--    HVER SIDE ER SIN EGEN FREMMEDNØKKEL, ikke et (type, id)-par i tekst.
+--    Det koster tre nullbare kolonner per side, men gir til gjengjeld det et
+--    tekstpar aldri kan gi: databasen selv garanterer at et koblingsmål
+--    finnes. `on delete cascade` betyr at en kobling forsvinner i samme
+--    øyeblikk som objektet den peker på slettes PERMANENT — det finnes ingen
+--    hengende koblinger å rydde etter, verken her eller i klienten. En ny
+--    koblingsbar type senere er én kolonne til og ett ledd i sjekken, ikke en
+--    ombygging.
+--
+--    Nøyaktig ÉN kolonne per side er satt (sjekkene under). Koblingen har
+--    ingen mutable felter: den finnes eller den finnes ikke. Konflikter løses
+--    derfor av gravsteinene, som for et permanent slettet objekt — en
+--    innsetting av en id som er gravlagt avvises (PT409), så en klient som
+--    fortsatt har koblingen lokalt får vite at den er borte for godt.
+--    `ts`/`org` bæres med for sporbarhet og for at klientens fletting skal ha
+--    et register å lese, men ingen skriving endrer dem: raden oppdateres
+--    aldri.
+--
+--    INGEN UNIK INDEKS på paret, med vilje: to enheter som lager den SAMME
+--    koblingen offline ville ellers fått den ene skrivingen permanent avvist
+--    (23505) og prøvd igjen i det uendelige. Klienten viser og fjerner
+--    koblinger PER PAR, så en dublett er usynlig og forsvinner ved første
+--    fjerning.
+-- ------------------------------------------------------------
+
+create table if not exists public.object_links (
+  id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references public.profiles (id) on delete cascade,
+  -- Notatsiden: nøyaktig én av de tre.
+  note_project_id uuid references public.note_projects (id) on delete cascade deferrable initially deferred,
+  note_folder_id  uuid references public.note_folders (id)  on delete cascade deferrable initially deferred,
+  note_id         uuid references public.notes (id)         on delete cascade deferrable initially deferred,
+  -- Listesiden: nøyaktig én av de tre.
+  universe_id uuid references public.universes (id) on delete cascade deferrable initially deferred,
+  group_id    uuid references public.groups (id)    on delete cascade deferrable initially deferred,
+  card_id     uuid references public.cards (id)     on delete cascade deferrable initially deferred,
+  ts         bigint not null default 0,
+  org        text   not null default '',
+  created_at timestamptz not null default now()
+);
+
+-- Sjekkene settes med `drop … add` så de også kommer på en EKSISTERENDE
+-- database (der `create table if not exists` er en no-op).
+do $$ begin
+  alter table public.object_links drop constraint if exists object_links_one_note_side;
+  alter table public.object_links add constraint object_links_one_note_side
+    check ((note_project_id is not null)::int + (note_folder_id is not null)::int
+           + (note_id is not null)::int = 1);
+  alter table public.object_links drop constraint if exists object_links_one_list_side;
+  alter table public.object_links add constraint object_links_one_list_side
+    check ((universe_id is not null)::int + (group_id is not null)::int
+           + (card_id is not null)::int = 1);
+exception when others then null; end $$;
+
+create index if not exists object_links_owner_idx    on public.object_links (owner_id);
+create index if not exists object_links_np_idx       on public.object_links (note_project_id);
+create index if not exists object_links_nf_idx       on public.object_links (note_folder_id);
+create index if not exists object_links_note_idx     on public.object_links (note_id);
+create index if not exists object_links_universe_idx on public.object_links (universe_id);
+create index if not exists object_links_group_idx    on public.object_links (group_id);
+create index if not exists object_links_card_idx     on public.object_links (card_id);
+
+alter table public.object_links enable row level security;
+
 -- ------------------------------------------------------------
 -- 3. ROLLER/MEDLEMSKAP og INVITASJONER
 -- ------------------------------------------------------------
@@ -543,7 +626,8 @@ do $$ begin
   alter table public.tombstones drop constraint if exists tombstones_resource_type_check;
   alter table public.tombstones add constraint tombstones_resource_type_check
     check (resource_type in ('universe', 'group', 'card', 'item', 'idea',
-                             'note_project', 'note_folder', 'note'));
+                             'note_project', 'note_folder', 'note',
+                             'object_link'));
 exception when others then null; end $$;
 
 create index if not exists tombstones_resource_idx on public.tombstones (resource_id);
@@ -597,6 +681,24 @@ drop trigger if exists notes_tombstone on public.notes;
 create trigger notes_tombstone after delete on public.notes
   for each row execute function public.write_tombstone();
 
+-- Koblingene har ingen posisjon, og dermed heller ikke `pos_ts` — de får sin
+-- egen, ellers identiske, gravsteinsskriver. Gravsteinen er det ENESTE som
+-- avgjør en konflikt for en kobling: raden har ingen felter å flette.
+create or replace function public.write_link_tombstone()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.tombstones (resource_type, resource_id, ts)
+  values ('object_link', old.id, greatest(old.ts, (extract(epoch from now()) * 1000)::bigint))
+  on conflict (resource_type, resource_id)
+    do update set ts = excluded.ts, deleted_at = now();
+  return old;
+end;
+$$;
+
+drop trigger if exists object_links_tombstone on public.object_links;
+create trigger object_links_tombstone after delete on public.object_links
+  for each row execute function public.write_link_tombstone();
+
 -- BEFORE INSERT-vakt på de fire objekttabellene. To ting, og begge må ligge i
 -- DATABASEN for å være noe verdt — en klient kan byttes ut, databasen ikke:
 --   1. GJENOPPLIVING. Har id-en gravstein, avvises innsettingen (PT409), så
@@ -618,6 +720,7 @@ declare
                   when 'note_projects' then 'note_project'
                   when 'note_folders'  then 'note_folder'
                   when 'notes'         then 'note'
+                  when 'object_links'  then 'object_link'
                 end;
 begin
   if exists (select 1 from public.tombstones t
@@ -659,6 +762,9 @@ create trigger note_folders_insert_guard before insert on public.note_folders
   for each row execute function public.guard_object_insert();
 drop trigger if exists notes_insert_guard on public.notes;
 create trigger notes_insert_guard before insert on public.notes
+  for each row execute function public.guard_object_insert();
+drop trigger if exists object_links_insert_guard on public.object_links;
+create trigger object_links_insert_guard before insert on public.object_links
   for each row execute function public.guard_object_insert();
 
 -- ------------------------------------------------------------
@@ -1057,6 +1163,9 @@ drop policy if exists notes_select on public.notes;
 drop policy if exists notes_insert on public.notes;
 drop policy if exists notes_update on public.notes;
 drop policy if exists notes_delete on public.notes;
+drop policy if exists object_links_select on public.object_links;
+drop policy if exists object_links_insert on public.object_links;
+drop policy if exists object_links_delete on public.object_links;
 drop policy if exists memberships_select on public.memberships;
 drop policy if exists memberships_update on public.memberships;
 drop policy if exists memberships_delete on public.memberships;
@@ -1836,6 +1945,7 @@ begin
   end if;
   if not public.reg_newer(new.ts, new.org, old.ts, old.org) then
     new.name := old.name; new.trashed := old.trashed; new.collapsed := old.collapsed;
+    new.archived := old.archived;
     new.ts := old.ts; new.org := old.org;
   end if;
   if not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
@@ -1853,7 +1963,7 @@ begin
     raise exception 'owner_id (oppretter) kan ikke endres';
   end if;
   if not public.reg_newer(new.ts, new.org, old.ts, old.org) then
-    new.name := old.name; new.trashed := old.trashed;
+    new.name := old.name; new.trashed := old.trashed; new.archived := old.archived;
     new.ts := old.ts; new.org := old.org;
   end if;
   if not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
@@ -1908,6 +2018,7 @@ begin
   end if;
   if not public.reg_newer(new.ts, new.org, old.ts, old.org) then
     new.title := old.title; new.body := old.body; new.trashed := old.trashed;
+    new.archived := old.archived;
     new.ts := old.ts; new.org := old.org;
   end if;
   if not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
@@ -2173,6 +2284,44 @@ create policy notes_update on public.notes
                                where f.id = folder_id
                                  and f.owner_id = (select auth.uid()))));
 create policy notes_delete on public.notes
+  for delete using (owner_id = (select auth.uid()));
+
+/* object_links: koblingene mine mellom notatsiden og listesiden.
+
+   EIERSKAPET er hele autorisasjonen for å SE og FJERNE en kobling — den er
+   min egen krysshenvisning, ikke delt innhold. Å OPPRETTE en krever i tillegg
+   to ting av innsettingen, og begge håndheves her fordi klienten kan byttes
+   ut:
+
+     1. NOTATSIDEN må være min. Notatene deles ikke, så en kobling fra noen
+        andres notat ville vært en peker inn i en konto jeg ikke har noe i.
+     2. LISTESIDEN må være LESBAR for meg (`can_read`). En kobling er en
+        snarvei, og en snarvei til noe jeg ikke har tilgang til er enten
+        støy eller en lekkasje av at objektet finnes.
+
+   Det finnes ingen UPDATE-policy: en kobling har ingen mutable felter. Den
+   opprettes og fjernes, og fjerningen etterlater en gravstein.
+
+   `(select auth.uid())` også her, av samme grunn som for notattabellene:
+   InitPlan én gang per statement i stedet for ett kall per rad. */
+create policy object_links_select on public.object_links
+  for select using (owner_id = (select auth.uid()));
+create policy object_links_insert on public.object_links
+  for insert with check (
+    owner_id = (select auth.uid())
+    and (note_project_id is null or exists (select 1 from public.note_projects p
+                                             where p.id = note_project_id
+                                               and p.owner_id = (select auth.uid())))
+    and (note_folder_id is null or exists (select 1 from public.note_folders f
+                                            where f.id = note_folder_id
+                                              and f.owner_id = (select auth.uid())))
+    and (note_id is null or exists (select 1 from public.notes n
+                                     where n.id = note_id
+                                       and n.owner_id = (select auth.uid())))
+    and (universe_id is null or public.can_read('universe', universe_id, (select auth.uid())))
+    and (group_id is null or public.can_read('group', group_id, (select auth.uid())))
+    and (card_id is null or public.can_read('card', card_id, (select auth.uid()))));
+create policy object_links_delete on public.object_links
   for delete using (owner_id = (select auth.uid()));
 
 -- memberships: egen rad (personlig posisjon, forlate) + eiere som administrerer
@@ -3141,6 +3290,9 @@ begin
   delete from public.ideas where owner_id = uid;
   -- Notatene er MINE ALENE på nøyaktig samme måte (docs/notater-plan.md).
   -- Rekkefølgen er nedenfra og opp så kaskadene ikke må rydde etter oss.
+  -- Koblingene FØRST: de peker på notatradene under (og på listesiden), og
+  -- kaskaden ville tatt dem uansett — men da uten at rekkefølgen er lesbar.
+  delete from public.object_links where owner_id = uid;
   delete from public.notes where owner_id = uid;
   delete from public.note_folders where owner_id = uid;
   delete from public.note_projects where owner_id = uid;
@@ -4727,6 +4879,13 @@ begin
   ),
   my_notes as (
     select n.* from public.notes n where n.owner_id = uid
+  ),
+  -- Koblingene mine (docs/notater-plan.md). De hentes på EIERSKAP alene, også
+  -- når listesiden ligger i et område jeg har mistet tilgangen til: raden
+  -- finnes, og klienten skal kunne vise at koblingen er der uten å kunne åpne
+  -- den. Fremmednøklene garanterer at målet ikke er SLETTET.
+  my_links as (
+    select l.* from public.object_links l where l.owner_id = uid
   )
   select jsonb_build_object(
     'user', (select jsonb_build_object('id', pr.id, 'email', pr.email,
@@ -4789,19 +4948,36 @@ begin
     'noteProjects', coalesce((select jsonb_agg(jsonb_build_object(
         'id', np.id, 'creator', np.owner_id, 'createdByMe', true,
         'name', np.name, 'collapsed', np.collapsed, 'trashed', np.trashed,
+        'archived', np.archived,
         'ts', np.ts, 'org', np.org,
         'pos', np.pos, 'posTs', np.pos_ts, 'posOrg', np.pos_org)) from my_note_projects np), '[]'::jsonb),
     'noteFolders', coalesce((select jsonb_agg(jsonb_build_object(
         'id', nf.id, 'creator', nf.owner_id, 'createdByMe', true,
         'project', nf.project_id, 'name', nf.name, 'trashed', nf.trashed,
+        'archived', nf.archived,
         'ts', nf.ts, 'org', nf.org,
         'pos', nf.pos, 'posTs', nf.pos_ts, 'posOrg', nf.pos_org)) from my_note_folders nf), '[]'::jsonb),
     'notes', coalesce((select jsonb_agg(jsonb_build_object(
         'id', n.id, 'creator', n.owner_id, 'createdByMe', true,
         'project', n.project_id, 'folder', n.folder_id,
         'title', n.title, 'body', n.body, 'trashed', n.trashed,
+        'archived', n.archived,
         'ts', n.ts, 'org', n.org,
         'pos', n.pos, 'posTs', n.pos_ts, 'posOrg', n.pos_org)) from my_notes n), '[]'::jsonb),
+    /* Koblingene. Typen står som ETT ord per side i stedet for tre kolonner,
+       fordi det er den formen klienten faktisk bruker — hvilken kolonne som
+       bærer id-en er databasens sak, ikke klientens. */
+    'links', coalesce((select jsonb_agg(jsonb_build_object(
+        'id', l.id, 'creator', l.owner_id, 'createdByMe', true,
+        'noteType', case when l.note_project_id is not null then 'noteProject'
+                         when l.note_folder_id is not null then 'noteFolder'
+                         else 'note' end,
+        'noteId', coalesce(l.note_project_id, l.note_folder_id, l.note_id),
+        'listType', case when l.universe_id is not null then 'universe'
+                         when l.group_id is not null then 'group'
+                         else 'card' end,
+        'listId', coalesce(l.universe_id, l.group_id, l.card_id),
+        'ts', l.ts, 'org', l.org)) from my_links l), '[]'::jsonb),
     'invites_in', coalesce((select jsonb_agg(jsonb_build_object(
         'id', s.id,
         'type', case when s.universe_id is not null then 'universe' else 'group' end,
@@ -5414,7 +5590,7 @@ drop index if exists public.share_invites_card_pending_key;
 
 revoke all on public.profiles, public.universes, public.groups, public.cards,
               public.items, public.ideas, public.note_projects, public.note_folders,
-              public.notes, public.memberships, public.share_invites,
+              public.notes, public.object_links, public.memberships, public.share_invites,
               public.tombstones, public.notifications,
               public.notification_prefs, public.push_subscriptions,
               public.device_sessions, public.native_notif_devices from anon;
@@ -5430,6 +5606,12 @@ grant select, insert, update, delete on public.universes, public.groups,
                                         public.cards, public.items,
                                         public.ideas, public.note_projects,
                                         public.note_folders, public.notes to authenticated;
+-- object_links: koblingene har ingen mutable felter, så UPDATE trekkes
+-- tilbake — en kobling opprettes og fjernes, den endres aldri. Grant-en er
+-- det ytterste laget; RLS-policyene (som ikke HAR en update-variant) er det
+-- innerste.
+grant select, insert, delete on public.object_links to authenticated;
+revoke update on public.object_links from authenticated;
 -- Å UTELATE en grant er ikke nok i Supabase: prosjektet har
 -- `alter default privileges in schema public grant all on tables to anon,
 -- authenticated`, så en ny tabell får ALL — inkludert INSERT — i det den
@@ -5447,6 +5629,8 @@ grant select, insert, update, delete on public.universes, public.groups,
 --   note_projects, |   |   |   |   |
 --   note_folders,  |   |   |   |   |
 --   notes          |   |   |   |   |
+--   object_links   | ✓ | ✓ | – | ✓ | en kobling finnes eller finnes ikke;
+--                  |   |   |   |   |  den har ingen felter å oppdatere
 --   profiles       | ✓ | – | ✓*| – | *kun display_name/avatar; e-post speiles
 --                  |   |   |   |   |  fra auth.users av triggerne
 --   memberships    | ✓ | – | ✓*| – | *kun `pos` (personlig rekkefølge).
@@ -5629,6 +5813,7 @@ begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
     foreach t in array array['universes', 'groups', 'cards', 'items', 'ideas',
                              'note_projects', 'note_folders', 'notes',
+                             'object_links',
                              'memberships', 'share_invites'] loop
       if not exists (
         select 1 from pg_publication_tables

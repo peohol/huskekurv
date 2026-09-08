@@ -368,7 +368,7 @@
      hadde krevd en syntetisk beholder på hvert eneste prosjekt. */
   function makeNoteProject(name) {
     return {
-      id: uid(), name, trashed: false, collapsed: false,
+      id: uid(), name, trashed: false, archived: false, collapsed: false,
       _type: 'noteProject', _createdByMe: true,
       ts: 0, org: deviceId,               // innholdsregister (navn/trashed/collapsed)
       pos: 0, posTs: 0, posOrg: deviceId, // posisjonsregister (rekkefølge)
@@ -377,7 +377,7 @@
   }
   function makeNoteFolder(name, projectId) {
     return {
-      id: uid(), project: projectId || null, name, trashed: false,
+      id: uid(), project: projectId || null, name, trashed: false, archived: false,
       _type: 'noteFolder', _createdByMe: true,
       ts: 0, org: deviceId,               // innholdsregister (navn/trashed)
       pos: 0, posTs: 0, posOrg: deviceId, // posisjonsregister (rekkefølge + prosjekt)
@@ -388,10 +388,26 @@
   function makeNote(projectId, folderId) {
     return {
       id: uid(), project: projectId || null, folder: folderId || null,
-      title: '', doc: emptyNoteDoc(), trashed: false,
+      title: '', doc: emptyNoteDoc(), trashed: false, archived: false,
       _type: 'note', _createdByMe: true,
       ts: 0, org: deviceId,
       pos: 0, posTs: 0, posOrg: deviceId,
+    };
+  }
+
+  /* En KOBLING mellom notatsiden og listesiden (docs/notater-plan.md). Den er
+     en relasjon, ikke en plassering: begge objektene beholder foreldrene sine,
+     og koblingen har ingen mutable felter — den finnes eller den finnes ikke.
+     Derfor bare ETT register (`ts`/`org`), og det er sporbarhet, ikke en
+     konfliktnøkkel: konflikten avgjøres av gravsteinen, som for et permanent
+     slettet objekt. */
+  const LINK_NOTE_KINDS = ['noteProject', 'noteFolder', 'note'];
+  const LINK_LIST_KINDS = ['universe', 'group', 'card'];
+  function makeLink(noteType, noteId, listType, listId) {
+    return {
+      id: uid(), noteType, noteId, listType, listId,
+      _type: 'link', _createdByMe: true,
+      ts: 0, org: deviceId,
     };
   }
 
@@ -433,6 +449,8 @@
       // er nøstet (mappene i seg), notatene flate med to forelder-pekere.
       noteProjects: [],
       notes: [],
+      // Koblinger Lister <-> Notater, flatt (docs/notater-plan.md).
+      links: [],
       activeProject: null,  // aktiv posisjon i Notater (per enhet, som activeUniverse)
       activeFolder: null,   // null = prosjektets frie notater
       activeFolders: {},    // projectId → sist aktive mappe der (per enhet)
@@ -722,14 +740,22 @@
      har en gyldig NULL-verdi — prosjektets frie notater — så «ingen mappe» er
      et sted man kan stå, ikke et tomt svar som må fylles. */
   function validateActiveNotes(s) {
+    // Et ARKIVERT eller SLETTET objekt er ikke et sted man kan stå: begge er
+    // ute av normalvisningen, og en aktiv posisjon i noe usynlig ville gitt en
+    // tom flate uten forklaring (docs/notater-plan.md).
+    // `_pendingDelete` er en sletting som ennå ligger i angre-vinduet. Den er
+    // allerede ute av visningen (`live()`), så den er heller ikke et sted man
+    // kan STÅ — ellers ble den aktive bokhyllen stående og flaten viste
+    // innholdet i noe som var på vei i søpla.
+    const usable = (o) => !o.trashed && !o.archived && !o._pendingDelete;
     if (!s.activeFolders || typeof s.activeFolders !== 'object') s.activeFolders = {};
-    if (!s.noteProjects.some((p) => p.id === s.activeProject && !p.trashed)) {
+    if (!s.noteProjects.some((p) => p.id === s.activeProject && usable(p))) {
       let first = null;
-      s.noteProjects.forEach((p) => { if (!p.trashed && (!first || p.pos < first.pos)) first = p; });
+      s.noteProjects.forEach((p) => { if (usable(p) && (!first || p.pos < first.pos)) first = p; });
       s.activeProject = first ? first.id : null;
     }
-    const proj = s.noteProjects.find((p) => p.id === s.activeProject && !p.trashed) || null;
-    const folders = proj ? proj.folders.filter((f) => !f.trashed) : [];
+    const proj = s.noteProjects.find((p) => p.id === s.activeProject && usable(p)) || null;
+    const folders = proj ? proj.folders.filter(usable) : [];
     if (s.activeFolder && !folders.some((f) => f.id === s.activeFolder)) {
       const remembered = proj ? s.activeFolders[proj.id] : null;
       s.activeFolder = folders.some((f) => f.id === remembered) ? remembered : null;
@@ -744,6 +770,7 @@
     if (!Array.isArray(s.ideas)) s.ideas = [];
     if (!Array.isArray(s.noteProjects)) s.noteProjects = [];
     if (!Array.isArray(s.notes)) s.notes = [];
+    if (!Array.isArray(s.links)) s.links = [];
     if (!s._tomb || typeof s._tomb !== 'object') s._tomb = emptyTomb();
     // Én bøtte per radtype: en buffer skrevet av en eldre versjon mangler de
     // nyeste, og synken leser dem hver runde.
@@ -782,6 +809,7 @@
   const trashBtn = document.getElementById('trash-btn');
   const trashCount = document.getElementById('trash-count');
   const trashTitle = document.getElementById('trash-title-text');
+  const trashHeadIcon = document.getElementById('trash-head-icon');
   const trashModal = document.getElementById('trash-modal');
   const trashList = document.getElementById('trash-list');
   const trashClose = document.getElementById('trash-close');
@@ -2213,6 +2241,12 @@
     // Navnet omdøpes IKKE lenger ved klikk (menyen gjør det): et klikk på
     // tittelen kollapser kortet, som et klikk hvor som helst ellers på hodet.
     setRenameHook(titleEl, canRename ? renameUni : null);
+    // Koblinger til notatsiden (docs/notater-plan.md). Fri-beholderen er en
+    // seksjon, ikke et område, og kan derfor ikke kobles.
+    if (!isFree) {
+      const uChip = linkChip('universe', u.id);
+      if (uChip) titleEl.parentNode.appendChild(uChip);
+    }
 
     // Én menyknapp erstatter del-/forlat-/slett-knappene. Innholdet i menyen
     // gates av de samme capabilities som knappene gjorde.
@@ -2231,6 +2265,7 @@
         closeNavModal();
         openShare('universe', u.id, findUniverse(u.id) || u, openNavModal);
       },
+      extraRows: isFree ? [] : [linksMenuRow('universe', u.id)],
       remove: canDelUni ? () => deleteUniverse(findUniverse(u.id) || u) : null,
       removeLabel: tr('menu.deleteUniverseForAll'),
     });
@@ -2248,7 +2283,9 @@
       head.dataset.dndIgnore = '';
     }
     head.addEventListener('click', (ev) => {
-      if (ev.target.closest('.obj-menu-btn, .edit-input')) return;
+      // Koblingschipen er en egen knapp i hodet, som menyknappen: et trykk på
+      // den åpner koblingene, det kollapser ikke kortet.
+      if (ev.target.closest('.obj-menu-btn, .meta-chip, .edit-input')) return;
       toggleCardCollapsed(el, u, navScope);
     });
     // Tastatur: korthodet er fokuserbart (tittelen er det ikke), så Enter/
@@ -2377,6 +2414,10 @@
         labelGroupControls();
       });
     };
+    // Koblinger til notatsiden (docs/notater-plan.md), i radens egen blokk —
+    // som indikator-chipene på et listepunkt.
+    const gChip = linkChip('group', g.id);
+    if (gChip) el.querySelector('.item-main').appendChild(gChip);
     const navigate = () => {
       goToGroup(g);
       renderNav();     // aktiv-markeringen flytter seg
@@ -2413,6 +2454,7 @@
         closeNavModal();
         openShare('group', g.id, findGroupAnywhere(g.id) || g, openNavModal);
       },
+      extraRows: [linksMenuRow('group', g.id)],
       remove: canDelGroup ? () => deleteGroup(findGroupAnywhere(g.id) || g) : null,
       removeLabel: tr('menu.deleteGroupForAll'),
     });
@@ -2721,6 +2763,7 @@
       // meny leses som om det er lista man deler. Delingen hører hjemme der
       // myndigheten ligger: i mappens meny. Delt-status vises fortsatt på
       // kortet (`.share-badge`).
+      extraRows: [linksMenuRow('card', cardData.id)],
       remove: canEdit ? () => deleteCard(cardData) : null,
       removeLabel: tr('menu.deleteCard'),
     });
@@ -3564,6 +3607,13 @@
       appendTimeChip(row, target, 'start', canEdit);
       appendTimeChip(row, target, 'due', canEdit);
     }
+    // Koblinger til notatsiden (docs/notater-plan.md). Kun LISTER kan kobles på
+    // dette nivået — listepunkter og kategorier arver ingenting og har ingen
+    // egen kobling.
+    if (isCard) {
+      const lc = linkChip('card', obj.id);
+      if (lc) row.appendChild(lc);
+    }
     row.hidden = !row.children.length;
   }
 
@@ -4010,6 +4060,26 @@
     if (kind === 'universe') (o.groups || []).forEach((g) => tombSubtree(g, 'group'));
     else if (kind === 'group') (o.cards || []).forEach((c) => tombSubtree(c, 'card'));
     else if (kind === 'card') (o.items || []).forEach((it) => tombSubtree(it, 'item'));
+    /* Notattreet (docs/notater-plan.md). Notatene er FLATE med to
+       forelder-pekere, så de finnes ikke inne i bokhyllen/notatboken — de må
+       slås opp. Serverens kaskade (`on delete cascade` på `project_id`/
+       `folder_id`) gjør nøyaktig det samme, og gravsteinene her er lokalsidens
+       kopi av den. */
+    else if (kind === 'noteProject') {
+      (o.folders || []).forEach((f) => { state._tomb.noteFolders[f.id] = tick(); tombLinksTo(f.id); });
+      allNotes().forEach((n) => { if (n.project === o.id) tombSubtree(n, 'note'); });
+    }
+    /* En NOTATBOK tar IKKE notatene med seg. `notes.folder_id` er `on delete
+       set null` i databasen, ikke cascade (users-and-sharing.sql): et notat er
+       et dokument brukeren har skrevet, og en notatbok er bare hylla det sto i
+       — den skal ikke kunne rive med seg noe brukeren aldri slettet. Notatene
+       blir FRIE notater i bokhyllen sin. Bokhyllen over er noe annet: et notat
+       UTEN bokhylle finnes ikke (kolonnen er `not null`), så der er kaskade
+       den eneste mulige regelen. */
+    // Koblingene til objektet forsvinner med det: databasens fremmednøkler
+    // kaskaderer dem bort, og gravsteinen her hindrer at en utdatert lokal
+    // kopi setter dem inn igjen.
+    if (kind !== 'link') tombLinksTo(o.id);
   }
   /* ---------------- Gravsteiner: oppslag og påføring fra serveren ----------------
      `state._tomb` er registeret over id-er DENNE brukeren har slettet permanent
@@ -4022,13 +4092,14 @@
      fortsatt møte dem. */
   function emptyTomb() {
     return { universes: {}, groups: {}, cards: {}, items: {}, ideas: {},
-             noteProjects: {}, noteFolders: {}, notes: {} };
+             noteProjects: {}, noteFolders: {}, notes: {}, links: {} };
   }
   // Nøklene ER serverens `tombstones.resource_type` (og dermed også radtypen
   // synk-motoren sender rundt), så `tombFromServer` kan slå opp direkte.
   const TOMB_BUCKET = {
     universe: 'universes', group: 'groups', card: 'cards', item: 'items', idea: 'ideas',
     note_project: 'noteProjects', note_folder: 'noteFolders', note: 'notes',
+    object_link: 'links',
   };
   // Alle gravlagte id-er som ett flatt oppslag (id-ene er UUID-er, altså unike
   // på tvers av nivåene).
@@ -4112,6 +4183,16 @@
     // samme slette-bufferen og de samme gravsteinene — så oppslaget må nå dem.
     const d = findIdeaById(id);
     if (d) return { kind: d.isCat ? 'ideacat' : 'idea', obj: d };
+    // Notatenes tre (docs/notater-plan.md) deltar i nøyaktig de samme to
+    // mekanismene, så oppslaget må nå det også — ellers ville en buffret
+    // sletting av et notat blitt hengende (`commitDeleteOne` finner ingenting)
+    // og «Gjenopprett» mutert en foreldreløs kopi.
+    for (const p of (state.noteProjects || [])) {
+      if (p.id === id) return { kind: 'noteProject', obj: p };
+      for (const f of (p.folders || [])) if (f.id === id) return { kind: 'noteFolder', obj: f, project: p };
+    }
+    const n = findNoteById(id);
+    if (n) return { kind: 'note', obj: n };
     return null;
   }
   // Buffrer sletting (skjuler + registrerer), men starter INGEN egen timer —
@@ -4201,6 +4282,10 @@
     if (kinds.has('universe')) updateUniversesTrash();
     if (kinds.has('card')) updateTrashCount();
     if (kinds.has('idea') || kinds.has('ideacat')) paintIdeaTrash();
+    // Notatfanens tellere bygges av sine egne rendringer; her holder det å
+    // male dem på nytt (de er små, og ingen inline-redigering bor i dem).
+    if (kinds.has('note')) paintNotesLifecycleBadges();
+    if (kinds.has('noteProject') || kinds.has('noteFolder')) refreshNotesNav();
     cards.forEach(updateItemsTrashBadge);
     unis.forEach(updateGroupsTrashBadge);
   }
@@ -4252,7 +4337,9 @@
   function deleteMsg(kind, ids, lastName) {
     if (ids.length === 1) return tr('trash.movedOne', { name: quoted(lastName || '') });
     const w = kind === 'item' ? itemWord : kind === 'idea' ? ideaWord
-      : kind === 'card' ? listWord : kind === 'group' ? groupWord : uniWord;
+      : kind === 'card' ? listWord : kind === 'group' ? groupWord
+        : kind === 'note' ? noteWord : kind === 'noteFolder' ? noteFolderWord
+          : kind === 'noteProject' ? noteProjectWord : uniWord;
     return tr('trash.movedMany', { what: w(ids.length) });
   }
   // Committer bunken i toasten nå (angre-vinduet er over — timeren utløp, en ny
@@ -4713,7 +4800,7 @@
     // rebuild har satt inn ferske noder). Å sette den inn igjen ville gitt et
     // spøkelses-duplikat — vi lar den ligge død.
     if (el.isConnected && drag.origParent) drag.origParent.insertBefore(el, drag.origNext);
-    el.classList.remove('to-group', 'to-trash');
+    el.classList.remove('to-group', 'to-trash', 'to-archive');
   }
 
   // Ved slipp: gjenopprett hver liste til sin lagrede lukketilstand (momentant).
@@ -5120,11 +5207,18 @@
   function dragTrashBtn() {
     if (!drag.active) return null;
     const S = dragScope();
-    if (drag.kind === 'card') return S === navScope ? uniTrashBtn : trashBtn;
+    if (drag.kind === 'card') {
+      if (S === navScope) return uniTrashBtn;
+      if (S === notesNavScope) return noteProjectTrashBtn;
+      if (S === notesScope) return noteTrashBtn;
+      return trashBtn;
+    }
     if (drag.kind === 'item') {
       const host = drag.trashHost;
       if (!host || !host.isConnected) return null;
-      return host.querySelector(S === navScope ? '.group-trash-btn' : '.item-trash-btn');
+      const sel = S === navScope ? '.group-trash-btn'
+        : S === notesNavScope ? '.note-folder-trash-btn' : '.item-trash-btn';
+      return host.querySelector(sel);
     }
     return null;
   }
@@ -5135,6 +5229,12 @@
     const S = dragScope();
     const id = drag.el && drag.el.dataset.id;
     if (!id) return false;
+    // Notatene er kontoens egne: det finnes ingen lås og ingen delt myndighet
+    // å spørre om (docs/notater-plan.md). Kassen armes så snart objektet finnes.
+    if (S === notesScope) return !!findNoteById(id);
+    if (S === notesNavScope) {
+      return drag.kind === 'card' ? !!findNoteProject(id) : !!findNoteFolder(id);
+    }
     if (drag.kind === 'card') {
       if (S === navScope) {
         const u = findUniverse(id);
@@ -5164,10 +5264,68 @@
     const btn = dragTrashBtn();
     if (!btn) return;
     drag.trashArmed = true;
+    revealCan(btn);
+  }
+  // Fold ut EN kasse for draget: knappen selv (topplinja) eller raden rundt den
+  // (kort/områdekort/modalfot). `data-drag-revealed` husker at det var VI som
+  // avdekket den — se `hideRevealedTrash` og `disarmDragTrash`.
+  function revealCan(btn) {
     btn.classList.add('drag-trash');
     if (btn.hidden) { btn.hidden = false; btn.dataset.dragRevealed = '1'; }
     const wrap = btn.closest('.item-trash');
     if (wrap && wrap.hidden) { wrap.hidden = false; wrap.dataset.dragRevealed = '1'; }
+  }
+
+  /* ARKIVET ER NOTATSIDENS ANDRE KASSE, og under et drag oppfører det seg
+     NØYAKTIG som søppelkassen: det foldes ut i det draget starter (også når det
+     er tomt), lyser opp når man sikter på det, og arkiverer ved slipp. Derfor
+     deles maskineriet — `revealCan`, `disarmDragTrash` og `refreshTrashZones`
+     er felles, og bare TO ting er egne: hvilken knapp draget sikter mot, og hva
+     slippet betyr. Listesiden har ikke noe arkiv; der svarer
+     `dragArchiveBtn()` null, og ingenting armes.
+
+     Retten er den samme som slettingens (`draggedCanBeTrashed`): arkivering er
+     en svakere handling enn sletting, så den som ikke får slette, får heller
+     ikke arkivere ved å dra. */
+  function dragArchiveBtn() {
+    if (!drag.active) return null;
+    const S = dragScope();
+    if (S === notesScope) return noteArchiveBtn;
+    if (S !== notesNavScope) return null;
+    if (drag.kind === 'card') return noteProjectArchiveBtn;
+    const host = drag.trashHost;
+    return host && host.isConnected ? host.querySelector('.note-folder-archive-btn') : null;
+  }
+  function armDragArchive() {
+    drag.overArchive = false;
+    drag.archiveArmed = false;
+    if (!draggedCanBeTrashed()) return;
+    const btn = dragArchiveBtn();
+    if (!btn) return;
+    drag.archiveArmed = true;
+    revealCan(btn);
+  }
+  // Siktemarkering på arkivet + arkivfargen på dra-objektet — samme kantstyrte
+  // mønster som `setDragTrashTarget`, i FARGE og ikke i mer gjennomsikt.
+  function setDragArchiveTarget(on) {
+    on = !!on;
+    if (drag.overArchive === on) return;
+    drag.overArchive = on;
+    const btn = dragArchiveBtn();
+    if (btn) btn.classList.toggle('drop-target', on);
+    if (drag.el) drag.el.classList.toggle('to-archive', on);
+  }
+  // Selve arkiveringen et slipp i arkivet betyr — samme funksjon som menyens
+  // «Arkiver», og med den samme «hold kassen i synsfeltet»-oppfølgingen.
+  function dropIntoArchive(S, kind, id) {
+    if (S === notesScope) { setNoteArchived('note', id, true); keepTrashInView(noteArchiveBtn); return; }
+    if (S !== notesNavScope) return;
+    if (kind === 'card') { setNoteArchived('noteProject', id, true); keepTrashInView(noteProjectArchiveBtn); return; }
+    const f = findNoteFolder(id);
+    const proj = f && f.project;
+    setNoteArchived('noteFolder', id, true);
+    keepTrashInView(notesNavBoard && notesNavBoard.querySelector(
+      '.card[data-id="' + proj + '"] .note-folder-archive-btn'));
   }
   // Skjul igjen kassen (knappen og/eller raden rundt den) VI avdekket. Var den
   // synlig fra før — kassen har innhold — blir den stående: markøren
@@ -5209,7 +5367,7 @@
      nytt hver runde, og også om VERTEN: en container kan bli låst MENS draget
      pågår. Se de tre trinnene i `retargetDragTrash`. */
   function retargetDragTrash() {
-    if (!drag.trashArmed || drag.kind !== 'item') return;
+    if ((!drag.trashArmed && !drag.archiveArmed) || drag.kind !== 'item') return;
     const S = dragScope();
     // Avviser containeren raden (låst, virtuell, uten opprettelsesrett)? Samme
     // svar slippet ville gitt — `*RejectTarget` er autoriteten, her og der.
@@ -5238,16 +5396,22 @@
     // kantstyrt, så et flagg som ble nullstilt bak ryggen på den ville latt
     // objektet stå rødt.
     setDragTrashTarget(false);
+    setDragArchiveTarget(false);
     const forrige = dragTrashBtn();
+    const forrigeArkiv = dragArchiveBtn();
     const forrigeRad = forrige && forrige.closest('.item-trash');
     const lånt = anchorBorrow(() => {
-      if (forrige) forrige.classList.remove('drag-trash', 'drop-target');
+      [forrige, forrigeArkiv].forEach((b) => { if (b) b.classList.remove('drag-trash', 'drop-target'); });
       drag.trashHost = host;
       armDragTrash();
+      // Arkivet står i den SAMME raden som kassen (`.note-folder-cans`), så det
+      // bytter vert i samme åndedrag — ellers ville det blitt liggende igjen i
+      // bokhylla draget forlot.
+      armDragArchive();
       // Raden draget forlot forsvinner helt — den holder ingen plass. Kortet
       // krymper med en knapperad, men DRA-ANKERET absorberer det, så verken det
       // man svever over eller terskelen inn i det flytter seg.
-      hideRevealedTrash(forrige, forrigeRad);
+      hideRevealedTrash(forrige, forrigeArkiv, forrigeRad);
     }, [forrige, host]);
     // Er kassa tilbake i lista draget startet i, er layouten der den var, og
     // lånet gjøres opp (se blokken om lån ved `anchorBorrow`).
@@ -5263,7 +5427,10 @@
      målingen selv, på alle sonene, etter at ankeret har flyttet board-et
      ferdig. En skjult knapp måler 0×0 og treffes ikke. */
   function refreshTrashZones() {
-    const b = dragScope() === navScope ? navRowBoard : boardRowBoard;
+    const S = dragScope();
+    const b = S === navScope ? navRowBoard
+      : S === notesNavScope ? notesNavRowBoard
+        : S === notesScope ? notesCardBoard : boardRowBoard;
     const reg = b && b.manager && b.manager.registry;
     if (!reg || !reg.droppables) return;
     for (const d of reg.droppables) {
@@ -5281,14 +5448,19 @@
      ny-liste-placeholderen blinket inn og ut idet pekeren streifer kanten av
      knappen, og hvert blink flytter kortene under den. */
   const DRAG_TRASH_PAD = 12;
-  function pointerOnDragTrash(x, y) {
-    if (!drag.trashArmed) return false;
-    const btn = dragTrashBtn();
+  function pointerOnCan(x, y, btn) {
     if (!btn || btn.hidden || !btn.isConnected) return false;
     const r = btn.getBoundingClientRect();
     if (!r.width || !r.height) return false;
     return x >= r.left - DRAG_TRASH_PAD && x <= r.right + DRAG_TRASH_PAD &&
            y >= r.top - DRAG_TRASH_PAD && y <= r.bottom + DRAG_TRASH_PAD;
+  }
+  function pointerOnDragTrash(x, y) {
+    return !!drag.trashArmed && pointerOnCan(x, y, dragTrashBtn());
+  }
+  // Arkivet står ved siden av kassen og er nøyaktig like lite å treffe.
+  function pointerOnDragArchive(x, y) {
+    return !!drag.archiveArmed && pointerOnCan(x, y, dragArchiveBtn());
   }
   // Kalles fra finishDrag — altså på ALLE veier ut av et drag, også avbrudd.
   function disarmDragTrash() {
@@ -5299,8 +5471,13 @@
       el.hidden = true;
       delete el.dataset.dragRevealed;
     });
+    // Fargen på det som dras hører til siktet, ikke til objektet: den skal aldri
+    // bli liggende igjen etter et avbrutt drag.
+    if (drag.el) drag.el.classList.remove('to-trash', 'to-archive');
     drag.trashArmed = false;
     drag.overTrash = false;
+    drag.archiveArmed = false;
+    drag.overArchive = false;
   }
   // Siktemarkering på kassen + RØD bakgrunn på dra-objektet. Alt som dras er
   // allerede halvgjennomsiktig (se `[data-dnd-dragging]` i styles.css), så
@@ -5326,6 +5503,18 @@
     }
   }
   function dropIntoTrash(S, kind, id) {
+    // Notatfanen: én kasse per nivå, og slippet betyr nøyaktig det menyens
+    // «Slett» betyr — samme funksjon, samme angre-toast.
+    if (S === notesScope) { deleteNoteObject('note', id); keepTrashInView(noteTrashBtn); return; }
+    if (S === notesNavScope) {
+      if (kind === 'card') { deleteNoteObject('noteProject', id); keepTrashInView(noteProjectTrashBtn); return; }
+      const f = findNoteFolder(id);
+      const proj = f && f.project;
+      deleteNoteObject('noteFolder', id);
+      keepTrashInView(notesNavBoard.querySelector(
+        '.card[data-id="' + proj + '"] .note-folder-trash-btn'));
+      return;
+    }
     if (kind === 'card') {
       if (S === navScope) {
         const u = findUniverse(id);
@@ -8261,6 +8450,14 @@
   let dndRowPolicyBusy = false;
   let dndPolicyX = null, dndPolicyY = null;
   function dndRowPolicy(b, update) {
+    /* ET DRAG SOM ER OVER HAR INGEN POLITIKK. dnd-kit kan levere et `dragmove`/
+       `dragover` ETTER `dragend` — typisk når en avbrutt gest fortsatt har en
+       retur-animasjon på vei — og en runde der ville malt ekstraheringsmodus på
+       nytt: `is-extracting` og ny-liste-stripa ble stående på et board i hvile,
+       og NESTE drag startet i feil modus (MÅLT: en rad sluppet i en tom liste
+       landet ikke der). `finishDrag` har alt ryddet; da skal ingenting sette
+       det tilbake. */
+    if (!drag.active) return;
     if (dndRowPolicyBusy) return;
     dndRowPolicyBusy = true;
     try {
@@ -8300,18 +8497,23 @@
       // flyttet seg til et annet kort.
       retargetDragTrash();
       const påKassen = pointerOnDragTrash(drag.lastX, drag.lastY);
+      // Arkivet er den andre kassen i den samme raden (notatsiden). Sikter man
+      // på DEN, står plasseringen like stille: slippet arkiverer, det flytter
+      // ikke.
+      const påArkivet = pointerOnDragArchive(drag.lastX, drag.lastY);
       // Markeringen settes BEGGE veier her. Smetts `onDropTarget` fyrer bare når
       // MÅLET endrer seg, og i ringen rundt knappen er målet null hele tiden —
       // ingen ville da tatt markeringen av igjen, og kassen ble stående som om
       // den var klar til å ta imot mens raden lå nede ved ny-liste-stripa.
       setDragTrashTarget(påKassen);
+      setDragArchiveTarget(påArkivet);
       // Og stripa lover ingenting i ringen: der SLETTER slippet (`*CommitRow`).
       // Selve knappen ligger inne i kortet, altså inne i sonen — der er modusen
       // reorder uansett. Ringen er den lille biten som kan stikke utenfor
       // kortkanten. Modusen regnes ellers ut som vanlig: å fryse den her ville
       // utsatt byttet med hele kassens høyde, og ut-terskelen ned ville sluttet
       // å være den samme linja som opp.
-      setTrashHold(påKassen);
+      setTrashHold(påKassen || påArkivet);
       // ETT MALT HULL OM GANGEN, del to: hullet lover bare noe der raden faktisk
       // lander. `dragOverCard` er allerede regnet ut denne runden.
       const hull = dragScope().root.querySelector('[data-dnd-placeholder]');
@@ -8661,12 +8863,14 @@
     const avatarEd = document.getElementById('avatar-modal');
     const delAcc = document.getElementById('delete-account-modal');
     const searchEl = document.getElementById('search-modal');
+    const linksEl = document.getElementById('links-modal');
     const eventsEl = document.getElementById('events-modal');
     const notifEl = document.getElementById('notif-modal');
     const ideasEl = document.getElementById('ideas-modal');
     document.body.classList.toggle('modal-open',
       !trashModal.hidden || !navModal.hidden ||
       !accountModal.hidden || (searchEl && !searchEl.hidden) ||
+      (linksEl && !linksEl.hidden) ||
       (eventsEl && !eventsEl.hidden) || (notifEl && !notifEl.hidden) ||
       (ideasEl && !ideasEl.hidden) ||
       (share && !share.hidden) || (place && !place.hidden) ||
@@ -8721,6 +8925,14 @@
     modalCfg = cfg;
     trashTitle.textContent = cfg.title;
     modalNote.textContent = cfg.note;
+    /* ARKIVET LÅNER SKALLET. Det er den samme modalen, den samme raden og den
+       samme foten — bare et annet ikon i hodet, og en fot som legger i
+       søppelkassen i stedet for å slette for godt (og derfor ikke er rød).
+       En egen «arkivmodal» ville vært en ny modaltype for den samme
+       interaksjonen (docs/notater-plan.md). */
+    if (trashHeadIcon) trashHeadIcon.innerHTML = cfg.icon || ICONS.trash;
+    trashEmptyBtn.classList.toggle('btn-red', cfg.danger !== false);
+    trashEmptyBtn.classList.toggle('btn-accent', cfg.danger === false);
     // Knappen navngir det den faktisk sletter — «Tøm» sa ingenting om hva som
     // forsvant, og de fire kassene deler samme knapp.
     trashEmptyBtn.textContent = cfg.emptyLabel || tr('trash.purge');
@@ -8773,10 +8985,23 @@
         main.appendChild(meta);
       }
       row.appendChild(main);
+      /* En rad kan ha en ANNEN handling ved siden av «Gjenopprett» — arkivet
+         bruker den til «Slett» (legg i søppelkassen), så veien videre finnes
+         der man står. Kassene har den ikke: der ER «Gjenopprett» veien ut, og
+         den andre veien er foten. */
+      if (r.extra) {
+        const ex = document.createElement('button');
+        ex.className = 'btn btn-ghost btn-small';
+        ex.type = 'button';
+        ex.textContent = r.extra.label;
+        if (r.extra.aria) ex.setAttribute('aria-label', r.extra.aria);
+        ex.addEventListener('click', () => { r.extra.fn(); renderTrashModalBody(); });
+        row.appendChild(ex);
+      }
       const restore = document.createElement('button');
       restore.className = 'btn btn-solid btn-accent btn-small';
       restore.type = 'button';
-      restore.textContent = 'Gjenopprett';
+      restore.textContent = r.restoreLabel || 'Gjenopprett';
       // Å gjenopprette er å skrive `trashed = false`, og det krever samme
       // myndighet som å slette (`can_delete_object`). Er objektet låst for meg,
       // avviser serveren skrivingen — da skal knappen være tydelig avskrudd i
@@ -8822,6 +9047,9 @@
   const itemWord = (n) => countWord('item', n);
   const ideaWord = (n) => countWord('idea', n);
   const uniWord = (n) => countWord('universe', n);
+  const noteWord = (n) => countWord('note', n);
+  const noteFolderWord = (n) => countWord('noteFolder', n);
+  const noteProjectWord = (n) => countWord('noteProject', n);
 
   /* ---------- De fire søppelkassene ----------
      Søpla er FELLES, så en kasse kan godt inneholde objekter jeg ikke rår over:
@@ -9242,6 +9470,9 @@
     if (objMenuCtx) { closeObjMenu(); return true; }
     const searchEl = document.getElementById('search-modal');
     if (searchEl && !searchEl.hidden) { closeSearchModal(); return true; }
+    // Koblingsmodalen ligger på samme nivå som søket — den åpnes fra en
+    // objektmeny og lukkes før modalen den eventuelt står oppå.
+    if (linksModal && !linksModal.hidden) { closeLinksModal(); return true; }
     const ideasEl = document.getElementById('ideas-modal');
     if (ideasEl && !ideasEl.hidden) { closeIdeasModal(); return true; }
     const eventsEl = document.getElementById('events-modal');
@@ -9446,17 +9677,33 @@
   /* Rangeringen av objekttypene — søkeresultatene sorteres primært på denne.
      Mappekategorier er IKKE med: de er overskrifter i nav-modalen, ikke et
      sted man kan navigere til (`validateActive` hopper over `isCat`). */
-  const SEARCH_TYPE_RANK = { universe: 0, group: 1, card: 2, category: 3, item: 4 };
+  const SEARCH_TYPE_RANK = { universe: 0, group: 1, card: 2, category: 3, item: 4,
+    noteProject: 5, noteFolder: 6, note: 7 };
+  /* HVILKEN HOVEDDEL et treff hører til. Søket er ÉN funksjon for hele Huskis
+     — scopevalget «Alt | Lister | Notater» er et filter over den samme
+     indeksen og den samme rangeringen, ikke to søkemotorer. */
+  const SEARCH_SIDE = {
+    universe: 'lists', group: 'lists', card: 'lists', category: 'lists', item: 'lists',
+    noteProject: 'notes', noteFolder: 'notes', note: 'notes',
+  };
+  const SEARCH_SCOPES = ['all', 'lists', 'notes'];
+  // Nøklene står som hele strenger (ikke `'search.hint.' + scope`):
+  // tests/i18n.test.js finner bare nøkler som er skrevet ut i kildekoden.
+  const SEARCH_HINT_KEY = {
+    all: 'search.hint.all', lists: 'search.hint.lists', notes: 'search.hint.notes',
+  };
   // Skilletegnet mellom nivåene i en kontekststi — det samme som
   // breadcrumbens `.crumb-sep`, og det samme tegnet i begge språk.
   const CRUMB_SEP = '\u203A';
   const SEARCH_PATH_SEP = ' ' + CRUMB_SEP + ' ';
-  const SEARCH_TYPE_ICON = { universe: 'globe', group: 'folder', card: 'list', category: 'category', item: 'item' };
+  const SEARCH_TYPE_ICON = { universe: 'globe', group: 'folder', card: 'list', category: 'category', item: 'item',
+    noteProject: 'noteProject', noteFolder: 'noteFolder', note: 'note' };
   // Nøklene står som hele strenger (ikke `'kind.' + type`): tests/i18n.test.js
   // finner bare nøkler som er skrevet ut i kildekoden.
   const SEARCH_TYPE_LABEL = {
     universe: 'kind.universe', group: 'kind.group', card: 'kind.card',
     category: 'kind.category', item: 'kind.item',
+    noteProject: 'kind.noteProject', noteFolder: 'kind.noteFolder', note: 'kind.note',
   };
   /* Taket på hvor mange treff som TEGNES. Et ett-tegns søk kan treffe alt man
      eier, og en liste på tusen rader er verken raskere eller mer lesbar enn en
@@ -9518,6 +9765,34 @@
         });
       });
     });
+    /* NOTATSIDEN — den samme indeksen, den samme rangeringen. Arkivet og
+       søppelkassen er ute her akkurat som de er det i visningen
+       (`noteVisible`): det man ikke kan se, kan man heller ikke søke seg til.
+
+       NOTATETS TEKST er med i tillegg til tittelen, og det er den ene
+       forskjellen fra listesiden: et notat er et dokument, og det man husker
+       fra det er som regel en setning i det, ikke overskriften. Teksten
+       leses ut av det strukturerte dokumentet (`noteDocText`), ikke av
+       markup — der finnes ingen. Et treff i teksten rangeres ETTER alle
+       navnetreff (se `searchCmp`), så tittelen alltid vinner. */
+    noteProjects().forEach((p) => {
+      if (!noteVisible(p)) return;
+      add('noteProject', p, p.name, []);
+      (p.folders || []).forEach((f) => {
+        if (!noteVisible(f)) return;
+        add('noteFolder', f, f.name, [p.name]);
+      });
+    });
+    allNotes().forEach((n) => {
+      if (!noteVisible(n)) return;
+      const p = findNoteProject(n.project);
+      if (!p || !noteVisible(p)) return;
+      const f = n.folder ? findNoteFolder(n.folder) : null;
+      if (n.folder && (!f || !noteVisible(f))) return;
+      const body = noteDocText(n.doc);
+      add('note', n, noteDisplayTitle(n), [p.name, f ? f.name : tr('notes.freeNotes')],
+        { body, bodyNorm: searchNorm(body) });
+    });
     return out;
   }
 
@@ -9533,6 +9808,8 @@
      og den skal ikke endre seg når man bytter språk. */
   const SEARCH_COLLATE = 'no';
   function searchCmp(a, b) {
+    // 0 = prefiks på navnet, 1 = infiks på navnet, 2 = kun i notatteksten.
+    if (a.tier !== b.tier) return a.tier - b.tier;
     if (a.prefix !== b.prefix) return a.prefix ? -1 : 1;
     const t = SEARCH_TYPE_RANK[a.type] - SEARCH_TYPE_RANK[b.type];
     if (t) return t;
@@ -9546,21 +9823,39 @@
 
   /* Søk over indeksen. Tom (eller bare blank) søketekst gir INGEN treff — en
      resultatliste over alt man eier er ikke et søkeresultat. */
-  function searchObjects(query, index) {
+  function searchObjects(query, index, scope) {
     const q = searchNorm(query);
     if (!q) return [];
+    const want = SEARCH_SCOPES.indexOf(scope) > 0 ? scope : 'all';
     const hits = [];
     (index || buildSearchIndex()).forEach((row) => {
+      if (want !== 'all' && SEARCH_SIDE[row.type] !== want) return;
       const at = row.norm.indexOf(q);
-      if (at < 0) return;
+      // Notatteksten er en ANDRE-linje: den slår bare til når navnet ikke
+      // traff, og treffet havner sist (tier 2).
+      const inBody = at < 0 && row.bodyNorm ? row.bodyNorm.indexOf(q) : -1;
+      if (at < 0 && inBody < 0) return;
       hits.push(Object.assign({}, row, {
+        tier: at < 0 ? 2 : (at === 0 ? 0 : 1),
         prefix: at === 0,
         exact: row.norm === q,
+        bodyAt: at < 0 ? inBody : -1,
         pathKey: row.path.join(' '),
       }));
     });
     hits.sort(searchCmp);
     return hits;
+  }
+  /* Utdraget en TEKST-treff-rad viser: den setningen brukeren søkte etter, med
+     litt kontekst rundt. Et notat kan være langt, og «treff i notatet» uten å
+     vise HVOR er ingen hjelp. */
+  const SEARCH_SNIPPET_PAD = 40;
+  function searchSnippet(hit, query) {
+    if (!hit || hit.bodyAt == null || hit.bodyAt < 0 || !hit.body) return '';
+    const q = searchNorm(query);
+    const from = Math.max(0, hit.bodyAt - SEARCH_SNIPPET_PAD);
+    const to = Math.min(hit.body.length, hit.bodyAt + q.length + SEARCH_SNIPPET_PAD);
+    return (from > 0 ? '…' : '') + hit.body.slice(from, to).trim() + (to < hit.body.length ? '…' : '');
   }
 
   /* ---------------- Naviger til et objekt ----------------
@@ -9706,6 +10001,13 @@
   function navigateToObject(target, opts) {
     const o = opts || {};
     const type = target && target.type;
+    /* NOTATSIDEN. Den ene veien fra «her er et objekt» til «nå står brukeren
+       ved det» gjelder BEGGE hoveddelene: et treff i Notater skal virke mens
+       man står i Lister, og omvendt. Fanebyttet gjøres her, ikke av kalleren —
+       ellers ville hver kaller (søket, koblingene, et varsel) hatt sin egen
+       halve navigering. */
+    if (SEARCH_SIDE[type] === 'notes') return navigateToNoteObject(type, target.id, o);
+    if (activeMainTab !== 'lists') setMainTab('lists');
     const loc = locateObject(type, target && target.id);
     if (!loc) {
       showToast(tr('search.gone'));
@@ -9751,6 +10053,71 @@
     return true;
   }
 
+  /* Naviger til et objekt på NOTATSIDEN. Speiler nøyaktig funksjonen over,
+     nivå for nivå:
+
+       bokhylle  — finnes ikke på hovedflaten; den ER nav-modalen, så vi åpner
+                   den og peker bokhyllen ut der (som et område).
+       notatbok  — bytt plassering og lukk modalen; breadcrumben er stedet som
+                   sier hvor man står (som en mappe).
+       notat     — bytt plassering og ÅPNE EDITOREN. Notatkortet er en
+                   forhåndsvisning; selve notatet er editoren, og «åpne notatet»
+                   er det man ba om.
+
+     Er objektet lagt bort — arkivert, i søppelkassen, eller inne i noe som er
+     det — finnes det ikke å navigere til, og vi sier fra i stedet for å lande
+     på en tom flate. */
+  function noteReachable(kind, id) {
+    const cfg = NOTE_KINDS[kind];
+    const obj = cfg && cfg.find(id);
+    if (!obj || !noteVisible(obj)) return null;
+    if (kind === 'noteProject') return obj;
+    const p = findNoteProject(obj.project);
+    if (!p || !noteVisible(p)) return null;
+    if (kind === 'noteFolder') return obj;
+    if (obj.folder) {
+      const f = findNoteFolder(obj.folder);
+      if (!f || !noteVisible(f)) return null;
+    }
+    return obj;
+  }
+  function navigateToNoteObject(kind, id, o) {
+    const obj = noteReachable(kind, id);
+    if (!obj) {
+      showToast(tr('search.gone'));
+      announce(tr('search.gone'));
+      return false;
+    }
+    const say = () => {
+      if (o.announce === false) return;
+      announce(tr('a11y.wentTo', {
+        kind: tr('kindDef.' + kind), name: quoted(NOTE_KINDS[kind].name(obj)),
+      }));
+    };
+    if (activeMainTab !== 'notes') setMainTab('notes');
+    if (kind === 'noteProject') {
+      setActiveProject(obj.id);
+      openNotesNav();
+      revealTarget(handleSelector('noteProject', obj.id));
+      say();
+      return true;
+    }
+    if (kind === 'noteFolder') {
+      closeNotesNav();
+      setActiveProject(obj.project);
+      setActiveNoteFolder(obj.id);
+      revealTarget('#notes-crumb');
+      say();
+      return true;
+    }
+    closeNotesNav();
+    setActiveProject(obj.project);
+    setActiveNoteFolder(obj.folder || null);
+    say();
+    openNoteEditor(obj.id);
+    return true;
+  }
+
   /* ---------------- Søkemodalen ----------------
      Feltet er en combobox over resultatlisten: piltastene flytter det AKTIVE
      treffet (`aria-activedescendant`) uten at fokus forlater feltet, så man
@@ -9766,11 +10133,44 @@
   const searchEmptyEl = document.getElementById('search-empty');
   const searchMoreEl = document.getElementById('search-more');
   const searchCountEl = document.getElementById('search-count');
+  const searchScopeEl = document.getElementById('search-scope');
   let searchHits = [];      // treffene som faktisk er TEGNET (taket er brukt)
   let searchActive = -1;    // indeks i searchHits, eller -1
+  /* Scopevalget «Alt | Lister | Notater». `Alt` er standard, og valget nullstilles
+     IKKE mellom åpninger: har man snevret inn til Notater, er det som regel
+     fordi man leter der. Det ligger i minnet, ikke i lagringen — det er en
+     innsnevring av ett søk, ikke en innstilling. */
+  let searchScope = 'all';
+
+  /* DEN SEGMENTERTE BRYTEREN — hovedbryteren (Lister ↔ Notater) og søkets
+     scopevelger er den samme kontrollen (`.seg` i styles.css), og dette er alt
+     JS gjør for den: hvor mange segmenter den har, og hvilket som er aktivt.
+     CSS eier bevegelsen — den ene flaten som glir mellom segmentene er
+     `100% / --seg-n` bred og står `--seg-i * 100%` inn, så en tredje fane ville
+     virket uten en eneste ny utregning. Semantikken (`aria-selected` + rullende
+     `tabIndex`) settes her, ett sted for begge bryterne. */
+  function paintSeg(el, sel, erAktiv) {
+    if (!el) return;
+    const btns = [...el.querySelectorAll(sel)];
+    el.style.setProperty('--seg-n', btns.length || 1);
+    btns.forEach((b, i) => {
+      const on = !!erAktiv(b);
+      if (on) el.style.setProperty('--seg-i', i);
+      b.classList.toggle('is-active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.tabIndex = on ? 0 : -1;
+    });
+  }
+
+  function setSearchScope(scope) {
+    searchScope = SEARCH_SCOPES.indexOf(scope) > -1 ? scope : 'all';
+    paintSeg(searchScopeEl, '.seg-btn', (b) => b.dataset.scope === searchScope);
+    paintSearchResults();
+  }
 
   function openSearchModal() {
     searchInput.value = '';
+    setSearchScope(searchScope);
     paintSearchResults();
     searchModal.hidden = false;
     updateModalOpenClass();
@@ -9822,6 +10222,15 @@
     meta.appendChild(kindEl);
     if (hit.path.length) meta.appendChild(document.createTextNode(hit.path.join(SEARCH_PATH_SEP)));
     main.append(nameEl, meta);
+    // Treff i selve notatteksten: vis SETNINGEN. Uten den vet man ikke hvorfor
+    // notatet står i lista — tittelen inneholder jo ikke søkeordet.
+    const snip = searchSnippet(hit, searchInput.value);
+    if (snip) {
+      const sn = document.createElement('span');
+      sn.className = 'search-result-snippet';
+      sn.textContent = quoted(snip);
+      main.appendChild(sn);
+    }
 
     // Aktiv rad bæres av mer enn farge (docs/tilgjengelighet.md).
     const cue = document.createElement('span');
@@ -9849,7 +10258,7 @@
 
   function paintSearchResults() {
     const q = searchInput.value.trim();
-    const all = searchObjects(q);
+    const all = searchObjects(q, null, searchScope);
     searchHits = all.slice(0, SEARCH_MAX);
     searchResultsEl.innerHTML = '';
     searchHits.forEach((hit, i) => searchResultsEl.appendChild(searchRow(hit, i)));
@@ -9859,6 +10268,7 @@
     paintSearchActive(false);
 
     searchHintEl.hidden = !!q;
+    searchHintEl.textContent = tr(SEARCH_HINT_KEY[searchScope] || SEARCH_HINT_KEY.all);
     searchEmptyEl.hidden = !(q && !all.length);
     if (q && !all.length) searchEmptyEl.textContent = tr('search.noHits', { q: quoted(q) });
     searchMoreEl.hidden = all.length <= SEARCH_MAX;
@@ -9892,6 +10302,25 @@
 
   searchBtn.addEventListener('click', openSearchModal);
   searchCloseBtn.addEventListener('click', closeSearchModal);
+  if (searchScopeEl) {
+    searchScopeEl.addEventListener('click', (ev) => {
+      const b = ev.target.closest('.seg-btn');
+      if (!b) return;
+      setSearchScope(b.dataset.scope);
+      try { searchInput.focus(); } catch (e) { /* ignorer */ }
+    });
+    // Piltaster i en tablist (WAI-ARIA), som hovedbryteren øverst.
+    searchScopeEl.addEventListener('keydown', (ev) => {
+      const step = ev.key === 'ArrowRight' ? 1 : ev.key === 'ArrowLeft' ? -1 : 0;
+      if (!step) return;
+      ev.preventDefault();
+      const i = SEARCH_SCOPES.indexOf(searchScope);
+      const next = SEARCH_SCOPES[(i + step + SEARCH_SCOPES.length) % SEARCH_SCOPES.length];
+      setSearchScope(next);
+      const b = searchScopeEl.querySelector('.seg-btn[data-scope="' + next + '"]');
+      if (b) b.focus();
+    });
+  }
   searchModal.addEventListener('click', (ev) => { if (ev.target === searchModal) closeSearchModal(); });
   searchInput.addEventListener('input', paintSearchResults);
   searchInput.addEventListener('keydown', (ev) => {
@@ -13202,6 +13631,9 @@
     if (kind === 'universe') return findUniverse(id);
     if (kind === 'group' || kind === 'groupcat') return findGroupAnywhere(id);
     if (kind === 'card') return findCard(id);
+    // Notatsiden bruker den SAMME menyen (docs/notater-plan.md): samme skall,
+    // samme rader, bare et annet sett av dem.
+    if (NOTE_KINDS[kind]) return NOTE_KINDS[kind].find(id);
     return findItemById(id);
   }
   function objMenuCont(kind, obj) {
@@ -13209,6 +13641,8 @@
     if (kind === 'universe') return null;
     if (kind === 'group' || kind === 'groupcat') return findUniverse(obj.uni) || obj._parent;
     if (kind === 'card') return activeGroupObj();
+    if (kind === 'noteProject' || kind === 'note') return null;
+    if (kind === 'noteFolder') return findNoteProject(obj.project);
     return findCard(obj.home);
   }
   // Objekttypen i bestemt form, slik den leses inne i menyens overskrift og i
@@ -13219,6 +13653,7 @@
   const OBJ_MENU_HEAD_ICON = {
     universe: 'globe', group: 'folder', groupcat: 'groupCategory',
     card: 'list', item: null, category: 'category',
+    noteProject: 'noteProject', noteFolder: 'noteFolder', note: 'note',
   };
   // Menyknappen for et objekt, funnet på nytt i DOM-en. Brukes etter en
   // rendring (sortering i menyen bygger board-et om) så popoveren kan bli
@@ -13230,7 +13665,9 @@
       ' :scope > .cat-head > .obj-menu-btn');
   }
   function objMenuHost(spec) {
-    const root = spec.scope === navScope ? navBoard : board;
+    const root = spec.scope === navScope ? navBoard
+      : spec.scope === notesNavScope ? notesNavBoard
+        : spec.scope === notesScope ? notesBoard : board;
     return (root && root.querySelector('[data-id="' + spec.id + '"]')) || null;
   }
   // Tittel-elementet slik det ser ut NÅ. `spec.rename` er en closure fra
@@ -13246,6 +13683,8 @@
     item: ':scope > .item-main > .item-text',
     groupcat: ':scope > .cat-head .cat-title',
     category: ':scope > .cat-head .cat-title',
+    noteProject: ':scope > .card-head .card-title',
+    noteFolder: ':scope > .item-main .item-text',
   };
   function renameFromObjMenu(spec) {
     const host = objMenuHost(spec);
@@ -13455,7 +13894,7 @@
           fortsatt omdøpes ved å klikke rett på navnet. */
     if (spec.rename) {
       list.appendChild(objMenuRow(ICONS.pencil, tr('menu.rename'),
-        () => closeObjMenuThen(() => renameFromObjMenu(spec))));
+        () => closeObjMenuThen(spec.renameFn || (() => renameFromObjMenu(spec)))));
     }
 
     /* 2) Ansvarlig (liste/listepunkt/kategori i delt kontekst) — fra den gamle
@@ -13550,6 +13989,17 @@
           if (live) leaveObject(kind, live);
         })));
     }
+
+    /* 7b) Radene objekttypen har HELT FOR SEG SELV. Notatsiden bruker dem til
+           «Koblinger» og «Arkiver» — begge er vanlige rader i den samme menyen,
+           ikke en ny kontrolltype ved siden av den (docs/notater-plan.md). */
+    (spec.extraRows || []).forEach((r) => {
+      if (!r) return;
+      list.appendChild(objMenuRow(r.icon, r.label, () => {
+        if (r.keepOpen) { r.fn(); repaintObjMenu(); return; }
+        closeObjMenuThen(r.fn);
+      }, { hint: r.hint }));
+    });
 
     /* 8) Sletting sist, bak en skillelinje og i rødt: den er den eneste raden
           som fjerner noe, og den skal aldri ligge der fingeren treffer først. */
@@ -14784,21 +15234,35 @@
     return null;
   }
   const findNoteById = (id) => allNotes().find((n) => n.id === id) || null;
-  const visibleNoteProjects = () => noteProjects().filter(live).sort(posCmp);
+
+  /* NORMALVISNINGEN viser det som verken ligger i søppelkassen ELLER i arkivet.
+     De to tilstandene er uavhengige (`trashed` og `archived`, begge på
+     innholdsregisteret): et arkivert notat kan legges i søppelkassen, og et
+     notat kan gjenopprettes fra søppelkassen tilbake til arkivet det lå i.
+     `live()` er den delte søppelkasse-vakten hele appen bruker; `onShelf()` er
+     arkivets. Autoritativt: docs/notater-plan.md. */
+  const onShelf = (o) => !!(o && o.archived);
+  const noteVisible = (o) => live(o) && !onShelf(o);
+  const visibleNoteProjects = () => noteProjects().filter(noteVisible).sort(posCmp);
   const activeProjectObj = () => findNoteProject(state.activeProject);
   const activeNoteFolderObj = () => (state.activeFolder ? findNoteFolder(state.activeFolder) : null);
-  const liveFolders = (p) => (p ? (p.folders || []).filter(live).sort(posCmp) : []);
+  const liveFolders = (p) => (p ? (p.folders || []).filter(noteVisible).sort(posCmp) : []);
 
   /* Notatene i den plasseringen brukeren står i. Et notat hvis mappe ikke
-     finnes (slettet på en annen enhet) leses som et FRITT notat i prosjektet
-     sitt — nøyaktig som et listepunkt med en hengende `cat` leses som nivå 1. */
+     FINNES (slettet for godt på en annen enhet) leses som et FRITT notat i
+     bokhyllen sin — nøyaktig som et listepunkt med en hengende `cat` leses som
+     nivå 1. Men en notatbok som finnes og bare er lagt bort — arkivert eller i
+     søppelkassen — beholder notatene sine: de skal følge notatboken ut av
+     visningen, ikke sprette opp blant de frie notatene. */
   function notesIn(projectId, folderId) {
     const p = findNoteProject(projectId);
     if (!p) return [];
-    const ids = new Set((p.folders || []).filter(live).map((f) => f.id));
+    const known = new Set((p.folders || []).map((f) => f.id));
+    const shown = new Set((p.folders || []).filter(noteVisible).map((f) => f.id));
     return allNotes().filter((n) => {
-      if (!live(n) || n.project !== projectId) return false;
-      const folder = n.folder && ids.has(n.folder) ? n.folder : null;
+      if (!noteVisible(n) || n.project !== projectId) return false;
+      if (n.folder && known.has(n.folder) && !shown.has(n.folder)) return false;
+      const folder = n.folder && known.has(n.folder) ? n.folder : null;
       return folder === (folderId || null);
     }).sort(posCmp);
   }
@@ -14807,7 +15271,7 @@
   const noteCountIn = (projectId, folderId) => notesIn(projectId, folderId).length;
   // Hele bokhyllen: de frie notatene pluss alle notatbøkenes.
   const noteCountInProject = (projectId) =>
-    allNotes().filter((n) => live(n) && n.project === projectId).length;
+    allNotes().filter((n) => noteVisible(n) && n.project === projectId).length;
 
   function setActiveProject(id) {
     state.activeProject = id || null;
@@ -14867,9 +15331,29 @@
     ex.querySelector('.note-card-excerpt-text').textContent = text ? quoted(text) : '';
     ex.hidden = !text;
     el.querySelector('.note-card-meta').textContent = noteEditedText(note);
+    /* Koblingschipen står i KORTKROPPEN, under utdraget — ikke i hodet.
+       Hodet er allerede fullt (ikon, tittel, «sist endret» og menyknappen), og
+       en chip til presset tittelen ned i en smal søyle på et notatkort, som er
+       smalere enn et listekort. Kroppen har plassen, og chipen leses like godt
+       der. */
+    const chip = linkChip('note', note.id);
+    if (chip) {
+      const row = document.createElement('div');
+      row.className = 'note-card-links';
+      row.appendChild(chip);
+      el.querySelector('.note-card-body').appendChild(row);
+    }
+    // Menyknappen: den SAMME objektmenyen som resten av appen — arkiver,
+    // koblinger, slett (docs/menus.md).
+    const noteMenu = el.querySelector('.obj-menu-btn');
+    attachObjMenu(noteMenu, noteObjMenuSpec('note', note.id));
+    labelBtn(noteMenu, tr(NOTE_MENU_LABEL.note, { name: quoted(noteDisplayTitle(note)) }));
     // Klikk åpner editoren; klikk-og-hold løfter kortet (dnd-kit eier gesten,
     // og klikk-vakten svelger klikket som ellers ville fulgt et slipp).
-    el.addEventListener('click', () => openNoteEditor(note.id));
+    el.addEventListener('click', (ev) => {
+      if (ev.target.closest('.obj-menu-btn, .meta-chip')) return;
+      openNoteEditor(note.id);
+    });
     el.addEventListener('keydown', (ev) => {
       if (ev.key !== 'Enter' && ev.key !== ' ') return;
       ev.preventDefault();
@@ -14887,6 +15371,7 @@
     // Fanen er ikke synlig: hold breadcrumben i takt, men bygg ikke en DOM
     // ingen ser (og mål ikke kolonner i en skjult beholder — alt måler 0).
     if (notesBoard.hidden) { updateNotesCrumbs(); updateNotesToolbar(); return; }
+    paintNotesLifecycleBadges();
     captureFocusIn(notesBoard);
     updateNotesCrumbs();
     updateNotesToolbar();
@@ -15064,6 +15549,8 @@
     const txt = el.querySelector('.item-text');
     txt.textContent = f.name;
     el.querySelector('.title-line').appendChild(noteRowCount(noteCountIn(f.project, f.id)));
+    const fChip = linkChip('noteFolder', f.id);
+    if (fChip) el.querySelector('.title-line').appendChild(fChip);
     const rename = () => editText(txt, f.name, (val) => {
       const o = findNoteFolder(f.id);
       if (!o) return;
@@ -15082,6 +15569,9 @@
       closeNotesNav();
     });
     el.classList.toggle('is-active', state.activeFolder === f.id);
+    const fMenu = el.querySelector('.obj-menu-btn');
+    attachObjMenu(fMenu, noteObjMenuSpec('noteFolder', f.id, rename));
+    labelBtn(fMenu, tr(NOTE_MENU_LABEL.noteFolder, { name: quoted(f.name) }));
     attachKeyHandle(el, 'noteFolder', () => f.id, { rename });
     return el;
   }
@@ -15127,6 +15617,8 @@
     // Pillen på bokhyllen teller HELE bokhyllen — de frie notatene har sin egen
     // rad med sitt eget tall, og to like tall ved siden av hverandre forvirrer.
     el.querySelector('.title-line').appendChild(noteRowCount(noteCountInProject(p.id)));
+    const pChip = linkChip('noteProject', p.id);
+    if (pChip) el.querySelector('.card-title-wrap').appendChild(pChip);
     const rename = () => editText(title, p.name, (val) => {
       const o = findNoteProject(p.id);
       if (!o) return;
@@ -15143,7 +15635,7 @@
     const head = el.querySelector('.card-head');
     head.setAttribute('aria-expanded', p.collapsed ? 'false' : 'true');
     head.addEventListener('click', (ev) => {
-      if (ev.target.closest('.edit-input')) return;
+      if (ev.target.closest('.edit-input, .obj-menu-btn, .meta-chip')) return;
       toggleCardCollapsed(el, p, notesNavScope);
     });
     head.addEventListener('keydown', (ev) => {
@@ -15163,9 +15655,15 @@
       ev.stopPropagation();
       addNoteFolder(p.id);
     });
+    const pMenu = el.querySelector('.obj-menu-btn');
+    attachObjMenu(pMenu, noteObjMenuSpec('noteProject', p.id, rename));
+    labelBtn(pMenu, tr(NOTE_MENU_LABEL.noteProject, { name: quoted(p.name) }));
+    // Notatbok-kassen og -arkivet ligger i BOKHYLLEN sin, akkurat som
+    // mappe-kassen ligger i områdekortet (docs/trash.md).
+    buildNoteProjectCans(p, el.querySelector('.card-body'));
     if (p.collapsed) {
       collapseCardBody(el);
-      setCollapseCount(head, leafCount(p.folders), true, ICONS.noteFolder);
+      setCollapseCount(head, leafCount((p.folders || []).filter(noteVisible)), true, ICONS.noteFolder);
     }
     return el;
   }
@@ -15206,6 +15704,7 @@
     vis.forEach((p) => col.appendChild(buildNoteProjectCard(p)));
     col.appendChild(notesAddProjectRow());
     notesNavBoard.appendChild(col);
+    paintNotesLifecycleBadges();
     ensureNotesNavBoards();
     notesNavSyncBoards();
     relayoutBoard(notesNavScope);
@@ -15225,6 +15724,778 @@
     notesNavModal.hidden = true;
     notesNavBoard.innerHTML = '';
     if (notesCrumbBtn) notesCrumbBtn.focus();
+  }
+
+  /* ============================================================
+     NOTATENES LIVSSYKLUS: ARKIV OG SØPPELKASSE
+     ------------------------------------------------------------
+     Autoritativt: docs/notater-plan.md (og docs/trash.md for søpla).
+
+     TO TILSTANDER, UAVHENGIGE AV HVERANDRE, begge på innholdsregisteret:
+
+       `archived` — lagt til side. Objektet er levende innhold; det står bare
+                    ikke i normalvisningen. Hentes fram igjen med ett trykk.
+       `trashed`  — i søppelkassen. Nøyaktig Huskis' etablerte modell:
+                    optimistisk sletting med angre-toast, gjenoppretting, og
+                    gravstein først når kassen tømmes.
+
+     HIERARKIET arves ikke som flagg. Legges en bokhylle bort — arkivert eller
+     slettet — blir notatbøkene og notatene stående med sine egne flagg og
+     forsvinner sammen med henne, akkurat som lister forsvinner med mappen sin
+     (`live()`-vakten i visningen er den samme). Kommer hun tilbake, kommer
+     alt tilbake slik det sto. Det er derfor kassene og arkivene er SCOPET til
+     en levende forelder — notatbokkassen står i bokhyllen sin, notatkassen i
+     plasseringen man står i — så en gjenoppretting alltid gjør objektet
+     synlig igjen. Først TØMMINGEN er rekursiv: da settes gravstein på hele
+     undertreet (`tombSubtree`), som serverens `on delete cascade`.
+     ============================================================ */
+
+  const trashedNoteProjects = () => noteProjects().filter((p) => !live(p));
+  const archivedNoteProjects = () => noteProjects().filter((p) => live(p) && onShelf(p)).sort(posCmp);
+  const trashedNoteFoldersOf = (p) => (p ? (p.folders || []).filter((f) => !live(f)) : []);
+  const archivedNoteFoldersOf = (p) =>
+    (p ? (p.folders || []).filter((f) => live(f) && onShelf(f)).sort(posCmp) : []);
+  /* Notatene i ÉN plassering. Kassen og arkivet står i plasseringen man er i,
+     som liste-kassen står i den aktive mappen — så det man henter tilbake
+     havner der man ser. Notater i en notatbok som selv er lagt bort hører til
+     notatbokens egen kasse, ikke bokhyllens: `n.folder` avgjør, ikke om
+     notatboken er synlig. */
+  function notesOfPlacement(projectId, folderId, pick) {
+    const p = findNoteProject(projectId);
+    if (!p) return [];
+    const known = new Set((p.folders || []).map((f) => f.id));
+    return allNotes().filter((n) => {
+      if (n.project !== projectId || !pick(n)) return false;
+      const folder = n.folder && known.has(n.folder) ? n.folder : null;
+      return folder === (folderId || null);
+    }).sort(posCmp);
+  }
+  const trashedNotesIn = (pid, fid) => notesOfPlacement(pid, fid, (n) => !live(n));
+  const archivedNotesIn = (pid, fid) => notesOfPlacement(pid, fid, (n) => live(n) && onShelf(n));
+
+  // Kind → de tre oppslagene livssyklusen trenger. Ett sted, så «arkiver»,
+  // «slett», «gjenopprett» og menyen ikke kan bli uenige om hva et objekt er.
+  // Som `SEARCH_HINT_KEY`: hele nøkler, ikke satt sammen av biter.
+  const NOTE_MENU_LABEL = {
+    note: 'label.menuNote',
+    noteFolder: 'label.menuNoteFolder',
+    noteProject: 'label.menuNoteProject',
+  };
+  const NOTE_DELETE_LABEL = {
+    note: 'notes.delete.note',
+    noteFolder: 'notes.delete.noteFolder',
+    noteProject: 'notes.delete.noteProject',
+  };
+  const NOTE_KINDS = {
+    noteProject: {
+      find: findNoteProject, name: (o) => o.name, icon: 'noteProject',
+      word: (n) => noteProjectWord(n),
+    },
+    noteFolder: {
+      find: findNoteFolder, name: (o) => o.name, icon: 'noteFolder',
+      word: (n) => noteFolderWord(n),
+    },
+    note: {
+      find: findNoteById, name: (o) => noteDisplayTitle(o), icon: 'note',
+      word: (n) => noteWord(n),
+    },
+  };
+  const noteKindOf = (id) => {
+    const f = findAnyById(id);
+    return f && NOTE_KINDS[f.kind] ? f.kind : null;
+  };
+
+  /* ---------------- Arkivering ----------------
+     Ett flagg, én stempling, én lagring. Ingen buffer og ingen angre-toast:
+     arkivering er ikke destruktivt, og veien tilbake er arkivet selv — som
+     står rett ved siden av knappen man brukte. */
+  function setNoteArchived(kind, id, on) {
+    const cfg = NOTE_KINDS[kind];
+    const o = cfg && cfg.find(id);
+    if (!o || !!o.archived === !!on) return;
+    o.archived = !!on;
+    stampContent(o);
+    validateActiveNotes(state);
+    save();
+    renderNotesNav();
+    renderNotes();
+    showToast(tr(on ? 'notes.archived' : 'notes.unarchived', { name: quoted(cfg.name(o)) }));
+  }
+  const archiveNoteObject = (kind, id) => setNoteArchived(kind, id, true);
+  const unarchiveNoteObject = (kind, id) => setNoteArchived(kind, id, false);
+
+  /* ---------------- Sletting (til søppelkassen) ----------------
+     Samme delte maskineri som listene: `bufferDelete` + samle-toast, med
+     fly-i-kassen-animasjonen mot den kassen objektet faktisk havner i. */
+  function noteTrashTargetFor(kind, obj) {
+    if (kind === 'note') return noteTrashBtn;
+    if (kind === 'noteProject') return noteProjectTrashBtn;
+    return notesNavBoard &&
+      notesNavBoard.querySelector('.card[data-id="' + obj.project + '"] .note-folder-trash-btn');
+  }
+  function deleteNoteObject(kind, id) {
+    const cfg = NOTE_KINDS[kind];
+    const obj = cfg && cfg.find(id);
+    if (!obj) return;
+    const name = cfg.name(obj);
+    const sel = handleSelector(kind, id);
+    const host = kind === 'note' ? notesBoard : notesNavBoard;
+    /* Spøkelset som flyr i kassen er OBJEKTET, ikke håndtaket:
+       `handleSelector` peker på korthodet for en bokhylle (som for et område),
+       men på hele raden for en notatbok og hele kortet for et notat. Bare
+       bokhyllen skal derfor utvides til `.card`. */
+    const node = sel && host ? host.querySelector(sel) : null;
+    const ghost = ghostFrom(kind === 'noteProject' ? ((node && node.closest('.card')) || node) : node);
+    keepFocus(focusTargetAfterRemoval(kind, id, null));
+    bufferDelete(obj, kind, (o) => setTrashed(o, kind, true));
+    validateActiveNotes(state);
+    renderNotesNav();   // kassene blir synlige FØR animasjonen starter
+    renderNotes();
+    flyGhost(ghost, noteTrashTargetFor(kind, obj));
+    pushDeleteToast(kind, id, name);
+  }
+
+  /* ---------------- Gjenoppretting ----------------
+     Som de fire andre nivåene: slå opp objektet PÅ NYTT (synken kan ha bygget
+     treet om mens modalen sto åpen) og skriv `trashed = false`. Objektet
+     kommer tilbake dit det lå — også i arkivet, hvis det var arkivert da det
+     ble slettet. */
+  function restoreNoteObject(kind, id) {
+    const cfg = NOTE_KINDS[kind];
+    const o = cfg && cfg.find(id);
+    if (!o) return;
+    /* En sletting som ennå ligger i angre-vinduet er ren LOKAL tilstand
+       (`_pendingDelete`) — den ble aldri skrevet. Da er gjenopprettingen å
+       angre bufferet, ikke å skrive `trashed = false` på en rad som aldri fikk
+       flagget (docs/trash.md). Søppel-modalen gjør det samme via `r.pending`;
+       her står det så veien er hel uansett hvem som kaller. */
+    if (o._pendingDelete) { undoBufferedDelete(id); return; }
+    setTrashed(o, kind, false);
+    validateActiveNotes(state);
+    renderNotesNav();
+    renderNotes();
+    save();
+  }
+
+  /* ---------------- Tømming (permanent) ----------------
+     Gravstein på hele undertreet, så en enhet med gammel cache ikke kan
+     gjenopplive noe. Buffrede slettinger committes FØRST, så tømmingen aldri
+     venter på angre-vinduet (docs/trash.md). */
+  function purgeNotes(list) {
+    if (!list.length) return;
+    const arr = allNotes();
+    list.forEach((n) => {
+      tombSubtree(n, 'note');
+      const i = arr.indexOf(n);
+      if (i > -1) arr.splice(i, 1);
+    });
+  }
+  function emptyNotesTrash(projectId, folderId) {
+    const rows = trashedNotesIn(projectId, folderId);
+    commitBufferedFor(rows.map((n) => n.id));
+    purgeNotes(trashedNotesIn(projectId, folderId));
+    renderNotes();
+    renderNotesNav();
+    save();
+  }
+  function emptyNoteFoldersTrash(projectId) {
+    const p = findNoteProject(projectId);
+    if (!p) return;
+    commitBufferedFor(trashedNoteFoldersOf(p).map((f) => f.id));
+    const trash = trashedNoteFoldersOf(p);
+    if (!trash.length) return;
+    const gone = new Set(trash.map((f) => f.id));
+    trash.forEach((f) => {
+      tombSubtree(f, 'noteFolder');
+      const i = p.folders.indexOf(f);
+      if (i > -1) p.folders.splice(i, 1);
+    });
+    /* Notatene BLIR — som frie notater i bokhyllen, akkurat som serverens
+       `on delete set null` gjør dem. Pekeren nulles med et NYTT stempel, så
+       den ikke kan bli hengende: uten stempelet ville skrivevakten forsvart
+       den gamle verdien og notatet pekt på en notatbok som ikke finnes. */
+    let freed = 0;
+    allNotes().forEach((n) => {
+      if (!gone.has(n.folder)) return;
+      n.folder = null;
+      stampPos(n);
+      freed++;
+    });
+    validateActiveNotes(state);
+    renderNotesNav();
+    renderNotes();
+    save();
+    if (freed) showToast(tr('notes.foldersPurgedFreed', { count: freed }));
+  }
+  function emptyNoteProjectsTrash() {
+    commitBufferedFor(trashedNoteProjects().map((p) => p.id));
+    const trash = trashedNoteProjects();
+    if (!trash.length) return;
+    const gone = new Set(trash.map((p) => p.id));
+    trash.forEach((p) => {
+      tombSubtree(p, 'noteProject');  // bokhyllen, notatbøkene OG notatene
+      const i = noteProjects().indexOf(p);
+      if (i > -1) noteProjects().splice(i, 1);
+    });
+    state.notes = allNotes().filter((n) => !gone.has(n.project));
+    validateActiveNotes(state);
+    renderNotesNav();
+    renderNotes();
+    save();
+  }
+
+  /* ---------------- De seks visningene ----------------
+     Søppelkassen og arkivet deler den SAMME modalen (`showTrashModal`) — det
+     er den samme raden, den samme «Gjenopprett»-knappen og den samme foten.
+     Forskjellen er hva foten gjør: kassen sletter for godt, arkivet legger
+     alt i kassen (som fortsatt er reversibelt). En arkivrad får i tillegg en
+     «Slett»-knapp, så veien videre finnes der man står. */
+  const noteTrashNote = () => TRASH_NOTE;
+  function noteTrashRows(kind, rows) {
+    const cfg = NOTE_KINDS[kind];
+    return rows.map((o) => ({
+      id: o.id,
+      name: cfg.name(o) || tr('common.noName'),
+      meta: noteRowMeta(kind, o),
+      pending: !!o._pendingDelete,
+      manage: true,               // notatene er mine alene — ingen lås å spørre om
+      restore: () => restoreNoteObject(kind, o.id),
+    }));
+  }
+  function noteRowMeta(kind, o) {
+    if (kind === 'noteProject') return noteFolderWord((o.folders || []).filter(live).length);
+    if (kind === 'noteFolder') return noteWord(allNotes().filter((n) => live(n) && n.folder === o.id).length);
+    return noteExcerpt(o) || '';
+  }
+  function openNotesTrash() {
+    const pid = state.activeProject, fid = state.activeFolder;
+    const where = activeNoteFolderObj() || activeProjectObj();
+    showTrashModal({
+      title: tr('notes.trashNotesIn', { name: where ? nameOfAny(where) : '' }),
+      note: noteTrashNote(),
+      emptyLabel: tr('notes.purgeNotes'),
+      emptyMsg: tr('notes.noTrashedNotes'),
+      rows: () => noteTrashRows('note', trashedNotesIn(pid, fid)),
+      empty: () => emptyNotesTrash(pid, fid),
+    });
+  }
+  function openNoteFoldersTrash(projectId) {
+    const p0 = findNoteProject(projectId);
+    showTrashModal({
+      title: tr('notes.trashFoldersIn', { name: p0 ? p0.name : '' }),
+      note: noteTrashNote(),
+      emptyLabel: tr('notes.purgeFolders'),
+      emptyMsg: tr('notes.noTrashedFolders'),
+      rows: () => noteTrashRows('noteFolder', trashedNoteFoldersOf(findNoteProject(projectId))),
+      empty: () => emptyNoteFoldersTrash(projectId),
+    });
+  }
+  function openNoteProjectsTrash() {
+    showTrashModal({
+      title: tr('notes.trashProjects'),
+      note: noteTrashNote(),
+      emptyLabel: tr('notes.purgeProjects'),
+      emptyMsg: tr('notes.noTrashedProjects'),
+      rows: () => noteTrashRows('noteProject', trashedNoteProjects().sort(posCmp)),
+      empty: emptyNoteProjectsTrash,
+    });
+  }
+
+  /* Arkivet. Samme modal, andre verb: «Gjenopprett» tar objektet ut av
+     arkivet, og «Slett» legger det i søppelkassen (derfra kan det fortsatt
+     hentes tilbake). Foten tømmer HELE arkivet ned i kassen. */
+  function noteArchiveRows(kind, rows) {
+    const cfg = NOTE_KINDS[kind];
+    return rows.map((o) => ({
+      id: o.id,
+      name: cfg.name(o) || tr('common.noName'),
+      meta: noteRowMeta(kind, o),
+      manage: true,
+      restoreLabel: tr('notes.unarchive'),
+      restore: () => { unarchiveNoteObject(kind, o.id); },
+      extra: {
+        label: tr('menu.delete'),
+        aria: tr('notes.deleteAria', { name: quoted(cfg.name(o) || '') }),
+        fn: () => { deleteNoteObject(kind, o.id); },
+      },
+    }));
+  }
+  function archiveShellFor(kind, rows, cfg) {
+    showTrashModal(Object.assign({
+      icon: ICONS.archive,
+      note: tr('notes.archiveNote'),
+      danger: false,
+      rows: () => noteArchiveRows(kind, rows()),
+    }, cfg));
+  }
+  function openNotesArchive() {
+    const pid = state.activeProject, fid = state.activeFolder;
+    const where = activeNoteFolderObj() || activeProjectObj();
+    archiveShellFor('note', () => archivedNotesIn(pid, fid), {
+      title: tr('notes.archiveNotesIn', { name: where ? nameOfAny(where) : '' }),
+      emptyLabel: tr('notes.archiveEmptyAll'),
+      emptyMsg: tr('notes.noArchivedNotes'),
+      empty: () => { archivedNotesIn(pid, fid).forEach((n) => deleteNoteObject('note', n.id)); },
+    });
+  }
+  function openNoteFoldersArchive(projectId) {
+    const p0 = findNoteProject(projectId);
+    archiveShellFor('noteFolder', () => archivedNoteFoldersOf(findNoteProject(projectId)), {
+      title: tr('notes.archiveFoldersIn', { name: p0 ? p0.name : '' }),
+      emptyLabel: tr('notes.archiveEmptyAll'),
+      emptyMsg: tr('notes.noArchivedFolders'),
+      empty: () => {
+        archivedNoteFoldersOf(findNoteProject(projectId))
+          .forEach((f) => deleteNoteObject('noteFolder', f.id));
+      },
+    });
+  }
+  function openNoteProjectsArchive() {
+    archiveShellFor('noteProject', archivedNoteProjects, {
+      title: tr('notes.archiveProjects'),
+      emptyLabel: tr('notes.archiveEmptyAll'),
+      emptyMsg: tr('notes.noArchivedProjects'),
+      empty: () => { archivedNoteProjects().forEach((p) => deleteNoteObject('noteProject', p.id)); },
+    });
+  }
+
+  /* Objektmenyens innhold for de tre notatnivåene. ÉN definisjon for alle tre
+     — radene er de samme, bare ordene og oppslaget skiller dem. */
+  function noteObjMenuSpec(kind, id, renameFn) {
+    const cfg = NOTE_KINDS[kind];
+    return {
+      kind, id,
+      scope: kind === 'note' ? notesScope : notesNavScope,
+      rename: true,
+      renameFn: renameFn || null,
+      extraRows: [
+        linksMenuRow(kind, id),
+        {
+          icon: ICONS.archive,
+          label: tr(cfg.find(id) && cfg.find(id).archived ? 'notes.unarchive' : 'notes.archive'),
+          hint: tr('notes.archiveHint'),
+          fn: () => setNoteArchived(kind, id, !(cfg.find(id) || {}).archived),
+        },
+      ],
+      remove: () => deleteNoteObject(kind, id),
+      removeLabel: tr(NOTE_DELETE_LABEL[kind]),
+    };
+  }
+
+  /* ---------------- Kassene og arkivene som KNAPPER ----------------
+     Kassen er `.trashcan` med søppelkasse-ikonet, arkivet den samme knappen
+     med arkivikonet — samme flate, samme teller, samme «skjult når tom».
+     Kassene har i tillegg hold-og-sveip (`attachTrashHold`), fordi de sletter
+     for godt; arkivet har det ikke, for der finnes ingen endelig handling å
+     sveipe fram. */
+  const noteTrashBtn = document.getElementById('note-trash-btn');
+  const noteTrashWrap = document.getElementById('note-trash');
+  const noteArchiveBtn = document.getElementById('note-archive-btn');
+  const noteArchiveWrap = document.getElementById('note-archive');
+  const noteProjectTrashBtn = document.getElementById('note-project-trash-btn');
+  const noteProjectTrashWrap = document.getElementById('note-project-trash');
+  const noteProjectArchiveBtn = document.getElementById('note-project-archive-btn');
+  const noteProjectArchiveWrap = document.getElementById('note-project-archive');
+
+  // Antallet + synligheten på én knapp. `data-drag-revealed` (kassen et drag
+  // har foldet ut) vinner over «skjul når tom», som for de andre kassene.
+  function paintCan(btn, wrap, n, label) {
+    if (!btn) return;
+    const c = btn.querySelector('.trashcan-count');
+    if (c) c.textContent = n;
+    btn.setAttribute('aria-label', label);
+    if (wrap && !wrap.dataset.dragRevealed) wrap.hidden = n === 0;
+    if (!wrap && !btn.dataset.dragRevealed) btn.hidden = n === 0;
+  }
+  function paintNotesLifecycleBadges() {
+    const pid = state.activeProject, fid = state.activeFolder;
+    const t = pid ? trashedNotesIn(pid, fid).length : 0;
+    const a = pid ? archivedNotesIn(pid, fid).length : 0;
+    paintCan(noteTrashBtn, noteTrashWrap, t, tr('notes.trashCount', { count: t }));
+    paintCan(noteArchiveBtn, noteArchiveWrap, a, tr('notes.archiveCount', { count: a }));
+    const tp = trashedNoteProjects().length;
+    const ap = archivedNoteProjects().length;
+    paintCan(noteProjectTrashBtn, noteProjectTrashWrap, tp, tr('notes.trashProjectsCount', { count: tp }));
+    paintCan(noteProjectArchiveBtn, noteProjectArchiveWrap, ap, tr('notes.archiveProjectsCount', { count: ap }));
+  }
+  // Kassen/arkivet inne i ETT bokhyllekort (som mappekassen i et områdekort).
+  function buildNoteProjectCans(p, body) {
+    const wrap = document.createElement('div');
+    wrap.className = 'item-trash note-folder-cans';
+    const mk = (cls, icon, zone, n, label, title, api) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'trashcan ' + cls;
+      if (zone) btn.dataset.dndZone = zone;
+      btn.title = title;
+      btn.setAttribute('aria-label', label);
+      const ic = document.createElement('span');
+      ic.className = 'trashcan-icon';
+      ic.setAttribute('aria-hidden', 'true');
+      ic.innerHTML = icon;
+      const cnt = document.createElement('span');
+      cnt.className = 'trashcan-count';
+      cnt.textContent = n;
+      btn.append(ic, cnt);
+      if (api) attachTrashHold(btn, api);
+      else btn.addEventListener('click', (ev) => { ev.stopPropagation(); openNoteFoldersArchive(p.id); });
+      btn.hidden = n === 0;
+      wrap.appendChild(btn);
+      return btn;
+    };
+    const nT = trashedNoteFoldersOf(p).length;
+    const nA = archivedNoteFoldersOf(p).length;
+    mk('note-folder-archive-btn archive-can', ICONS.archive, notesFolderArchiveZone(p.id), nA,
+      tr('notes.archiveFoldersCount', { count: nA, name: quoted(p.name) }),
+      tr('notes.archiveFoldersTitle'), null);
+    mk('note-folder-trash-btn', ICONS.trash, notesFolderTrashZone(p.id), nT,
+      tr('notes.trashFoldersCount', { count: nT, name: quoted(p.name) }),
+      tr('notes.trashFoldersTitle'), {
+        count: () => trashedNoteFoldersOf(findNoteProject(p.id)).length,
+        open: () => openNoteFoldersTrash(p.id),
+        empty: () => emptyNoteFoldersTrash(p.id),
+      });
+    // Selve raden skjules bare når BEGGE er tomme — ellers ville den ene
+    // knappen stått i en skjult beholder.
+    wrap.hidden = !nT && !nA;
+    body.appendChild(wrap);
+    return wrap;
+  }
+  // Sone-id-ene bærer bokhyllens id: hver bokhylle har sin egen kasse og sitt
+  // eget arkiv, og slippet må vite hvilken det traff.
+  const notesFolderTrashZone = (projectId) => 'note-folder-trash:' + projectId;
+  const notesFolderArchiveZone = (projectId) => 'note-folder-archive:' + projectId;
+
+  function wireNotesLifecycleButtons() {
+    if (noteArchiveBtn) noteArchiveBtn.addEventListener('click', openNotesArchive);
+    if (noteProjectArchiveBtn) noteProjectArchiveBtn.addEventListener('click', openNoteProjectsArchive);
+    if (noteTrashBtn) {
+      attachTrashHold(noteTrashBtn, {
+        count: () => trashedNotesIn(state.activeProject, state.activeFolder).length,
+        open: openNotesTrash,
+        empty: () => emptyNotesTrash(state.activeProject, state.activeFolder),
+      });
+    }
+    if (noteProjectTrashBtn) {
+      attachTrashHold(noteProjectTrashBtn, {
+        count: () => trashedNoteProjects().length,
+        open: openNoteProjectsTrash,
+        empty: emptyNoteProjectsTrash,
+      });
+    }
+  }
+
+  /* ============================================================
+     KOBLINGER MELLOM LISTER OG NOTATER
+     ------------------------------------------------------------
+     Autoritativt: docs/notater-plan.md.
+
+     En kobling er en RELASJON mellom ett objekt på notatsiden (bokhylle,
+     notatbok, notat) og ett på listesiden (område, mappe, liste). Den flytter
+     ingenting og eier ingenting: begge beholder foreldrene sine, og begge kan
+     inngå i vilkårlig mange koblinger. Den kan opprettes fra begge sider og
+     åpnes begge veier.
+
+     MODELLEN ER (type, id) PÅ HVER SIDE, ikke et felt på objektet. Det er
+     nettopp det som gjør den utvidbar: en ny koblingsbar type er ett ord i
+     `LINK_NOTE_KINDS`/`LINK_LIST_KINDS` (og én kolonne i databasen), ikke en
+     ombygging.
+
+     ET MÅL SOM IKKE FINNES ER IKKE EN FEIL. Databasen kaskaderer bort en
+     kobling når objektet den peker på slettes for godt, så en hengende peker
+     kan bare oppstå MELLOM to synk-runder — eller når målet fortsatt finnes,
+     men er utilgjengelig for meg (et delt område jeg har mistet tilgangen
+     til). Begge deler vises som en utilgjengelig rad man kan fjerne, aldri
+     som en krasj og aldri som en skriving serveren må avvise. Se
+     `isMissingTargetReject` i push-veien.
+     ============================================================ */
+
+  const allLinks = () => state.links || [];
+  const linkSideMatches = (l, kind, id) =>
+    (l.noteType === kind && l.noteId === id) || (l.listType === kind && l.listId === id);
+  // Koblingens ANDRE ende, sett fra ett objekt.
+  function linkOther(l, kind, id) {
+    if (l.noteType === kind && l.noteId === id) return { type: l.listType, id: l.listId };
+    if (l.listType === kind && l.listId === id) return { type: l.noteType, id: l.noteId };
+    return null;
+  }
+  /* Koblingene på ett objekt, DEDUPLISERT PER PAR. To enheter som lager den
+     samme koblingen offline gir to rader (det finnes ingen unik indeks, med
+     vilje — se users-and-sharing.sql), og brukeren skal se én. Den laveste
+     id-en vinner, deterministisk på alle enheter. */
+  function linksFor(kind, id) {
+    const byPair = new Map();
+    allLinks().forEach((l) => {
+      if (!linkUsable(l) || !linkSideMatches(l, kind, id)) return;
+      const other = linkOther(l, kind, id);
+      const key = other.type + ':' + other.id;
+      const cur = byPair.get(key);
+      if (!cur || l.id < cur.id) byPair.set(key, l);
+    });
+    return [...byPair.values()];
+  }
+  const linkCount = (kind, id) => linksFor(kind, id).length;
+  function hasLink(noteType, noteId, listType, listId) {
+    return allLinks().some((l) => l.noteType === noteType && l.noteId === noteId &&
+      l.listType === listType && l.listId === listId);
+  }
+  // Alle radene for ETT par (dublettene inkludert) — fjerning tar dem alle.
+  function linkRowsForPair(noteType, noteId, listType, listId) {
+    return allLinks().filter((l) => l.noteType === noteType && l.noteId === noteId &&
+      l.listType === listType && l.listId === listId);
+  }
+  // Gravlegg koblingene til et objekt som slettes for godt.
+  function tombLinksTo(objId) {
+    let hit = false;
+    allLinks().forEach((l) => {
+      if (l.noteId !== objId && l.listId !== objId) return;
+      state._tomb.links[l.id] = tick();
+      hit = true;
+    });
+    if (hit) state.links = allLinks().filter((l) => l.noteId !== objId && l.listId !== objId);
+  }
+
+  const isNoteKind = (kind) => LINK_NOTE_KINDS.indexOf(kind) > -1;
+  const isListKind = (kind) => LINK_LIST_KINDS.indexOf(kind) > -1;
+  // Objektet en kobling peker på, uansett side. `null` = utilgjengelig.
+  function linkTargetObj(type, id) {
+    // Samme vakt som navigeringen bruker: er målet lagt bort (arkivert, i
+    // søppelkassen, eller inne i noe som er det), er koblingen ikke noe å
+    // åpne — og den skal si det, ikke feile ved trykk.
+    if (isNoteKind(type)) return noteReachable(type, id);
+    const loc = locateObject(type, id);
+    return loc ? (loc.card || loc.group || loc.universe) : null;
+  }
+  // Kontekststien til et koblingsmål — den samme som søkeresultatets rad.
+  function linkTargetPath(type, id) {
+    if (isNoteKind(type)) return notePathFor(type, id);
+    const loc = locateObject(type, id);
+    if (!loc) return [];
+    if (type === 'universe') return [];
+    if (type === 'group') return [loc.universe._virtual ? S_TEXT.freeSection : loc.universe.name];
+    return [loc.universe._virtual ? S_TEXT.freeSection : loc.universe.name, loc.group.name];
+  }
+  // … og for notatsiden: bokhylle › notatbok.
+  function notePathFor(kind, id) {
+    if (kind === 'noteProject') return [];
+    if (kind === 'noteFolder') {
+      const f = findNoteFolder(id);
+      const p = f && findNoteProject(f.project);
+      return p ? [p.name] : [];
+    }
+    const n = findNoteById(id);
+    if (!n) return [];
+    const p = findNoteProject(n.project);
+    const f = n.folder ? findNoteFolder(n.folder) : null;
+    const out = [p ? p.name : ''];
+    out.push(f ? f.name : tr('notes.freeNotes'));
+    return out;
+  }
+
+  /* Opprett/fjern. Begge sidene kaller de samme to funksjonene — «fra begge
+     retninger» er ikke to kodeveier, bare to knapper. */
+  function addLink(aKind, aId, bKind, bId) {
+    const noteSide = isNoteKind(aKind) ? { k: aKind, id: aId } : { k: bKind, id: bId };
+    const listSide = isListKind(aKind) ? { k: aKind, id: aId } : { k: bKind, id: bId };
+    if (!isNoteKind(noteSide.k) || !isListKind(listSide.k)) return false;
+    if (hasLink(noteSide.k, noteSide.id, listSide.k, listSide.id)) return false;
+    const l = makeLink(noteSide.k, noteSide.id, listSide.k, listSide.id);
+    stampContent(l);
+    allLinks().push(l);
+    save();
+    return true;
+  }
+  function removeLink(aKind, aId, bKind, bId) {
+    const noteSide = isNoteKind(aKind) ? { k: aKind, id: aId } : { k: bKind, id: bId };
+    const listSide = isListKind(aKind) ? { k: aKind, id: aId } : { k: bKind, id: bId };
+    const rows = linkRowsForPair(noteSide.k, noteSide.id, listSide.k, listSide.id);
+    if (!rows.length) return false;
+    const ids = new Set(rows.map((l) => l.id));
+    // Gravstein også lokalt: da pushes slettingen selv om synk-basen skulle
+    // gå tapt før runden rekker fram (docs/trash.md, «Gravsteiner»).
+    ids.forEach((id) => { state._tomb.links[id] = tick(); });
+    state.links = allLinks().filter((l) => !ids.has(l.id));
+    save();
+    return true;
+  }
+
+  /* ---------------- Koblingsmodalen ----------------
+     Ett vanlig `.modal-overlay`-skall (ingen ny modaltype): en liste over
+     koblingene på objektet, og under den den samme SØKEMOTOREN som det
+     globale søket — scopet til den andre siden. Å velge et treff kobler; å
+     trykke en eksisterende kobling åpner målet. */
+  const linksModal = document.getElementById('links-modal');
+  const linksTitleEl = document.getElementById('links-title-text');
+  const linksHeadIcon = document.getElementById('links-head-icon');
+  const linksListEl = document.getElementById('links-list');
+  const linksEmptyEl = document.getElementById('links-empty');
+  const linksPickInput = document.getElementById('links-pick-input');
+  const linksPickList = document.getElementById('links-pick-list');
+  const linksPickEmpty = document.getElementById('links-pick-empty');
+  const linksCloseBtn = document.getElementById('links-close');
+  let linksCtx = null;   // { kind, id } mens modalen står åpen
+
+  const LINK_ICON = { universe: 'globe', group: 'folder', card: 'list',
+    noteProject: 'noteProject', noteFolder: 'noteFolder', note: 'note' };
+
+  function openLinksModal(kind, id) {
+    if (!linksModal) return;
+    const o = isNoteKind(kind) ? NOTE_KINDS[kind].find(id) : linkTargetObj(kind, id);
+    if (!o) return;
+    linksCtx = { kind, id };
+    linksHeadIcon.innerHTML = ICONS[LINK_ICON[kind]] || '';
+    linksTitleEl.textContent = tr('links.forObject', { name: quoted(nameOfAny(o) || noteDisplayTitle(o)) });
+    linksPickInput.value = '';
+    linksModal.hidden = false;
+    paintLinksModal();
+    updateModalOpenClass();
+    requestAnimationFrame(() => {
+      if (!linksModal.hidden) { try { linksPickInput.focus(); } catch (e) { /* ignorer */ } }
+    });
+  }
+  function closeLinksModal() {
+    if (!linksModal) return;
+    linksModal.hidden = true;
+    linksCtx = null;
+    linksListEl.innerHTML = '';
+    linksPickList.innerHTML = '';
+    updateModalOpenClass();
+  }
+  // Én rad — brukt både av koblingslista og av velgeren under.
+  function linkRowEl(type, id, opts) {
+    const row = document.createElement('div');
+    row.className = 'link-row';
+    row.dataset.type = type;
+    row.dataset.id = id;
+    const obj = linkTargetObj(type, id);
+    const open = document.createElement('button');
+    open.type = 'button';
+    open.className = 'link-open';
+    const ic = document.createElement('span');
+    ic.className = 'link-icon';
+    ic.setAttribute('aria-hidden', 'true');
+    ic.innerHTML = ICONS[LINK_ICON[type]] || '';
+    const main = document.createElement('span');
+    main.className = 'link-main';
+    const nm = document.createElement('span');
+    nm.className = 'link-name';
+    nm.textContent = obj ? (nameOfAny(obj) || noteDisplayTitle(obj) || tr('common.noName'))
+      : tr('links.unavailableName');
+    const meta = document.createElement('span');
+    meta.className = 'link-meta';
+    const kindEl = document.createElement('span');
+    kindEl.className = 'visually-hidden';
+    kindEl.textContent = tr('kind.' + type) + ': ';
+    meta.appendChild(kindEl);
+    const path = obj ? linkTargetPath(type, id) : [];
+    meta.appendChild(document.createTextNode(path.length ? path.join(SEARCH_PATH_SEP) : tr('kind.' + type)));
+    main.append(nm, meta);
+    open.append(ic, main);
+    if (!obj) {
+      open.disabled = true;
+      open.title = tr('links.unavailable');
+      row.classList.add('is-gone');
+    } else {
+      open.addEventListener('click', () => opts.onOpen(type, id));
+    }
+    row.appendChild(open);
+    if (opts.onRemove) {
+      const rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'icon-btn link-remove';
+      rm.innerHTML = ICONS.xmark;
+      rm.title = tr('links.remove');
+      rm.setAttribute('aria-label', tr('links.removeAria', { name: nm.textContent }));
+      rm.addEventListener('click', () => opts.onRemove(type, id));
+      row.appendChild(rm);
+    }
+    return row;
+  }
+  function paintLinksModal() {
+    if (!linksCtx || linksModal.hidden) return;
+    const { kind, id } = linksCtx;
+    const rows = linksFor(kind, id);
+    linksListEl.innerHTML = '';
+    rows.forEach((l) => {
+      const other = linkOther(l, kind, id);
+      linksListEl.appendChild(linkRowEl(other.type, other.id, {
+        onOpen: (t, oid) => { closeLinksModal(); navigateToObject({ type: t, id: oid }); },
+        onRemove: (t, oid) => {
+          removeLink(kind, id, t, oid);
+          paintLinksModal();
+          renderNotes();
+          render();
+        },
+      }));
+    });
+    linksEmptyEl.hidden = !!rows.length;
+    paintLinkPicker();
+  }
+  /* Velgeren: det globale søket, scopet til den ANDRE hoveddelen. Ingen egen
+     indeks og ingen egen rangering — koblingen skal finne det samme som
+     søkefeltet finner. */
+  function paintLinkPicker() {
+    if (!linksCtx) return;
+    const { kind, id } = linksCtx;
+    const scope = isNoteKind(kind) ? 'lists' : 'notes';
+    const q = linksPickInput.value.trim();
+    const taken = new Set(linksFor(kind, id).map((l) => {
+      const o = linkOther(l, kind, id);
+      return o.type + ':' + o.id;
+    }));
+    const hits = searchObjects(q, null, scope)
+      .filter((h) => LINK_ICON[h.type] && !taken.has(h.type + ':' + h.id))
+      .slice(0, LINK_PICK_MAX);
+    linksPickList.innerHTML = '';
+    hits.forEach((h) => {
+      linksPickList.appendChild(linkRowEl(h.type, h.id, {
+        onOpen: (t, oid) => {
+          if (!addLink(kind, id, t, oid)) return;
+          linksPickInput.value = '';
+          paintLinksModal();
+          renderNotes();
+          render();
+          showToast(tr('links.added'));
+        },
+      }));
+    });
+    linksPickEmpty.hidden = !(q && !hits.length);
+    if (q && !hits.length) linksPickEmpty.textContent = tr('search.noHits', { q: quoted(q) });
+  }
+  const LINK_PICK_MAX = 25;
+
+  /* En liten chip som SIER at objektet har koblinger, og som åpner dem. Den
+     er `.meta-chip` — den samme chipen tid og ansvarlig bruker — så den arver
+     flate, størrelse og `data-dnd-ignore` (et trykk på den skal aldri løfte
+     objektet). `null` når det ikke finnes koblinger: en chip som viser «0» er
+     støy på hvert eneste kort. */
+  function linkChip(kind, id) {
+    const n = linkCount(kind, id);
+    if (!n) return null;
+    const chip = metaChipEl('meta-link');
+    chip.innerHTML = ICONS.link + '<span>' + n + '</span>';
+    chip.title = tr('links.count', { count: n });
+    chip.setAttribute('aria-label', tr('links.openAria', { count: n }));
+    chip.addEventListener('click', (ev) => { ev.stopPropagation(); openLinksModal(kind, id); });
+    return chip;
+  }
+  // «Koblinger»-raden i objektmenyen. Den ser LIK ut på begge sider av appen,
+  // for det er den samme relasjonen sett fra hver sin ende.
+  function linksMenuRow(kind, id) {
+    const n = linkCount(kind, id);
+    return {
+      icon: ICONS.link,
+      label: tr('links.menuRow'),
+      hint: n ? String(n) : '',
+      fn: () => openLinksModal(kind, id),
+    };
+  }
+
+  function wireLinksModal() {
+    if (!linksModal) return;
+    linksCloseBtn.addEventListener('click', closeLinksModal);
+    linksModal.addEventListener('click', (ev) => { if (ev.target === linksModal) closeLinksModal(); });
+    linksPickInput.addEventListener('input', paintLinkPicker);
   }
 
   /* ------------------------------------------------------------
@@ -15377,7 +16648,12 @@
   function ensureNotesCardBoard() {
     if (notesCardBoard || !notesBoard || typeof Smett === 'undefined' || !Smett.SortableBoard) return;
     notesCardBoard = new Smett.SortableBoard({
-      root: notesBoard,
+      /* Roten er HELE dokumentet, ikke `#notes-board`: notat-søppelkassen står
+         i TOPPLINJA, utenfor board-et, og en sone må ligge under board-ets rot
+         for å bli registrert (samme grunn som `boardCardBoard` og nav-scopet).
+         Selektorene under er fortsatt scopet til `#notes-board`, så roten
+         utvider bare hvor Smett LETER, ikke hva den finner. */
+      root: document.body,
       itemSelector: '#notes-board .note-card',
       containerSelector: '#notes-board .board-col',
       // HELE kortet er dra-sonen: et notatkort har ingen indre kontroller å
@@ -15389,9 +16665,12 @@
       axis: 'vertical',
       keyboard: false,               // tastaturet er Huskis' eget (attachKeyHandle)
       safeInsets: safeInsets,
+      zoneSelector: '#note-trash-btn, #note-archive-btn',
       describeItem: notesCardLabel,
       phrases: notesPhrases(),
       onCommit: notesCommitCard,
+      onZoneDrop: notesZoneDrop,
+      onDropTarget: notesDropTarget,
       onError: (err) => { if (window.console) console.error('[huskis] notes-dnd', err); },
     });
     notesWire(notesCardBoard);
@@ -15425,7 +16704,8 @@
     drag.peekCard = null;
     drag.peekCat = null;
     drag.overCard = null;
-    drag.trashHost = null;          // ingen kasse i notatfanen (PR 1)
+    // Notatkortene har ÉN kasse (i topplinja), som listene — ingen vert å bytte.
+    drag.trashHost = null;
     drag.crumbTarget = false;
     notesTargetCol = null;
     document.body.classList.add('is-dragging');
@@ -15433,7 +16713,39 @@
     notesTuneColumnCollisions();
     dndNoteLiftedBox(el);
     dndLockAxis(b);
+    armDragTrash();             // notat-kassen, avdekket for draget
+    armDragArchive();           // … og arkivet ved siden av den
   }
+
+  /* KASSEN OG ARKIVET SOM SONER I NOTATFANEN — nøyaktig samme to kroker som i
+     de to andre scopene (se «Søppelkassen som sone»): Smett ruller kortet
+     tilbake dit det kom fra FØR handlingen kalles, så et slipp i en kasse
+     sletter/arkiverer og flytter ikke.
+
+     De to kassene deler kroker fordi de deler alt annet enn hva slippet betyr;
+     scopet er det eneste som skiller notatfanen fra nav-modalen. */
+  function notesCanTarget(target) {
+    const sikter = (btn) => !!(btn && target && target.kind === 'zone' && target.element === btn);
+    const t = dragTrashBtn(), a = dragArchiveBtn();
+    setDragTrashTarget(!!drag.trashArmed && sikter(t));
+    setDragArchiveTarget(!!drag.archiveArmed && sikter(a));
+  }
+  function notesCanDrop(S, result) {
+    const kind = drag.kind === 'card' ? 'card' : 'item';
+    const traff = (armed, btn) =>
+      !!armed && !!btn && btn.getAttribute('data-dnd-zone') === result.zoneId;
+    if (traff(drag.trashArmed, dragTrashBtn())) {
+      disarmDragTrash();
+      dropIntoTrash(S, kind, result.itemId);
+      return;
+    }
+    if (traff(drag.archiveArmed, dragArchiveBtn())) {
+      disarmDragTrash();
+      dropIntoArchive(S, kind, result.itemId);
+    }
+  }
+  function notesDropTarget(target) { notesCanTarget(target); }
+  function notesZoneDrop(result) { notesCanDrop(notesScope, result); }
   function notesDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
     dndPaintRotation();
@@ -15520,17 +16832,23 @@
       itemSelector: '#notes-nav-board .card',
       containerSelector: '#notes-nav-board .board-col',
       handleSelector: '.card-head',
+      zoneSelector: '#note-project-trash-btn, #note-project-archive-btn',
       describeItem: notesNavLabel,
       phrases: notesNavPhrases(false),
       onCommit: notesNavCommitCard,
+      onZoneDrop: notesNavZoneDrop,
+      onDropTarget: notesNavDropTarget,
     }));
     notesNavRowBoard = new Smett.SortableBoard(Object.assign({}, shared, {
       itemSelector: '#notes-nav-board .item',
       containerSelector: '#notes-nav-board .items-container',
       handleSelector: '.item',
+      zoneSelector: '.note-folder-trash-btn, .note-folder-archive-btn',
       describeItem: notesNavLabel,
       phrases: notesNavPhrases(true),
       onCommit: notesNavCommitRow,
+      onZoneDrop: notesNavZoneDrop,
+      onDropTarget: notesNavDropTarget,
     }));
     notesNavWire(notesNavCardBoard, 'card');
     notesNavWire(notesNavRowBoard, 'item');
@@ -15565,7 +16883,9 @@
     drag.peekCard = null;
     drag.peekCat = null;
     drag.overCard = el.closest('.card');
-    drag.trashHost = null;
+    // En NOTATBOK slippes i bokhyllens egen kasse, som en mappe i områdets.
+    // En BOKHYLLE har én kasse i modalens fot, uten vert.
+    drag.trashHost = kind === 'item' ? el.closest('.card') : null;
     drag.crumbTarget = false;
     dndRowTargetCont = null;
     dndPeekPending = null;
@@ -15576,11 +16896,16 @@
     if (kind === 'item') dndTuneRowCollisions(notesNavRowBoard);
     dndNoteLiftedBox(el);
     dndLockAxis(b);                // nav-modalen har alltid én kolonne
+    armDragTrash();                // kassen for NIVÅET, avdekket for draget
+    armDragArchive();              // … og arkivet ved siden av den
   }
+  function notesNavDropTarget(target) { notesCanTarget(target); }
+  function notesNavZoneDrop(result) { notesCanDrop(notesNavScope, result); }
   function notesNavDragStart(b, kind) {
     dndSyncIntent(b.manager.dragOperation);
     dndPaintRotation();
     if (kind === 'card') return;
+    anchorBegin();              // layouten skal fra nå av flytte seg bort fra siktet
     dndRowTargetCont = dndPickRowContainer(dragOverCard());
     applyDragSeparators();
   }
@@ -15692,6 +17017,9 @@
   // i editorens verktøylinje, koblet til de samme funksjonene som hjørnegruppen.
   const noteIdeasBtn = document.getElementById('note-ideas-btn');
   const noteThemeBtn = document.getElementById('note-theme-btn');
+  // Notatets egen objektmeny, også inne i editoren: koblinger, arkiv og
+  // sletting skal ikke kreve at man går ut til kortet først.
+  const noteMenuBtn = document.getElementById('note-menu-btn');
 
   /* Spesialtegnene. Ett flatt sett — det er en hurtigvei til tegn et norsk
      eller engelsk tastatur ikke har, ikke en full tegntabell. */
@@ -16308,6 +17636,25 @@
   function wireNoteEditor() {
     if (!noteEditorEl) return;
     noteBackBtn.addEventListener('click', closeNoteEditor);
+    if (noteMenuBtn) {
+      noteMenuBtn.dataset.dndIgnore = '';
+      noteMenuBtn.innerHTML = ICONS.menuDots;
+      noteMenuBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (!noteOpenId) return;
+        /* Inne i editoren finnes ikke notatkortet, så «Endre navn» peker på
+           tittelfeltet her — og «Slett»/«Arkiver» lukker editoren først:
+           notatet er da ute av visningen, og et fullskjermsbilde på et
+           bortlagt notat er et blindspor. */
+        const id = noteOpenId;
+        const spec = noteObjMenuSpec('note', id, () => { try { noteTitleInput.focus(); noteTitleInput.select(); } catch (e) { /* ignorer */ } });
+        const wrap = (fn) => () => { closeNoteEditor(); fn(); };
+        spec.extraRows = spec.extraRows.map((r) =>
+          (r && r.icon === ICONS.archive) ? Object.assign({}, r, { fn: wrap(r.fn) }) : r);
+        spec.remove = wrap(() => deleteNoteObject('note', id));
+        openObjMenu(spec, noteMenuBtn);
+      });
+    }
     noteTitleInput.addEventListener('input', scheduleNoteSave);
     noteTitleInput.addEventListener('keydown', (ev) => {
       if (ev.key !== 'Enter') return;
@@ -16413,14 +17760,7 @@
       try { localStorage.setItem(MAIN_TAB_KEY, activeMainTab); } catch (e) { /* ignore */ }
     }
     const notes = activeMainTab === 'notes';
-    if (mainTabsEl) {
-      mainTabsEl.querySelectorAll('.main-tab').forEach((btn) => {
-        const on = btn.dataset.tab === activeMainTab;
-        btn.classList.toggle('is-active', on);
-        btn.setAttribute('aria-selected', on ? 'true' : 'false');
-        btn.tabIndex = on ? 0 : -1;
-      });
-    }
+    paintSeg(mainTabsEl, '.main-tab', (btn) => btn.dataset.tab === activeMainTab);
     if (topbarRowLists) topbarRowLists.hidden = notes;
     if (topbarRowNotes) topbarRowNotes.hidden = !notes;
     board.hidden = notes;
@@ -16451,6 +17791,8 @@
       notesNavModal.addEventListener('click', (ev) => { if (ev.target === notesNavModal) closeNotesNav(); });
     }
     if (addNoteBtn) addNoteBtn.addEventListener('click', addNote);
+    wireNotesLifecycleButtons();
+    wireLinksModal();
     wireNoteEditor();
   }
 
@@ -16534,14 +17876,16 @@
      oppdateringen i det uendelige. */
   function cleanNoteProject(p) {
     return {
-      id: p.id, name: p.name || '', collapsed: !!p.collapsed, trashed: !!p.trashed,
+      id: p.id, name: p.name || '', collapsed: !!p.collapsed,
+      trashed: !!p.trashed, archived: !!p.archived,
       ts: p.ts || 0, org: p.org || '',
       pos: p.pos || 0, posTs: p.posTs || 0, posOrg: p.posOrg || '',
     };
   }
   function cleanNoteFolder(f, projectId) {
     return {
-      id: f.id, project: f.project || projectId || null, name: f.name || '', trashed: !!f.trashed,
+      id: f.id, project: f.project || projectId || null, name: f.name || '',
+      trashed: !!f.trashed, archived: !!f.archived,
       ts: f.ts || 0, org: f.org || '',
       pos: f.pos || 0, posTs: f.posTs || 0, posOrg: f.posOrg || '',
     };
@@ -16550,11 +17894,26 @@
     return {
       id: n.id, project: n.project || null, folder: n.folder || null,
       title: n.title || '', doc: sanitizeNoteDoc(n.doc || n.body),
-      trashed: !!n.trashed,
+      trashed: !!n.trashed, archived: !!n.archived,
       ts: n.ts || 0, org: n.org || '',
       pos: n.pos || 0, posTs: n.posTs || 0, posOrg: n.posOrg || '',
     };
   }
+  /* En koblingsrad. Sidene er (type, id)-par i klienten, én kolonne per type i
+     databasen — hvilken kolonne som bærer id-en er databasens sak. En rad med
+     en ukjent type kastes: den kan verken vises eller skrives. */
+  function cleanLink(l) {
+    return {
+      id: l.id,
+      noteType: LINK_NOTE_KINDS.indexOf(l.noteType) > -1 ? l.noteType : '',
+      noteId: l.noteId || null,
+      listType: LINK_LIST_KINDS.indexOf(l.listType) > -1 ? l.listType : '',
+      listId: l.listId || null,
+      ts: l.ts || 0, org: l.org || '',
+    };
+  }
+  const linkUsable = (l) => !!(l && l.noteType && l.noteId && l.listType && l.listId);
+
   function cleanCard(c) {
     return {
       // Farge synkes ikke: den utledes av posisjon på hver enhet (colorForIndex).
@@ -16604,6 +17963,8 @@
       (p.folders || []).forEach((f) => noteFolderRows.push(rowFn(f, 'note_folder', p)));
     });
     const noteRows = (s.notes || []).map((n) => rowFn(n, 'note', null));
+    // Koblingene er flate og har ingen forelder — som idéene.
+    const linkRows = (s.links || []).filter(linkUsable).map((l) => rowFn(l, 'object_link', null));
     (s.universes || []).forEach((u) => {
       // «Mapper delt med meg» er en VIRTUELL beholder — den finnes ikke i
       // databasen og skal aldri pushes. Mappene i den skrives som vanlig
@@ -16618,7 +17979,8 @@
       });
     });
     return { universes, groups, cards, items, ideas,
-             noteProjects: noteProjectRows, noteFolders: noteFolderRows, notes: noteRows };
+             noteProjects: noteProjectRows, noteFolders: noteFolderRows, notes: noteRows,
+             links: linkRows };
   }
   function cleanRow(o, type, parent) {
     if (type === 'universe') return cleanUniverse(o);
@@ -16628,6 +17990,7 @@
     if (type === 'note_project') return cleanNoteProject(o);
     if (type === 'note_folder') return cleanNoteFolder(o, parent && parent.id);
     if (type === 'note') return cleanNote(o);
+    if (type === 'object_link') return cleanLink(o);
     return cleanItem(o, o.home || parent.id);
   }
   /* ---------- Felt-nivå LWW-fletting (per register) ----------
@@ -16668,7 +18031,8 @@
     const content = newer(a.ts, a.org, b.ts, b.org) ? a : b;
     const posw = newer(a.posTs, a.posOrg, b.posTs, b.posOrg) ? a : b;
     return {
-      id: a.id, name: content.name, trashed: !!content.trashed, collapsed: !!content.collapsed,
+      id: a.id, name: content.name, trashed: !!content.trashed,
+      archived: !!content.archived, collapsed: !!content.collapsed,
       ts: content.ts || 0, org: content.org || '',
       pos: posw.pos || 0, posTs: posw.posTs || 0, posOrg: posw.posOrg || '',
     };
@@ -16677,7 +18041,7 @@
     const content = newer(a.ts, a.org, b.ts, b.org) ? a : b;
     const posw = newer(a.posTs, a.posOrg, b.posTs, b.posOrg) ? a : b;
     return {
-      id: a.id, name: content.name, trashed: !!content.trashed,
+      id: a.id, name: content.name, trashed: !!content.trashed, archived: !!content.archived,
       ts: content.ts || 0, org: content.org || '',
       project: posw.project != null ? posw.project : (a.project || b.project || null),
       pos: posw.pos || 0, posTs: posw.posTs || 0, posOrg: posw.posOrg || '',
@@ -16688,12 +18052,18 @@
     const posw = newer(a.posTs, a.posOrg, b.posTs, b.posOrg) ? a : b;
     return {
       id: a.id, title: content.title, doc: content.doc, trashed: !!content.trashed,
+      archived: !!content.archived,
       ts: content.ts || 0, org: content.org || '',
       project: posw.project != null ? posw.project : (a.project || b.project || null),
       folder: posw.folder || null,
       pos: posw.pos || 0, posTs: posw.posTs || 0, posOrg: posw.posOrg || '',
     };
   }
+  /* En kobling har ingen felter å flette: begge sider er en del av
+     IDENTITETEN, og id-en er den samme raden. Serverens rad vinner uendret, så
+     `canonical(m) === canonical(R)` og reconcile skriver aldri en update —
+     tabellen har heller ingen UPDATE-grant. */
+  function mergeLink(a, b) { return cleanLink(b || a); }
   function mergeCardScalar(a, b) {
     const content = newer(a.ts, a.org, b.ts, b.org) ? a : b;
     const labw = newer(a.labTs, a.labOrg, b.labTs, b.labOrg) ? a : b; // merkelapper (k/p) flettes for seg
@@ -17938,7 +19308,11 @@
     const noteProjects = (my.noteProjects || []).map((p) => { const r = cleanNoteProject(p); bump(r); return r; });
     const noteFolders = (my.noteFolders || []).map((f) => { const r = cleanNoteFolder(f); bump(r); return r; });
     const notes = (my.notes || []).map((n) => { const r = cleanNote(n); bump(r); return r; });
-    return { universes, groups, cards, items, ideas, noteProjects, noteFolders, notes, hlc: maxTs };
+    // Koblingene: eierens egne rader, uten register å bumpe utover `ts`.
+    const links = (my.links || []).map((l) => { const r = cleanLink(l); bump(r); return r; })
+      .filter(linkUsable);
+    return { universes, groups, cards, items, ideas, noteProjects, noteFolders, notes, links,
+             hlc: maxTs };
   }
   function metaFromMy(my) {
     const meta = new Map();
@@ -17995,6 +19369,7 @@
     if (type === 'note_project') return cleanNoteProject(o);
     if (type === 'note_folder') return cleanNoteFolder(o);
     if (type === 'note') return cleanNote(o);
+    if (type === 'object_link') return cleanLink(o);
     return cleanItem(o, o.home);
   }
   function docFromMyState() {
@@ -18057,7 +19432,7 @@
   const NO_IDS = new Set();
   function emptyDoc() {
     return { universes: [], groups: [], cards: [], items: [], ideas: [],
-             noteProjects: [], noteFolders: [], notes: [] };
+             noteProjects: [], noteFolders: [], notes: [], links: [] };
   }
   function reconcile(base, local, remote, opts) {
     opts = opts || {};
@@ -18076,6 +19451,7 @@
       { key: 'noteProjects', t: 'note_project', merge: mergeNoteProject },
       { key: 'noteFolders', t: 'note_folder', merge: mergeNoteFolder },
       { key: 'notes', t: 'note', merge: mergeNote },
+      { key: 'links', t: 'object_link', merge: mergeLink },
     ];
     TYPES.forEach(({ key, t, merge }) => {
       const bMap = new Map((base[key] || []).map((r) => [r.id, r]));
@@ -18249,6 +19625,20 @@
       noteProjectList.forEach((p) => p.folders.sort(posCmp));
       noteList.sort(posCmp);
 
+      /* Koblingene (docs/notater-plan.md). De hektes ikke inn i treet — de er
+         en flat liste oppslaget leser fra, som gravsteinene. En rad med en
+         ukjent side kastes; en rad hvis MÅL ikke finnes i doc-et blir stående:
+         objektet kan være utilgjengelig (et delt område jeg mistet tilgangen
+         til) uten å være slettet, og koblingen skal da vises som utilgjengelig,
+         ikke forsvinne. Er målet faktisk slettet, har databasens kaskade
+         allerede fjernet koblingsraden. */
+      const linkList = (doc.links || []).map((raw) => {
+        const l = cleanLink(raw);
+        l._type = 'link';
+        l._createdByMe = true;
+        return l;
+      }).filter(linkUsable);
+
       // Seksjonsrekkefølge først, personlig posisjon innenfor hver seksjon.
       universes.sort((a, b) => (sectionRank(a) - sectionRank(b)) || posCmp(a, b));
       universes.forEach((u) => {
@@ -18265,6 +19655,7 @@
       state.ideas = ideas;
       state.noteProjects = noteProjectList;
       state.notes = noteList;
+      state.links = linkList;
       state._hlc = doc.hlc || state._hlc || 0;
       observeTs(doc.hlc);
       const lostGroup = hadGroup && state.activeGroup && !findGroupAnywhere(state.activeGroup);
@@ -18295,7 +19686,18 @@
 
   /* ---------------- Push: rad-CRUD mot tabellene ---------------- */
   const TABLE = { universe: 'universes', group: 'groups', card: 'cards', item: 'items', idea: 'ideas',
-    note_project: 'note_projects', note_folder: 'note_folders', note: 'notes' };
+    note_project: 'note_projects', note_folder: 'note_folders', note: 'notes',
+    object_link: 'object_links' };
+  // Én kolonne per koblingsbar type (docs/notater-plan.md): databasen holder
+  // ekte fremmednøkler, så et koblingsmål som slettes tar koblingen med seg.
+  const LINK_NOTE_COL = { noteProject: 'note_project_id', noteFolder: 'note_folder_id', note: 'note_id' };
+  const LINK_LIST_COL = { universe: 'universe_id', group: 'group_id', card: 'card_id' };
+  function linkPayload(row, uid) {
+    const p = { id: row.id, owner_id: uid, ts: row.ts || 0, org: row.org || '' };
+    p[LINK_NOTE_COL[row.noteType]] = row.noteId;
+    p[LINK_LIST_COL[row.listType]] = row.listId;
+    return p;
+  }
   function insertPayload(t, row, uid) {
     const base = { id: row.id, owner_id: uid, trashed: !!row.trashed,
       ts: row.ts || 0, org: row.org || '', pos: row.pos || 0, pos_ts: row.posTs || 0, pos_org: row.posOrg || '' };
@@ -18309,10 +19711,12 @@
       collapsed: !!row.collapsed });
     if (t === 'idea') return Object.assign(base, { text: row.text || '', cat_id: row.cat || null,
       is_cat: !!row.isCat, collapsed: !!row.collapsed });
-    if (t === 'note_project') return Object.assign(base, { name: row.name || '', collapsed: !!row.collapsed });
-    if (t === 'note_folder') return Object.assign(base, { name: row.name || '', project_id: row.project });
+    if (t === 'note_project') return Object.assign(base, { name: row.name || '',
+      collapsed: !!row.collapsed, archived: !!row.archived });
+    if (t === 'note_folder') return Object.assign(base, { name: row.name || '',
+      project_id: row.project, archived: !!row.archived });
     if (t === 'note') return Object.assign(base, { title: row.title || '', project_id: row.project,
-      folder_id: row.folder || null, body: row.doc || emptyNoteDoc() });
+      folder_id: row.folder || null, body: row.doc || emptyNoteDoc(), archived: !!row.archived });
     return Object.assign(base, { text: row.text || '', card_id: row.home, cat_id: row.cat || null,
       is_cat: !!row.isCat, lock_times: !!row.lockTimes, done: !!row.done, collapsed: !!row.collapsed,
       responsible: row.responsible || null,
@@ -18331,10 +19735,12 @@
       collapsed: !!row.collapsed });
     if (t === 'idea') return Object.assign(base, { text: row.text || '', cat_id: row.cat || null,
       is_cat: !!row.isCat, collapsed: !!row.collapsed });
-    if (t === 'note_project') return Object.assign(base, { name: row.name || '', collapsed: !!row.collapsed });
-    if (t === 'note_folder') return Object.assign(base, { name: row.name || '', project_id: row.project });
+    if (t === 'note_project') return Object.assign(base, { name: row.name || '',
+      collapsed: !!row.collapsed, archived: !!row.archived });
+    if (t === 'note_folder') return Object.assign(base, { name: row.name || '',
+      project_id: row.project, archived: !!row.archived });
     if (t === 'note') return Object.assign(base, { title: row.title || '', project_id: row.project,
-      folder_id: row.folder || null, body: row.doc || emptyNoteDoc() });
+      folder_id: row.folder || null, body: row.doc || emptyNoteDoc(), archived: !!row.archived });
     return Object.assign(base, { text: row.text || '', card_id: row.home, cat_id: row.cat || null,
       is_cat: !!row.isCat, lock_times: !!row.lockTimes, done: !!row.done, collapsed: !!row.collapsed,
       responsible: row.responsible || null,
@@ -18370,6 +19776,13 @@
   function isTombstoneReject(error) {
     if (!error) return false;
     return String(error.code || '') === 'PT409' || /\bgravlagt\b/i.test(String(error.message || ''));
+  }
+  // Fremmednøkkelbrudd: raden peker på noe som ikke finnes. For en KOBLING er
+  // det et endelig svar (målet er slettet), ikke en forbigående konflikt.
+  function isMissingTargetReject(error) {
+    if (!error) return false;
+    return String(error.code || '') === '23503' ||
+      /foreign key constraint/i.test(String(error.message || ''));
   }
   /* En skriving som avvises om og om igjen med SAMME feil er ikke transient —
      den kommer aldri til å lande av seg selv. Vi teller per (tabell, rad, kode)
@@ -18486,8 +19899,9 @@
     if (!client || !authUser) return { rejected: 0, netFailed: false };
     const uid = authUser.id;
     // Ovenfra-ned: en rad kan ikke skrives før forelderen finnes (FK).
+    // Koblingene SIST: de har fremmednøkler til begge sider, så begge må finnes.
     const order = { universe: 0, group: 1, card: 2, item: 3, idea: 4,
-      note_project: 5, note_folder: 6, note: 7 };
+      note_project: 5, note_folder: 6, note: 7, object_link: 8 };
     // Ovenfra-ned (foreldre først) på type, og INNEN en type: kategorier før
     // medlemmene sine. Kategorier nøstes aldri, så ett nivå er nok.
     const byParentFirst = (a, b) => (order[a.t] - order[b.t]) ||
@@ -18502,13 +19916,24 @@
     const noteThrow = (e) => { failed++; if (isNetworkError(e)) netFailed = true; };
     for (const o of ins) {
       try {
-        const res = await client.from(TABLE[o.t]).insert(insertPayload(o.t, o.row, uid));
+        const res = await client.from(TABLE[o.t]).insert(
+          o.t === 'object_link' ? linkPayload(o.row, uid) : insertPayload(o.t, o.row, uid));
         // Avvist fordi id-en er gravlagt: serveren har rett, og saken er
         // avgjort. Gravlegg den lokalt også (raden forsvinner fra fletteren og
         // dermed fra visningen ved neste applyMyDoc) og regn IKKE dette som en
         // feilet skriving — da hadde bekreftelses-pullen uteblitt og raden blitt
         // hengende til neste poll.
         if (res && res.error && isTombstoneReject(res.error)) {
+          tombFromServer(o.t, o.row.id);
+          tombed = true;
+          continue;
+        }
+        /* En KOBLING hvis mål er borte kan aldri skrives: fremmednøkkelen
+           avviser den, og op-en ville blitt regenerert hver runde (nøyaktig
+           den usynlige retry-løkken `pruneDanglingCats` finnes for). Målet er
+           slettet permanent — serveren har allerede kaskadert bort sin egen
+           kopi av koblingen — så vi gravlegger den lokalt og lar den gå. */
+        if (res && res.error && o.t === 'object_link' && isMissingTargetReject(res.error)) {
           tombFromServer(o.t, o.row.id);
           tombed = true;
           continue;
@@ -19277,7 +20702,7 @@
     if (cloudChan) { try { client.removeChannel(cloudChan); } catch (e) {} cloudChan = null; }
     cloudChan = client.channel('hk-user-' + authUser.id);
     ['universes', 'groups', 'cards', 'items', 'ideas',
-     'note_projects', 'note_folders', 'notes',
+     'note_projects', 'note_folders', 'notes', 'object_links',
      'memberships', 'share_invites'].forEach((t) => {
       cloudChan.on('postgres_changes', { event: '*', schema: 'public', table: t }, () => scheduleCloud(150));
     });
@@ -20713,6 +22138,7 @@
     state.ideas = [];
     state.noteProjects = [];
     state.notes = [];
+    state.links = [];
     state.activeProject = null;
     state.activeFolder = null;
     state.activeFolders = {};
@@ -20745,6 +22171,7 @@
       (p.folders || []).forEach((f) => set.add(f.id));
     });
     (s.notes || []).forEach((n) => set.add(n.id));
+    (s.links || []).forEach((l) => set.add(l.id));
     return set;
   }
   function loadCache() {
@@ -20758,6 +22185,7 @@
       state.ideas = s.ideas;
       state.noteProjects = s.noteProjects;
       state.notes = s.notes;
+      state.links = s.links;
       state.activeProject = s.activeProject || null;
       state.activeFolder = s.activeFolder || null;
       state.activeFolders = s.activeFolders || {};
@@ -22630,6 +24058,17 @@
     openNoteEditor, closeNoteEditor, flushNoteSave, runNoteCommand,
     notesIn, noteDocText, noteExcerpt, noteDisplayTitle,
     sanitizeNoteDoc, safeNoteUrl, noteDocFromEl, noteDocIntoEl, emptyNoteDoc,
+    /* Livssyklus og koblinger (docs/notater-plan.md). Testene bruker dem både
+       til oppsett og til å måle utfallet uten å gå veien om DOM-en. */
+    setNoteArchived, deleteNoteObject, restoreNoteObject,
+    emptyNotesTrash, emptyNoteFoldersTrash, emptyNoteProjectsTrash,
+    openNotesTrash, openNoteFoldersTrash, openNoteProjectsTrash,
+    openNotesArchive, openNoteFoldersArchive, openNoteProjectsArchive,
+    trashedNotesIn, archivedNotesIn, trashedNoteProjects, archivedNoteProjects,
+    trashedNoteFoldersOf, archivedNoteFoldersOf,
+    addLink, removeLink, linksFor, linkCount, tombLinksTo, openLinksModal, closeLinksModal,
+    commitAllPending,
+    get searchScope() { return searchScope; }, setSearchScope,
     get notesCardBoard() { return notesCardBoard; },
     get notesNavCardBoard() { return notesNavCardBoard; },
     get notesNavRowBoard() { return notesNavRowBoard; },
