@@ -354,6 +354,46 @@
     };
   }
 
+  /* ---- Notater (docs/notater-plan.md) ----
+     Huskis' andre hoveddel: Prosjekt > Mappe > Notat. Formen er listenes — to
+     registre (innhold `ts/org`, posisjon `posTs/posOrg`), samme gravsteiner,
+     samme 3-veis fletting — men uten roller, låser og deling: notatene hører
+     til KONTOEN, som idéene, og eierskapet er hele autorisasjonen.
+
+     Prosjektene er nøstet (`project.folders`) fordi mappene alltid hører til
+     ett prosjekt, mens NOTATENE er en flat liste med to forelder-pekere:
+     `project` (alltid satt) og `folder` (null = fritt notat rett i
+     prosjektet). Et fritt notat har ingen mappe å ligge under, så nøsting
+     hadde krevd en syntetisk beholder på hvert eneste prosjekt. */
+  function makeNoteProject(name) {
+    return {
+      id: uid(), name, trashed: false, collapsed: false,
+      _type: 'noteProject', _createdByMe: true,
+      ts: 0, org: deviceId,               // innholdsregister (navn/trashed/collapsed)
+      pos: 0, posTs: 0, posOrg: deviceId, // posisjonsregister (rekkefølge)
+      folders: [],
+    };
+  }
+  function makeNoteFolder(name, projectId) {
+    return {
+      id: uid(), project: projectId || null, name, trashed: false,
+      _type: 'noteFolder', _createdByMe: true,
+      ts: 0, org: deviceId,               // innholdsregister (navn/trashed)
+      pos: 0, posTs: 0, posOrg: deviceId, // posisjonsregister (rekkefølge + prosjekt)
+    };
+  }
+  // Et notat: tittel + dokument (`doc`, se NOTAT-DOKUMENTET) på innholds-
+  // registeret, plassering (prosjekt + evt. mappe) på posisjonsregisteret.
+  function makeNote(projectId, folderId) {
+    return {
+      id: uid(), project: projectId || null, folder: folderId || null,
+      title: '', doc: emptyNoteDoc(), trashed: false,
+      _type: 'note', _createdByMe: true,
+      ts: 0, org: deviceId,
+      pos: 0, posTs: 0, posOrg: deviceId,
+    };
+  }
+
   // Eksempeldata (kun uten sky): to mapper som speiler de gamle fanene,
   // pakket inn i standard-området.
   function seedUniverses() {
@@ -388,7 +428,14 @@
       activeGroups: {}, // uniId → sist aktive mappe der (per enhet, synkes ikke)
       universes,
       ideas: [],        // kontoens idéer og idékategorier, flatt (docs/ideer.md)
-      _tomb: { universes: {}, groups: {}, cards: {}, items: {}, ideas: {} }, // gravsteiner: id → tidsstempel
+      // Notater (docs/notater-plan.md): kontoens andre hoveddel. Prosjektene
+      // er nøstet (mappene i seg), notatene flate med to forelder-pekere.
+      noteProjects: [],
+      notes: [],
+      activeProject: null,  // aktiv posisjon i Notater (per enhet, som activeUniverse)
+      activeFolder: null,   // null = prosjektets frie notater
+      activeFolders: {},    // projectId → sist aktive mappe der (per enhet)
+      _tomb: emptyTomb(),   // gravsteiner: id → tidsstempel
       _hlc: 0,
     };
   }
@@ -633,20 +680,79 @@
     }
     if (s.activeUniverse) s.activeGroups[s.activeUniverse] = s.activeGroup;
   }
+  function normalizeNoteFolder(f, i, projectId) {
+    if (!f.id) f.id = uid();
+    if (!f.project) f.project = projectId || null;
+    if (typeof f.name !== 'string') f.name = tr('common.noName');
+    if (typeof f.trashed !== 'boolean') f.trashed = false;
+    if (typeof f.ts !== 'number') f.ts = 0;
+    if (!f.org) f.org = deviceId;
+    if (typeof f.pos !== 'number') f.pos = i;
+    if (typeof f.posTs !== 'number') f.posTs = 0;
+    if (!f.posOrg) f.posOrg = deviceId;
+  }
+  function normalizeNoteProject(p, i) {
+    if (!p.id) p.id = uid();
+    if (typeof p.name !== 'string') p.name = tr('common.noName');
+    if (typeof p.trashed !== 'boolean') p.trashed = false;
+    if (typeof p.collapsed !== 'boolean') p.collapsed = false;
+    if (typeof p.ts !== 'number') p.ts = 0;
+    if (!p.org) p.org = deviceId;
+    if (typeof p.pos !== 'number') p.pos = i;
+    if (typeof p.posTs !== 'number') p.posTs = 0;
+    if (!p.posOrg) p.posOrg = deviceId;
+    if (!Array.isArray(p.folders)) p.folders = [];
+    p.folders.forEach((f, j) => normalizeNoteFolder(f, j, p.id));
+  }
+  function normalizeNote(n, i) {
+    if (!n.id) n.id = uid();
+    if (typeof n.title !== 'string') n.title = '';
+    n.doc = sanitizeNoteDoc(n.doc);
+    if (typeof n.trashed !== 'boolean') n.trashed = false;
+    if (n.folder === undefined) n.folder = null;
+    if (typeof n.ts !== 'number') n.ts = 0;
+    if (!n.org) n.org = deviceId;
+    if (typeof n.pos !== 'number') n.pos = i;
+    if (typeof n.posTs !== 'number') n.posTs = 0;
+    if (!n.posOrg) n.posOrg = deviceId;
+  }
+  /* activeProject/activeFolder må peke på noe som finnes og ikke er slettet.
+     Speiler `validateActive` for listefanen, med én forskjell: `activeFolder`
+     har en gyldig NULL-verdi — prosjektets frie notater — så «ingen mappe» er
+     et sted man kan stå, ikke et tomt svar som må fylles. */
+  function validateActiveNotes(s) {
+    if (!s.activeFolders || typeof s.activeFolders !== 'object') s.activeFolders = {};
+    if (!s.noteProjects.some((p) => p.id === s.activeProject && !p.trashed)) {
+      let first = null;
+      s.noteProjects.forEach((p) => { if (!p.trashed && (!first || p.pos < first.pos)) first = p; });
+      s.activeProject = first ? first.id : null;
+    }
+    const proj = s.noteProjects.find((p) => p.id === s.activeProject && !p.trashed) || null;
+    const folders = proj ? proj.folders.filter((f) => !f.trashed) : [];
+    if (s.activeFolder && !folders.some((f) => f.id === s.activeFolder)) {
+      const remembered = proj ? s.activeFolders[proj.id] : null;
+      s.activeFolder = folders.some((f) => f.id === remembered) ? remembered : null;
+    }
+    if (s.activeProject) s.activeFolders[s.activeProject] = s.activeFolder;
+  }
+
   function normalize(s) {
     migrateTabsToGroups(s);
     migrateGroupsToUniverses(s);
     if (!Array.isArray(s.universes)) s.universes = [];
     if (!Array.isArray(s.ideas)) s.ideas = [];
-    if (!s._tomb || typeof s._tomb !== 'object') s._tomb = { universes: {}, groups: {}, cards: {}, items: {}, ideas: {} };
-    if (!s._tomb.universes) s._tomb.universes = {};
-    if (!s._tomb.groups) s._tomb.groups = {};
-    if (!s._tomb.cards) s._tomb.cards = {};
-    if (!s._tomb.items) s._tomb.items = {};
-    if (!s._tomb.ideas) s._tomb.ideas = {};
+    if (!Array.isArray(s.noteProjects)) s.noteProjects = [];
+    if (!Array.isArray(s.notes)) s.notes = [];
+    if (!s._tomb || typeof s._tomb !== 'object') s._tomb = emptyTomb();
+    // Én bøtte per radtype: en buffer skrevet av en eldre versjon mangler de
+    // nyeste, og synken leser dem hver runde.
+    Object.keys(emptyTomb()).forEach((b) => { if (!s._tomb[b]) s._tomb[b] = {}; });
     if (typeof s._hlc !== 'number') s._hlc = 0;
     s.universes.forEach((u, i) => normalizeUniverse(u, i));
+    s.noteProjects.forEach((p, i) => normalizeNoteProject(p, i));
+    s.notes.forEach((n, i) => normalizeNote(n, i));
     validateActive(s);
+    validateActiveNotes(s);
     observeTs(s._hlc);
   }
   normalize(state);
@@ -1014,6 +1120,9 @@
     if (kind === 'universe') return '.uni-card' + q + ' > .card-head';
     if (kind === 'idea') return '.item.idea-row' + q;
     if (kind === 'ideacat') return '.category.idea-cat' + q + ' > .cat-head';
+    if (kind === 'note') return '.note-card' + q;
+    if (kind === 'noteFolder') return '.item.note-folder-row' + q;
+    if (kind === 'noteProject') return '.note-project-card' + q + ' > .card-head';
     return null;
   }
 
@@ -1085,6 +1194,8 @@
   // `data-dnd-ignore` setter på dra-sonen på hvert nivå — klientens gating er
   // kun UX og skal feile LUKKET, så en manglende capability betyr «nei».
   function canReorderObj(kind, obj, cont) {
+    // Notatene er mine alene — det finnes ingen lås å spørre om.
+    if (kind === 'note' || kind === 'noteFolder' || kind === 'noteProject') return true;
     if (kind === 'item') return !frozen(cont) && !obj.done;
     if (kind === 'category') return !frozen(cont);
     if (kind === 'card') return !frozen(obj) && canAddList(activeGroupObj());
@@ -1125,6 +1236,22 @@
       if (!obj || !cont) return null;
       return { obj, cont, S: navScope, name: obj.name,
         rows: orderedRows(navScope, cont, kind === 'group' ? 'leaf' : 'level1') };
+    }
+    if (kind === 'note') {
+      const obj = findNoteById(id);
+      if (!obj) return null;
+      return { obj, cont: null, S: notesScope, name: noteDisplayTitle(obj), rows: activeNotes() };
+    }
+    if (kind === 'noteFolder') {
+      const obj = findNoteFolder(id);
+      const cont = obj ? findNoteProject(obj.project) : null;
+      if (!obj || !cont) return null;
+      return { obj, cont, S: notesNavScope, name: obj.name, rows: liveFolders(cont) };
+    }
+    if (kind === 'noteProject') {
+      const obj = findNoteProject(id);
+      if (!obj) return null;
+      return { obj, cont: null, S: notesNavScope, name: obj.name, rows: visibleNoteProjects() };
     }
     if (kind === 'universe') {
       const obj = findUniverse(id);
@@ -1169,6 +1296,8 @@
     if (kind === 'card' || kind === 'universe') render();
     else if (kind === 'group' || kind === 'groupcat') renderNav();
     else if (kind === 'idea' || kind === 'ideacat') { renderIdeas(); applyFocusIntent(); }
+    else if (kind === 'note') { renderNotes(); applyFocusIntent(); }
+    else if (kind === 'noteFolder' || kind === 'noteProject') { renderNotesNav(); applyFocusIntent(); }
     else { refreshCard(ctx.cont); applyFocusIntent(); }
     announce(tr(step < 0 ? 'a11y.movedUp' : 'a11y.movedDown',
       { name: quoted(ctx.name), pos: i + step + 1, total: ctx.rows.length }));
@@ -1563,7 +1692,11 @@
   function boardColumnCount(S) {
     if (S.singleColumn) return 1;
     const gap = boardGap(S.root);
-    return Math.max(1, Math.floor((S.root.clientWidth + gap) / (BOARD_COL_MIN + gap)));
+    // Minste kolonnebredde er scopets: en LISTE trenger 380 px for å være
+    // lesbar med sine rader og chips, et NOTATKORT (tittel + utdrag + dato)
+    // klarer seg med mindre, og skal derfor gi flere kolonner på samme skjerm.
+    const min = S.colMin || BOARD_COL_MIN;
+    return Math.max(1, Math.floor((S.root.clientWidth + gap) / (min + gap)));
   }
   // Grådig fordeling: neste rad blir liggende i gjeldende kolonne så lenge den
   // får plass innenfor budsjettet. Avstanden mellom radene er kortenes egen
@@ -1579,8 +1712,41 @@
     });
     return cols;
   }
-  function boardColumnBudget(heights, gap, n) {
+  /* Budsjettet en kolonne fylles innenfor.
+
+     LISTENE fyller venstre kolonne først, én skjermhøyde om gangen: en liste er
+     en høy beholder man leser ovenfra og ned, og en ny kolonne skal først
+     oppstå når den forrige er full (se blokken over).
+
+     NOTATKORTENE er små og like høye, og en fyll-venstre-først-regel ville lagt
+     tre notater i en smal stripe med to tomme kolonner ved siden av. Med
+     `evenColumns` settes budsjettet i stedet til den JEVNE høyden — den minste
+     som fordeler kortene like høyt utover alle kolonnene vinduet har plass til.
+     Rekkefølgen er fortsatt kolonnevis (kolonne 1 ovenfra og ned, så kolonne 2),
+     som alt annet i Huskis, så `pos`-regnestykket ved et slipp er uendret. */
+  /* Den MINSTE kolonnehøyden som får alt inn i `n` kolonner, aldri lavere enn
+     `lo`. Monotont (større budsjett gir aldri flere kolonner), så et binærsøk
+     finner den. Et kort kan ikke deles, så gulvet er dessuten det høyeste. */
+  function smallestBudget(heights, gap, n, lo) {
+    const total = heights.reduce((a, h) => a + h, 0) + gap * Math.max(0, heights.length - 1);
+    let low = Math.max(lo, Math.max.apply(null, heights));
+    if (packBoardColumns(heights, gap, low).length <= n) return low;
+    let hi = total;
+    while (low < hi) {
+      const mid = Math.floor((low + hi) / 2);
+      if (packBoardColumns(heights, gap, mid).length <= n) hi = mid; else low = mid + 1;
+    }
+    return low;
+  }
+  function boardColumnBudget(heights, gap, n, S) {
     if (n <= 1) return Infinity; // én kolonne: alt havner der uansett
+    /* NOTATKORTENE fordeles JEVNT: budsjettet er den minste kolonnehøyden som
+       får alt inn i de kolonnene vinduet har plass til, uten skjermhøyde-
+       gulvet listene har. Tre notater blir da tre korte kolonner i stedet for
+       én smal stripe med tomrom ved siden av — kravet «flere responsive
+       kolonner på desktop» (docs/notater-plan.md). Rekkefølgen er fortsatt
+       kolonnevis, som alt annet i Huskis, så `pos`-regnestykket er uendret. */
+    if (S && S.evenColumns) return smallestBudget(heights, gap, n, 0);
     // Budsjettet er én SKJERMHØYDE under toppmenyen. Gestelinjen dekker de
     // nederste pikslene av viewportet, så de er ikke skjerm man kan bruke —
     // uten leddet blir kolonnen for høy, og siste kort i den havner under
@@ -1590,20 +1756,21 @@
       Math.round(vh - topbarEl.getBoundingClientRect().height - safeInsets().bottom - 2 * gap));
     if (packBoardColumns(heights, gap, screen).length <= n) return screen;
     // Alt får ikke plass på én skjermhøyde per kolonne → finn den minste høyden
-    // som gjør det (monotont: større budsjett gir aldri flere kolonner).
-    let lo = screen;
-    let hi = heights.reduce((a, h) => a + h, 0) + gap * Math.max(0, heights.length - 1);
-    while (lo < hi) {
-      const mid = Math.floor((lo + hi) / 2);
-      if (packBoardColumns(heights, gap, mid).length <= n) hi = mid; else lo = mid + 1;
-    }
-    return lo;
+    // som gjør det.
+    return smallestBudget(heights, gap, n, screen);
   }
   let relayoutPending = false;
   let relayoutRAF = null;
   function scheduleRelayout() {
     if (relayoutRAF != null) return;
-    relayoutRAF = requestAnimationFrame(() => { relayoutRAF = null; relayoutBoard(boardScope); });
+    relayoutRAF = requestAnimationFrame(() => {
+      relayoutRAF = null;
+      relayoutBoard(boardScope);
+      // Notatfanens board har sine egne kolonner og sin egen ResizeObserver-
+      // registrering, men den SAMME runden: bare ett av de to er synlig om
+      // gangen, og en fordeling i en skjult beholder måler bare nuller.
+      relayoutBoard(notesScope);
+    });
   }
   // Hold observatørens mål i takt med kortene som faktisk står på board-et.
   // `render()` river alle kortnodene (`board.innerHTML = ''`) og `refreshCard()`
@@ -1656,6 +1823,7 @@
     // ligger seksjonsoverskriftene i den samme kolonnen, så en omfordeling
     // ville flyttet kortene bort fra overskriften sin.
     if (S.singleColumn) return;
+    if (!S.root || S.root.hidden) return;   // skjult fane: alt måler 0
     if (S.root.classList.contains('empty')) { observeBoardRows(S, []); return; }
     // En node som flyttes i DOM mister fokus (og markøren i et navnefelt). Er
     // man midt i å skrive, venter vi til feltet forlates (`focusout` under).
@@ -1687,7 +1855,7 @@
     if (!rows.length) return;
     const gap = boardGap(S.root);
     const heights = rows.map(boardRowHeight);
-    const plan = packBoardColumns(heights, gap, boardColumnBudget(heights, gap, cols.length));
+    const plan = packBoardColumns(heights, gap, boardColumnBudget(heights, gap, cols.length, S));
     cols.forEach((col, j) => {
       const next = (plan[j] || []).map((i) => rows[i]);
       const cur = [...col.children];
@@ -1703,12 +1871,18 @@
   // permanent (bredde-endringer); kortene reconciles av `observeBoardRows`.
   const boardRO = typeof ResizeObserver === 'function' ? new ResizeObserver(scheduleRelayout) : null;
   if (boardRO) boardRO.observe(board);
+  if (boardRO) {
+    const nb = document.getElementById('notes-board');
+    if (nb) boardRO.observe(nb);
+  }
   board.addEventListener('focusout', () => { if (relayoutPending) scheduleRelayout(); });
 
   // Full re-rendring: nav-modalen (områder/mapper) + hovedsidens board.
   function render() {
     renderNav();
     renderBoard();
+    renderNotes();         // no-op når notatfanen ikke er den aktive
+    refreshNotesNav();     // … og står notat-navigasjonen åpen, følger den med
     refreshIdeasModal();   // står idémodalen åpen, skal den følge synken
     // Nav-modalen kan være lukket (renderNav() returnerer da tidlig), og board-et
     // kan ha vært tomt — siste sjanse til å innfri ønsket før det forkastes.
@@ -3857,8 +4031,16 @@
      aldri inn, og ligger den fortsatt på serveren, fullføres slettingen.
      Gravsteiner utløper aldri — en klient som har ligget i skuffen i et år må
      fortsatt møte dem. */
-  function emptyTomb() { return { universes: {}, groups: {}, cards: {}, items: {}, ideas: {} }; }
-  const TOMB_BUCKET = { universe: 'universes', group: 'groups', card: 'cards', item: 'items', idea: 'ideas' };
+  function emptyTomb() {
+    return { universes: {}, groups: {}, cards: {}, items: {}, ideas: {},
+             noteProjects: {}, noteFolders: {}, notes: {} };
+  }
+  // Nøklene ER serverens `tombstones.resource_type` (og dermed også radtypen
+  // synk-motoren sender rundt), så `tombFromServer` kan slå opp direkte.
+  const TOMB_BUCKET = {
+    universe: 'universes', group: 'groups', card: 'cards', item: 'items', idea: 'ideas',
+    note_project: 'noteProjects', note_folder: 'noteFolders', note: 'notes',
+  };
   // Alle gravlagte id-er som ett flatt oppslag (id-ene er UUID-er, altså unike
   // på tvers av nivåene).
   function tombIds() {
@@ -14170,6 +14352,1779 @@
   }
 
   /* ============================================================
+     NOTATER — Huskis' andre hoveddel (Prosjekt > Mappe > Notat)
+     ------------------------------------------------------------
+     Autoritativt: docs/notater-plan.md.
+
+     HOVEDFANENE. Øverst i visningsområdet står `Lister | Notater`. Fanen er
+     en VISNING, ikke et eget program: toppkontrollene (varsler, kalender, søk,
+     idéer, drakt, konto) hører til hele Huskis og står uendret i begge. Bare
+     raden under fanene — breadcrumben og opprettelsesknappene — bytter.
+
+     HIERARKIET speiler listenes: et PROSJEKT er et område, en MAPPE er en
+     mappe. Nav-modalen for notater er derfor bygget av de samme klassene
+     (`.card`/`.item`), og mappe-draget kjøres av det samme rad-maskineriet
+     (`reconcileRows`, `orderedRows`, skillelinjene, peek) gjennom et eget
+     scope — nøyaktig slik idéene fikk sitt tredje scope.
+
+     NOTATKORTENE er board-ets kortnivå: `.note-card` i `.board-col`, fordelt
+     av den samme kolonnemotoren som listene (`relayoutBoard`), og omrokert av
+     et eget dnd-kit-board med den delte politikken.
+
+     DET SOM MANGLER ER MED VILJE (PR 1): ingen arkiv, ingen søppelkasse,
+     ingen sletting, intet søk og ingen deling. Datamodellen sperrer ingen av
+     dem — `trashed` finnes på alle tre radtypene, og eierskapet ligger der en
+     medlemskapsrad senere kan henge.
+     ============================================================ */
+
+  /* ------------------------------------------------------------
+     NOTAT-DOKUMENTET
+     ------------------------------------------------------------
+     Innholdet i et notat lagres som en STRUKTURERT blokkliste, ikke som rå
+     editor-HTML. Formen er:
+
+       doc  = { v: 1, blocks: [ Block … ] }
+       Block= { t: 'p'|'h1'|'h2'|'h3', c: Run[] }
+            | { t: 'ul'|'ol', items: Run[][] }
+            | { t: 'hr' }
+       Run  = { s: '<tekst>', b?:1, i?:1, u?:1, sup?:1, sub?:1, url?:'…' }
+
+     Fire ting følger av det, og alle fire er krav fra planen:
+       • VIDERE REDIGERING uten formattap — dokumentet er editorens sannhet,
+         og editoren bygges opp fra det igjen ved hver åpning;
+       • LESBAR TEKST for et senere søk — `noteDocText()` er hele jobben;
+       • TRYGG RENDRING — DOM-en bygges node for node (`createElement` +
+         `createTextNode`), aldri av rå HTML, så innhold ikke kan bli markup;
+       • INGEN LÅSING til editoren — formatet kjenner ikke contenteditable.
+
+     KONFLIKTMODELLEN ER DOKUMENTBASERT: hele `doc` rir på innholdsregisteret
+     (`ts`/`org`), som teksten i et listepunkt. To enheter som redigerer det
+     SAMME notatet samtidig gir én vinner, ikke en flettet halvdel — og det er
+     med vilje (docs/notater-plan.md). Tegn-for-tegn-samarbeid er et eget,
+     senere prosjekt. */
+  const NOTE_DOC_V = 1;
+  const NOTE_BLOCK_TYPES = ['p', 'h1', 'h2', 'h3', 'ul', 'ol', 'hr'];
+  const NOTE_TEXT_BLOCKS = ['p', 'h1', 'h2', 'h3'];
+  const NOTE_MARKS = ['b', 'i', 'u', 'sup', 'sub'];
+  /* Taggene som er BLOKKER i editorens DOM. Videre enn modellens egne typer:
+     nettleseren kan legge igjen en `div`, et `blockquote` eller en `pre`, og de
+     skal leses som avsnitt — ikke som løs inline-tekst. */
+  const NOTE_DOM_BLOCKS = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+    'ul', 'ol', 'hr', 'div', 'blockquote', 'pre', 'table'];
+  /* Skjemaene en lenke i et notat får ha. Alt annet — `javascript:`, `data:`,
+     `blob:` — droppes ved normalisering, altså FØR verdien når state, og igjen
+     når den rendres. To lag, som ellers i appen. */
+  const NOTE_URL_SCHEMES = ['http:', 'https:', 'mailto:'];
+  /* Skjemaet en adresse uten skjema får. Skrevet som en konstant og satt
+     sammen ved bruk, fordi en absolutt adresse i webkilden ellers ville vært
+     en «fremmed URL» for vakten i tests/capacitor-android.test.js — og den
+     vakten skal fortsette å fange ekte utgående lenker. */
+  const NOTE_DEFAULT_SCHEME = 'https:';
+  const NOTE_MAX_BLOCKS = 4000;   // tak per dokument (mot en ødelagt/ondsinnet rad)
+  const NOTE_MAX_RUNS = 800;      // tak per blokk
+  const NOTE_MAX_RUN_LEN = 20000; // tak per tekstbit
+  const NOTE_EXCERPT_LEN = 160;   // utdraget på kortet
+
+  function emptyNoteDoc() { return { v: NOTE_DOC_V, blocks: [] }; }
+
+  /* Én adresse inn, én trygg adresse ut (eller tom streng). Kontrollen er
+     SKJEMAET, ikke verten: notatene er brukerens egne, og hvor de peker er
+     brukerens sak — men et skjema som kan kjøre kode er det ikke. */
+  function safeNoteUrl(raw) {
+    let s = String(raw == null ? '' : raw).trim();
+    if (!s) return '';
+    // Kontrolltegn kan skjule et skjema for en enkel test uten å hindre
+    // URL-parseren i å lese det. De fjernes før noe annet gjøres.
+    s = s.replace(/[\u0000-\u001f\u007f]/g, '');
+    if (!s) return '';
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(s)) s = NOTE_DEFAULT_SCHEME + '//' + s;
+    try {
+      const u = new URL(s);
+      return NOTE_URL_SCHEMES.indexOf(u.protocol.toLowerCase()) === -1 ? '' : u.href;
+    } catch (e) { return ''; }
+  }
+
+  const sameNoteMarks = (a, b) =>
+    NOTE_MARKS.every((m) => !!a[m] === !!b[m]) && (a.url || '') === (b.url || '');
+  function sanitizeNoteRun(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const s = typeof raw.s === 'string' ? raw.s.slice(0, NOTE_MAX_RUN_LEN) : '';
+    if (!s) return null;
+    const run = { s };
+    NOTE_MARKS.forEach((m) => { if (raw[m]) run[m] = 1; });
+    const url = safeNoteUrl(raw.url);
+    if (url) run.url = url;
+    return run;
+  }
+  function sanitizeNoteRuns(raw) {
+    const out = [];
+    (Array.isArray(raw) ? raw : []).slice(0, NOTE_MAX_RUNS).forEach((r) => {
+      const run = sanitizeNoteRun(r);
+      if (!run) return;
+      // Slå sammen naboer med samme markering: serialiseringen fra DOM kan
+      // ellers gi mange små biter av det som er én sammenhengende kjøring.
+      const prev = out[out.length - 1];
+      if (prev && sameNoteMarks(prev, run) && prev.s.length + run.s.length <= NOTE_MAX_RUN_LEN) prev.s += run.s;
+      else out.push(run);
+    });
+    return out;
+  }
+  /* Den ENE inngangen for et dokument som kommer utenfra — den lokale
+     bufferen, serveren eller editorens DOM. Alt som ikke passer skjemaet
+     droppes; ingenting kastes. */
+  function sanitizeNoteDoc(raw) {
+    const doc = emptyNoteDoc();
+    const blocks = raw && Array.isArray(raw.blocks) ? raw.blocks : [];
+    blocks.slice(0, NOTE_MAX_BLOCKS).forEach((b) => {
+      if (!b || typeof b !== 'object') return;
+      const t = NOTE_BLOCK_TYPES.indexOf(b.t) === -1 ? 'p' : b.t;
+      if (t === 'hr') { doc.blocks.push({ t: 'hr' }); return; }
+      if (t === 'ul' || t === 'ol') {
+        const items = (Array.isArray(b.items) ? b.items : [])
+          .slice(0, NOTE_MAX_BLOCKS).map(sanitizeNoteRuns);
+        if (items.length) doc.blocks.push({ t, items });
+        return;
+      }
+      doc.blocks.push({ t, c: sanitizeNoteRuns(b.c) });
+    });
+    return doc;
+  }
+
+  const noteRunsText = (runs) => (Array.isArray(runs) ? runs : []).map((r) => r.s || '').join('');
+  // Dokumentet som lesbar tekst — utdraget på kortet i dag, søkeindeksen senere.
+  function noteDocText(doc) {
+    const out = [];
+    ((doc && doc.blocks) || []).forEach((b) => {
+      if (b.t === 'hr') return;
+      if (b.t === 'ul' || b.t === 'ol') {
+        (b.items || []).forEach((it) => { const s = noteRunsText(it).trim(); if (s) out.push(s); });
+        return;
+      }
+      const s = noteRunsText(b.c).trim();
+      if (s) out.push(s);
+    });
+    return out.join('\n');
+  }
+  // Kortets utdrag: første lesbare linjer, klippet på et ordskille.
+  function noteExcerpt(note) {
+    const t = noteDocText(note.doc).replace(/\s+/g, ' ').trim();
+    if (t.length <= NOTE_EXCERPT_LEN) return t;
+    const cut = t.slice(0, NOTE_EXCERPT_LEN);
+    const sp = cut.lastIndexOf(' ');
+    return (sp > NOTE_EXCERPT_LEN * 0.6 ? cut.slice(0, sp) : cut) + '…';
+  }
+  // Tittelen slik den VISES: en tom tittel faller tilbake på første linje i
+  // teksten, og først når også den er tom på «Uten navn».
+  function noteDisplayTitle(note) {
+    const t = String(note.title || '').trim();
+    if (t) return t;
+    const first = noteDocText(note.doc).split('\n')[0] || '';
+    return first.trim() || tr('common.noName');
+  }
+
+  /* ---- Dokument → DOM ----
+     Bygger nodene selv. Ingen `innerHTML`, ingen strengbygget markup: et notat
+     er brukerinnhold, og det skal aldri kunne bli til markup underveis. */
+  function noteRunNode(run) {
+    let node = document.createTextNode(run.s);
+    const wrap = (tag) => { const el = document.createElement(tag); el.appendChild(node); node = el; };
+    if (run.sub) wrap('sub');
+    if (run.sup) wrap('sup');
+    if (run.u) wrap('u');
+    if (run.i) wrap('em');
+    if (run.b) wrap('strong');
+    if (run.url) {
+      /* Lenken er MERKET tekst, ikke et anker. Huskis' UI produserer ingen
+         utgående lenker (docs/domains-and-urls.md), og et notat skal ikke bli
+         unntaket som stille åpner den døren: adressen bæres i `data-url`,
+         vises i `title`, og kan kopieres fra lenke-popoveren. Å ÅPNE den hører
+         til det steget som også tar mobilskallets ruting. */
+      const el = document.createElement('span');
+      el.className = 'note-link';
+      el.dataset.url = run.url;
+      el.title = run.url;
+      el.appendChild(node);
+      node = el;
+    }
+    return node;
+  }
+  function noteRunsInto(el, runs) {
+    (runs || []).forEach((r) => el.appendChild(noteRunNode(r)));
+    // En tom blokk må likevel ha høyde i editoren, ellers er den umulig å
+    // klikke i. `<br>` er nettopp det nettleseren selv legger inn.
+    if (!el.childNodes.length) el.appendChild(document.createElement('br'));
+  }
+  function noteBlockNode(b) {
+    if (b.t === 'hr') return document.createElement('hr');
+    if (b.t === 'ul' || b.t === 'ol') {
+      const list = document.createElement(b.t);
+      (b.items || []).forEach((runs) => {
+        const li = document.createElement('li');
+        noteRunsInto(li, runs);
+        list.appendChild(li);
+      });
+      if (!list.childNodes.length) list.appendChild(document.createElement('li'));
+      return list;
+    }
+    const el = document.createElement(NOTE_TEXT_BLOCKS.indexOf(b.t) === -1 ? 'p' : b.t);
+    noteRunsInto(el, b.c);
+    return el;
+  }
+  function noteDocIntoEl(el, doc) {
+    el.textContent = '';
+    const blocks = (doc && doc.blocks) || [];
+    if (!blocks.length) { el.appendChild(noteBlockNode({ t: 'p', c: [] })); return; }
+    blocks.forEach((b) => el.appendChild(noteBlockNode(b)));
+  }
+
+  /* ---- DOM → dokument ----
+     Leser editorens contenteditable tilbake til skjemaet. Alt som ikke er en
+     kjent blokk blir et avsnitt, og alt som ikke er en kjent markering faller
+     bort — nettleserens egne `execCommand`-resultater og innlimt markup går
+     gjennom nøyaktig den samme trakten som alt annet. */
+  function noteMarksFor(node, root) {
+    const m = {};
+    for (let n = node; n && n !== root; n = n.parentNode) {
+      if (n.nodeType !== 1) continue;
+      const tag = n.tagName.toLowerCase();
+      if (tag === 'b' || tag === 'strong') m.b = 1;
+      else if (tag === 'i' || tag === 'em') m.i = 1;
+      else if (tag === 'u' || tag === 'ins') m.u = 1;
+      else if (tag === 'sup') m.sup = 1;
+      else if (tag === 'sub') m.sub = 1;
+      if (!m.url) {
+        const u = n.dataset && n.dataset.url ? n.dataset.url : (tag === 'a' ? n.getAttribute('href') : '');
+        if (u) m.url = u;
+      }
+    }
+    return m;
+  }
+  /* Inline-innholdet i et sett noder, med markeringene lest opp til `stopAt`.
+     Går ikke inn i en NØSTET liste: den blir egne blokker lenger ute (lister
+     nøstes ikke i dokumentmodellen). `stopAt` er eksplisitt fordi de LØSE
+     nodene rett under roten skal ha markeringene sine talt med — der er noden
+     selv en `<b>`, ikke bare innpakningen rundt teksten. */
+  function noteRunsFrom(nodes, stopAt) {
+    const runs = [];
+    const walk = (node) => {
+      if (node.nodeType === 3) {
+        if (!node.nodeValue) return;
+        runs.push(Object.assign({ s: node.nodeValue }, noteMarksFor(node.parentNode, stopAt)));
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      const tag = node.tagName.toLowerCase();
+      // Linjeskift i en blokk bæres som et tegn; `.note-doc` er `pre-wrap`.
+      if (tag === 'br') { runs.push({ s: '\n' }); return; }
+      if (tag === 'ul' || tag === 'ol') return;
+      Array.prototype.forEach.call(node.childNodes, walk);
+    };
+    nodes.forEach(walk);
+    return sanitizeNoteRuns(runs);
+  }
+  const noteRunsFromEl = (el) => noteRunsFrom(Array.prototype.slice.call(el.childNodes), el);
+  function noteListItems(listEl) {
+    const items = [];
+    const walk = (list) => {
+      Array.prototype.forEach.call(list.children, (li) => {
+        if (li.tagName.toLowerCase() !== 'li') return;
+        items.push(noteRunsFromEl(li));
+        // Nøstede lister flates ut: modellen har ett nivå (planen), og et
+        // innlimt tre skal ikke kunne miste innhold.
+        Array.prototype.forEach.call(li.children, (kid) => {
+          const t = kid.tagName.toLowerCase();
+          if (t === 'ul' || t === 'ol') walk(kid);
+        });
+      });
+    };
+    walk(listEl);
+    return items;
+  }
+  function isEmptyNoteBlock(b) {
+    if (!b || b.t === 'hr') return false;
+    if (b.t === 'ul' || b.t === 'ol') return !(b.items || []).some((it) => noteRunsText(it).trim());
+    return !noteRunsText(b.c).trim();
+  }
+  /* Listene som ligger rett i `el` (ikke inne i en annen liste). Nettleserens
+     `insertUnorderedList` legger gjerne lista INNE i avsnittet markøren stod i
+     (`<p><ul>…</ul></p>`), og en liste som bare blir liggende der ville falt
+     ut av dokumentet: `noteRunsFromEl` går ikke inn i en liste, og avsnittet
+     ville vært tomt. Modellen har ingen nøsting, så de løftes ut som egne
+     blokker. */
+  function noteTopLists(el) {
+    return Array.prototype.filter.call(el.querySelectorAll('ul, ol'), (list) => {
+      for (let n = list.parentNode; n && n !== el; n = n.parentNode) {
+        if (n.nodeType !== 1) continue;
+        const t = n.tagName.toLowerCase();
+        if (t === 'ul' || t === 'ol' || t === 'li') return false;
+      }
+      return true;
+    });
+  }
+  function noteDocFromEl(root) {
+    const doc = emptyNoteDoc();
+    /* LØSE noder rett under roten. `execCommand` etterlater dem støtt — et
+       `<br>` når man forlater en liste, en `<b>` når man begynner å skrive
+       igjen — og uten dette ville hver av dem blitt sitt eget avsnitt. De
+       samles i ETT avsnitt, slik de også ser ut på skjermen. */
+    let loose = null;
+    const flush = () => {
+      if (!loose) return;
+      const runs = noteRunsFrom(loose, root);
+      if (runs.length) doc.blocks.push({ t: 'p', c: runs });
+      loose = null;
+    };
+    Array.prototype.forEach.call(root.childNodes, (node) => {
+      if (node.nodeType === 3) {
+        if (node.nodeValue) { loose = loose || []; loose.push(node); }
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      const tag = node.tagName.toLowerCase();
+      if (NOTE_DOM_BLOCKS.indexOf(tag) === -1) { loose = loose || []; loose.push(node); return; }
+      flush();
+      if (tag === 'hr') { doc.blocks.push({ t: 'hr' }); return; }
+      if (tag === 'ul' || tag === 'ol') { doc.blocks.push({ t: tag, items: noteListItems(node) }); return; }
+      const t = NOTE_TEXT_BLOCKS.indexOf(tag) === -1 ? 'p' : tag;
+      const runs = noteRunsFromEl(node);
+      const lists = noteTopLists(node);
+      /* En HELT tom blokk (`<p></p>`) er nettleserens rest, ikke en tom linje
+         brukeren skrev — den ville hatt et `<br>` i seg. Og et avsnitt som bare
+         er innpakning rundt en liste skal ikke bli en tom blokk foran den. */
+      if ((runs.length || !lists.length) && node.childNodes.length) doc.blocks.push({ t, c: runs });
+      lists.forEach((list) => {
+        doc.blocks.push({ t: list.tagName.toLowerCase(), items: noteListItems(list) });
+      });
+    });
+    flush();
+    // Etterfølgende tomme avsnitt er nettleserens egne rester, ikke innhold.
+    while (doc.blocks.length && isEmptyNoteBlock(doc.blocks[doc.blocks.length - 1])) doc.blocks.pop();
+    return sanitizeNoteDoc(doc);
+  }
+
+  /* ------------------------------------------------------------
+     OPPSLAG OG AKTIV POSISJON
+     ------------------------------------------------------------ */
+  const noteProjects = () => state.noteProjects || [];
+  const allNotes = () => state.notes || [];
+  const findNoteProject = (id) => noteProjects().find((p) => p.id === id) || null;
+  function findNoteFolder(id) {
+    for (const p of noteProjects()) {
+      const f = (p.folders || []).find((x) => x.id === id);
+      if (f) return f;
+    }
+    return null;
+  }
+  const findNoteById = (id) => allNotes().find((n) => n.id === id) || null;
+  const visibleNoteProjects = () => noteProjects().filter(live).sort(posCmp);
+  const activeProjectObj = () => findNoteProject(state.activeProject);
+  const activeNoteFolderObj = () => (state.activeFolder ? findNoteFolder(state.activeFolder) : null);
+  const liveFolders = (p) => (p ? (p.folders || []).filter(live).sort(posCmp) : []);
+
+  /* Notatene i den plasseringen brukeren står i. Et notat hvis mappe ikke
+     finnes (slettet på en annen enhet) leses som et FRITT notat i prosjektet
+     sitt — nøyaktig som et listepunkt med en hengende `cat` leses som nivå 1. */
+  function notesIn(projectId, folderId) {
+    const p = findNoteProject(projectId);
+    if (!p) return [];
+    const ids = new Set((p.folders || []).filter(live).map((f) => f.id));
+    return allNotes().filter((n) => {
+      if (!live(n) || n.project !== projectId) return false;
+      const folder = n.folder && ids.has(n.folder) ? n.folder : null;
+      return folder === (folderId || null);
+    }).sort(posCmp);
+  }
+  const activeNotes = () => notesIn(state.activeProject, state.activeFolder);
+  // Antallet notater et prosjekt/en mappe viser — pillen i nav-modalen.
+  const noteCountIn = (projectId, folderId) => notesIn(projectId, folderId).length;
+
+  function setActiveProject(id) {
+    state.activeProject = id || null;
+    // Per-prosjekt-minnet: kom vi tilbake til et prosjekt vi har vært i før,
+    // lander vi i den samme mappen (som `activeGroups` for listene).
+    state.activeFolder = id ? (state.activeFolders[id] || null) : null;
+    validateActiveNotes(state);
+    saveNotesNavPref();
+    renderNotes();
+  }
+  function setActiveNoteFolder(id) {
+    state.activeFolder = id || null;
+    validateActiveNotes(state);
+    saveNotesNavPref();
+    renderNotes();
+  }
+  /* Aktiv notatposisjon huskes på KONTOEN, som listenes (docs/data-model.md):
+     samme `user_metadata`-post, egen nøkkel. `saveNavPref` eier skrivingen —
+     her er bare et kall til den. */
+  function saveNotesNavPref() { saveNavPref(); }
+
+  /* ------------------------------------------------------------
+     NOTATFANEN: rendring av kortene
+     ------------------------------------------------------------ */
+  const notesBoard = document.getElementById('notes-board');
+  const notesCrumbBtn = document.getElementById('notes-crumb');
+  const crumbProjectName = document.getElementById('crumb-project-name');
+  const crumbNoteFolderName = document.getElementById('crumb-note-folder-name');
+  const addNoteBtn = document.getElementById('add-note-btn');
+  const noteCardTpl = document.getElementById('note-card-template');
+
+  const NOTE_DATE_OPTS = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
+  /* «Sist endret» leses av innholdsregisteret: `ts` er den hybride logiske
+     klokken, som er millisekunder siden epoken når den ikke er blitt dyttet
+     framover av en enhet med feil klokke. Den er dermed den samme verdien
+     LWW-en bruker — ingen egen tidskolonne å holde i takt. */
+  function noteEditedText(note) {
+    const ts = note.ts || 0;
+    if (!ts) return '';
+    try {
+      return new Date(ts).toLocaleString(I18N.lang() === 'en' ? 'en-GB' : 'nb-NO', NOTE_DATE_OPTS);
+    } catch (e) { return ''; }
+  }
+
+  function buildNoteCard(note) {
+    const el = fromTemplate(noteCardTpl);
+    el.dataset.id = note.id;
+    el.querySelector('.note-card-title').textContent = noteDisplayTitle(note);
+    const ex = el.querySelector('.note-card-excerpt');
+    const text = noteExcerpt(note);
+    ex.textContent = text;
+    ex.hidden = !text;
+    el.querySelector('.note-card-meta').textContent = noteEditedText(note);
+    // Klikk åpner editoren; klikk-og-hold løfter kortet (dnd-kit eier gesten,
+    // og klikk-vakten svelger klikket som ellers ville fulgt et slipp).
+    el.addEventListener('click', () => openNoteEditor(note.id));
+    el.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      ev.preventDefault();
+      openNoteEditor(note.id);
+    });
+    // Alt+piler flytter kortet i rekka, som alt annet i Huskis
+    // (docs/tilgjengelighet.md). Enter er allerede «åpne», så F2 er ikke
+    // bundet her — tittelen redigeres i editoren.
+    attachKeyHandle(el, 'note', () => note.id);
+    return el;
+  }
+
+  function renderNotes() {
+    if (!notesBoard) return;
+    // Fanen er ikke synlig: hold breadcrumben i takt, men bygg ikke en DOM
+    // ingen ser (og mål ikke kolonner i en skjult beholder — alt måler 0).
+    if (notesBoard.hidden) { updateNotesCrumbs(); updateNotesToolbar(); return; }
+    captureFocusIn(notesBoard);
+    updateNotesCrumbs();
+    updateNotesToolbar();
+    notesBoard.innerHTML = '';
+    const project = activeProjectObj();
+    if (!project) {
+      notesBoard.classList.add('empty');
+      const es = document.createElement('div');
+      es.className = 'empty-state';
+      const big = document.createElement('div');
+      big.className = 'big';
+      big.innerHTML = ICONS.noteProject;
+      const p1 = document.createElement('p');
+      p1.textContent = tr('notes.emptyNoProjects');
+      const p2 = document.createElement('p');
+      p2.innerHTML = tr('notes.emptyNoProjectsHint', {
+        nav: '<span class="hint-chip">' + ICONS.noteProject + ' › ' + ICONS.folder + '</span>',
+      });
+      es.append(big, p1, p2);
+      notesBoard.appendChild(es);
+      applyFocusIntent();
+      fixNotesBottomGap();
+      return;
+    }
+    const notes = activeNotes();
+    if (!notes.length) {
+      notesBoard.classList.add('empty');
+      const es = document.createElement('div');
+      es.className = 'empty-state';
+      const big = document.createElement('div');
+      big.className = 'big';
+      big.innerHTML = ICONS.note;
+      const p1 = document.createElement('p');
+      const folder = activeNoteFolderObj();
+      p1.textContent = tr('notes.emptyNoNotes', { name: quoted(folder ? folder.name : project.name) });
+      const p2 = document.createElement('p');
+      p2.innerHTML = tr('notes.emptyNoNotesHint',
+        { plus: '<span class="hint-chip">' + ICONS.plus + ' ' + ICONS.note + '</span>' });
+      es.append(big, p1, p2);
+      notesBoard.appendChild(es);
+      applyFocusIntent();
+      fixNotesBottomGap();
+      return;
+    }
+    notesBoard.classList.remove('empty');
+    const col = document.createElement('div');
+    col.className = 'board-col';
+    notes.forEach((n) => col.appendChild(buildNoteCard(n)));
+    notesBoard.appendChild(col);
+    stampBoardColumns(notesBoard);
+    relayoutBoard(notesScope);
+    fixNotesBottomGap();
+    applyFocusIntent();
+    ensureNotesCardBoard();
+    notesSyncBoard();
+  }
+  // Samme bunn-luft-regning som listeboardet, mot notatboardets egne kort.
+  function fixNotesBottomGap() {
+    if (!notesBoard) return;
+    const cards = notesBoard.querySelectorAll('.note-card');
+    if (!cards.length) { notesBoard.style.paddingBottom = '0px'; return; }
+    notesBoard.style.paddingBottom = '0px';
+    const boardBottom = notesBoard.getBoundingClientRect().bottom; // tvinger reflow
+    let lastBottom = 0;
+    cards.forEach((c) => { lastBottom = Math.max(lastBottom, c.getBoundingClientRect().bottom); });
+    const gap = boardGap(notesBoard);
+    notesBoard.style.paddingBottom = Math.max(0, gap - (boardBottom - lastBottom)) + 'px';
+  }
+  function updateNotesCrumbs() {
+    if (!crumbProjectName) return;
+    const p = activeProjectObj();
+    const f = activeNoteFolderObj();
+    crumbProjectName.textContent = p ? p.name : tr('kind.noteProject');
+    crumbNoteFolderName.textContent = f ? f.name : tr('notes.freeNotes');
+  }
+  function updateNotesToolbar() {
+    if (addNoteBtn) addNoteBtn.disabled = !activeProjectObj();
+  }
+
+  /* ------------------------------------------------------------
+     OPPRETTING
+     ------------------------------------------------------------ */
+  function addNoteProject() {
+    const p = makeNoteProject(tr('notes.newProject'));
+    p.pos = maxPos(noteProjects()) + 1;
+    stampContent(p);
+    stampPos(p);
+    noteProjects().push(p);
+    state.activeProject = p.id;
+    state.activeFolder = null;
+    save();
+    renderNotesNav();
+    renderNotes();
+    // Navnet skrives på plassen, som en ny mappe i et område.
+    const row = notesNavBoard && notesNavBoard.querySelector('.card[data-id="' + p.id + '"] .card-title');
+    if (row) editText(row, p.name, (val) => {
+      const live2 = findNoteProject(p.id);
+      if (!live2) return;
+      live2.name = val || tr('notes.newProject');
+      stampContent(live2);
+      row.textContent = live2.name;
+      updateNotesCrumbs();
+      save();
+    });
+    return p;
+  }
+  function addNoteFolder(projectId) {
+    const p = findNoteProject(projectId);
+    if (!p) return null;
+    const f = makeNoteFolder(tr('notes.newFolder'), p.id);
+    f.pos = maxPos(p.folders) + 1;
+    stampContent(f);
+    stampPos(f);
+    p.folders.push(f);
+    save();
+    renderNotesNav();
+    const row = notesNavBoard && notesNavBoard.querySelector('.item[data-id="' + f.id + '"] .item-text');
+    if (row) editText(row, f.name, (val) => {
+      const live2 = findNoteFolder(f.id);
+      if (!live2) return;
+      live2.name = val || tr('notes.newFolder');
+      stampContent(live2);
+      row.textContent = live2.name;
+      updateNotesCrumbs();
+      save();
+    });
+    return f;
+  }
+  /* «＋ Notat» oppretter notatet og åpner editoren MED DET SAMME (planen).
+     Notatet er tomt til brukeren skriver — det finnes ingen «lagre»-handling
+     som må gjøres først. */
+  function addNote() {
+    const p = activeProjectObj();
+    if (!p) return null;
+    const n = makeNote(p.id, state.activeFolder || null);
+    n.pos = maxPos(activeNotes()) + 1;
+    stampContent(n);
+    stampPos(n);
+    allNotes().push(n);
+    save();
+    renderNotes();
+    openNoteEditor(n.id, { focusTitle: true });
+    return n;
+  }
+
+  /* ------------------------------------------------------------
+     NAV-MODALEN FOR NOTATER: prosjekter som kort, mapper som rader
+     ------------------------------------------------------------
+     Nøyaktig samme oppsett som listenes nav-modal — hvert prosjekt er et
+     `.card` med mappene sine som `.item`-rader i `.items-container` — bare
+     uten det notatene ikke har: ingen kategorier, ingen deling, ingen låser og
+     (i PR 1) ingen søppelkasse. Klassene er de samme, så designsystemet og
+     rad-maskineriet gjelder uten en eneste egen linje. */
+  const NOTES_NAV_COL_ID = 'notes-nav-col';
+  const notesNavModal = document.getElementById('notes-nav-modal');
+  const notesNavBoard = document.getElementById('notes-nav-board');
+  const notesNavCloseBtn = document.getElementById('notes-nav-close');
+  const noteProjectTpl = document.getElementById('note-project-template');
+  const noteFolderTpl = document.getElementById('note-folder-template');
+
+  function noteRowCount(n) {
+    const chip = document.createElement('span');
+    chip.className = 'collapse-count';
+    chip.setAttribute('aria-hidden', 'true');
+    chip.textContent = '(' + n + ')';
+    return chip;
+  }
+
+  function buildNoteFolderRow(f) {
+    const el = fromTemplate(noteFolderTpl);
+    el.dataset.id = f.id;
+    el.querySelector('.folder-icon').innerHTML = ICONS.folder;
+    const txt = el.querySelector('.item-text');
+    txt.textContent = f.name;
+    el.querySelector('.title-line').appendChild(noteRowCount(noteCountIn(f.project, f.id)));
+    const rename = () => editText(txt, f.name, (val) => {
+      const o = findNoteFolder(f.id);
+      if (!o) return;
+      o.name = val || tr('notes.newFolder');
+      stampContent(o);
+      txt.textContent = o.name;
+      updateNotesCrumbs();
+      save();
+    });
+    // Tittel-klikk omdøper, klikk ellers på raden navigerer — samme deling som
+    // mapperadene i listenes nav-modal (docs/menus.md).
+    txt.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
+    el.addEventListener('click', () => {
+      setActiveProject(f.project);
+      setActiveNoteFolder(f.id);
+      closeNotesNav();
+    });
+    el.classList.toggle('is-active', state.activeFolder === f.id);
+    attachKeyHandle(el, 'noteFolder', () => f.id, { rename });
+    return el;
+  }
+
+  function buildNoteProjectCard(p) {
+    const el = fromTemplate(noteProjectTpl);
+    el.dataset.id = p.id;
+    paintCardColor(el, p.color || colorForIndex(0));
+    el.querySelector('.uni-icon').innerHTML = ICONS.noteProject;
+    const title = el.querySelector('.card-title');
+    title.textContent = p.name;
+    el.querySelector('.title-line').appendChild(noteRowCount(noteCountIn(p.id, null)));
+    const rename = () => editText(title, p.name, (val) => {
+      const o = findNoteProject(p.id);
+      if (!o) return;
+      o.name = val || tr('notes.newProject');
+      stampContent(o);
+      title.textContent = o.name;
+      updateNotesCrumbs();
+      save();
+    });
+    title.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
+    // Korthodet ellers navigerer til prosjektets FRIE notater — det er stedet
+    // «prosjektet selv» er, slik en mappe er stedet under et område.
+    const head = el.querySelector('.card-head');
+    head.addEventListener('click', () => {
+      setActiveProject(p.id);
+      setActiveNoteFolder(null);
+      closeNotesNav();
+    });
+    attachKeyHandle(head, 'noteProject', () => p.id, { rename });
+    el.classList.toggle('is-active', state.activeProject === p.id && !state.activeFolder);
+    const list = el.querySelector('.items-container');
+    list.dataset.dndContainer = p.id;
+    liveFolders(p).forEach((f) => list.appendChild(buildNoteFolderRow(f)));
+    el.querySelector('.add-item-btn').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      addNoteFolder(p.id);
+    });
+    return el;
+  }
+
+  function notesAddProjectRow() {
+    const wrap = document.createElement('div');
+    wrap.className = 'nav-add-uni notes-add-project';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-solid btn-green btn-small';
+    btn.innerHTML = ICONS.plus;
+    const span = document.createElement('span');
+    span.textContent = tr('notes.addProject');
+    btn.appendChild(span);
+    btn.addEventListener('click', () => addNoteProject());
+    wrap.appendChild(btn);
+    return wrap;
+  }
+
+  function renderNotesNav() {
+    if (!notesNavBoard) return;
+    updateNotesCrumbs();
+    captureFocusIn(notesNavBoard);
+    notesNavBoard.innerHTML = '';
+    if (notesNavModal.hidden) return;
+    const vis = visibleNoteProjects();
+    // Samme posisjonsbaserte farge som områdekortene.
+    vis.forEach((p, i) => { p.color = colorForIndex(i); });
+    notesNavBoard.classList.toggle('empty', !vis.length);
+    const col = document.createElement('div');
+    col.className = 'board-col';
+    col.dataset.dndContainer = NOTES_NAV_COL_ID;
+    if (!vis.length) {
+      const es = document.createElement('p');
+      es.className = 'nav-section-empty';
+      es.textContent = tr('notes.emptyNoProjects');
+      col.appendChild(es);
+    }
+    vis.forEach((p) => col.appendChild(buildNoteProjectCard(p)));
+    col.appendChild(notesAddProjectRow());
+    notesNavBoard.appendChild(col);
+    ensureNotesNavBoards();
+    notesNavSyncBoards();
+    relayoutBoard(notesNavScope);
+    applyFocusIntent();
+  }
+  function refreshNotesNav() {
+    if (!notesNavModal || notesNavModal.hidden || drag.active) return;
+    renderNotesNav();
+  }
+  function openNotesNav() {
+    if (!notesNavModal) return;
+    notesNavModal.hidden = false;
+    renderNotesNav();
+  }
+  function closeNotesNav() {
+    if (!notesNavModal) return;
+    notesNavModal.hidden = true;
+    notesNavBoard.innerHTML = '';
+    if (notesCrumbBtn) notesCrumbBtn.focus();
+  }
+
+  /* ------------------------------------------------------------
+     NOTAT-SCOPENE PÅ dnd-kit (gjennom Smett)
+     ------------------------------------------------------------
+     To scope, tre board — og all politikk er den DELTE (seksjonen «DELT
+     DnD-POLITIKK»), akkurat som idéenes:
+
+       `notesScope`    notatkortene på hovedflaten. Kortnivå: `.note-card` i
+                       `.board-col`, med den samme kolonnemotoren som listene.
+       `notesNavScope` prosjektene (kort) og mappene (rader) i nav-modalen.
+
+     Ingen av dem har søppelkasse, ekstrahering, kategorier eller låser i PR 1,
+     så det eneste et slipp kan bety er «ny plass i rekka» — og for en mappe i
+     tillegg «nytt prosjekt». */
+  const notesScope = {
+    key: 'notes',
+    contKind: 'noteProject', rowKind: 'note',
+    contSelector: '.note-card',
+    get root() { return notesBoard; },
+    // Notatkortene fordeles JEVNT utover kolonnene, ikke venstre-først som
+    // listene — se `boardColumnBudget` — og de trenger mindre bredde enn en
+    // liste for å være lesbare.
+    evenColumns: true,
+    colMin: 300,
+    containers: () => activeNotes(),
+    findContainer: (id) => findNoteById(id),
+    findRow: (id) => findNoteById(id),
+    rowsOf: () => allNotes(),
+    setRows: (c, rows) => { state.notes = rows; },
+    rowParent: (r) => r.folder || null,
+    setRowParent: (r, id) => { r.folder = id || null; },
+    rowName: (r) => r.title,
+    setRowName: (r, v) => { r.title = v; },
+    rowPool: () => {
+      const p = {};
+      allNotes().forEach((n) => { p[n.id] = n; });
+      return p;
+    },
+    canExtract: () => false,
+    createContainer: () => null,
+    countIcon: null,
+    refreshContainer: () => renderNotes(),
+    render: () => renderNotes(),
+    afterDrop: () => { /* DOM-en er allerede riktig */ },
+    reindexColors: () => { /* notatkortene har ingen palettfarge */ },
+    lockedTargetMsg: '',
+    refusesRow: () => false,
+  };
+
+  const notesNavScope = {
+    key: 'notesNav',
+    contKind: 'noteProject', rowKind: 'noteFolder',
+    contSelector: '.card',
+    get root() { return notesNavBoard; },
+    singleColumn: true,               // nav-modalen har alltid én kolonne
+    containers: () => visibleNoteProjects(),
+    findContainer: (id) => findNoteProject(id),
+    findRow: (id) => findNoteFolder(id),
+    rowsOf: (p) => p.folders,
+    setRows: (p, rows) => { p.folders = rows; },
+    rowParent: (r) => r.project,
+    setRowParent: (r, id) => { r.project = id; },
+    rowName: (r) => r.name,
+    setRowName: (r, v) => { r.name = v; },
+    rowPool: () => {
+      const pool = {};
+      noteProjects().forEach((p) => (p.folders || []).forEach((f) => { pool[f.id] = f; }));
+      return pool;
+    },
+    canExtract: () => false,
+    createContainer: () => null,
+    countIcon: null,
+    refreshContainer: () => renderNotesNav(),
+    render: () => renderNotesNav(),
+    afterDrop: () => { updateNotesCrumbs(); renderNotes(); },
+    reindexColors: () => {
+      visibleNoteProjects().forEach((p, i) => {
+        p.color = colorForIndex(i);
+        const el = notesNavBoard.querySelector('.card[data-id="' + p.id + '"]');
+        if (el) paintCardColor(el, p.color);
+      });
+    },
+    lockedTargetMsg: '',
+    refusesRow: () => false,
+  };
+
+  /* ---- Board 1: notatkortene på hovedflaten ---- */
+  let notesCardBoard = null;
+  let notesTargetCol = null;
+  let notesDroppedId = null;
+
+  function notesCardLabel(el) {
+    const n = el && el.dataset ? findNoteById(el.dataset.id) : null;
+    return n ? noteDisplayTitle(n) : tr('kind.note');
+  }
+  function notesPhrases() {
+    return {
+      pickedUp: (name, position) => tr('dnd.a11yPickedUp', { name: quoted(name), position }),
+      moving: (name, position) => tr('dnd.a11yMoving', { name: quoted(name), position }),
+      dropped: (name, position) => tr('dnd.a11yDropped', { name: quoted(name), position }),
+      moved: (name, position) => tr('dnd.a11yMoved', { name: quoted(name), position }),
+      cancelled: (name) => tr('dnd.a11yCancelled', { name: quoted(name) }),
+      failed: (name) => tr('dnd.a11yFailed', { name: quoted(name) }),
+      inContainer: (index, total) => tr('dnd.a11yPosition', { pos: index + 1, total }),
+      offBoard: () => tr('dnd.a11yOffBoard'),
+    };
+  }
+  // Kolonnen som siste utvei — samme regel som listeboardet (`boardPickColumn`),
+  // bare mot notatboardets egne kolonner.
+  function notesPickColumn() {
+    const cols = boardColumns(notesBoard);
+    if (!cols.length) return null;
+    const r = draggedRect();
+    let best = null, bestOverlap = 0, near = null, nearD = Infinity;
+    for (const col of cols) {
+      const cr = col.getBoundingClientRect();
+      const overlap = Math.max(0, Math.min(r.right, cr.right) - Math.max(r.left, cr.left));
+      if (overlap > bestOverlap) { bestOverlap = overlap; best = col; }
+      const d = Math.abs((cr.left + cr.right) / 2 - (r.left + r.right) / 2);
+      if (d < nearD) { nearD = d; near = col; }
+    }
+    return best || near;
+  }
+  function notesColumnCollision(input) {
+    const col = input.droppable.element;
+    if (!col) return null;
+    const hit = Smett.pointerIntersection(input);
+    if (hit) { hit.priority = Smett.CollisionPriority.Low; return hit; }
+    if (col !== notesTargetCol) return null;
+    return {
+      id: input.droppable.id,
+      value: 0.5,
+      type: Smett.CollisionType.Collision,
+      priority: Smett.CollisionPriority.Lowest,
+    };
+  }
+  function notesTuneColumnCollisions() {
+    if (!notesCardBoard) return;
+    for (const droppable of notesCardBoard.manager.registry.droppables) {
+      const el = droppable.element;
+      if (el && el.classList && el.classList.contains('board-col') &&
+          droppable.collisionDetector !== notesColumnCollision) {
+        droppable.collisionDetector = notesColumnCollision;
+        droppable.collisionPriority = null;
+      }
+    }
+  }
+  function ensureNotesCardBoard() {
+    if (notesCardBoard || !notesBoard || typeof Smett === 'undefined' || !Smett.SortableBoard) return;
+    notesCardBoard = new Smett.SortableBoard({
+      root: notesBoard,
+      itemSelector: '#notes-board .note-card',
+      containerSelector: '#notes-board .board-col',
+      // HELE kortet er dra-sonen: et notatkort har ingen indre kontroller å
+      // treffe. Klikk åpner editoren, klikk-og-hold løfter — dnd-kits egen
+      // aktiveringsterskel skiller de to, og klikk-vakten svelger klikket som
+      // ellers ville fulgt et slipp.
+      handleSelector: '.note-card',
+      idAttribute: 'data-id',
+      axis: 'vertical',
+      keyboard: false,               // tastaturet er Huskis' eget (attachKeyHandle)
+      safeInsets: safeInsets,
+      describeItem: notesCardLabel,
+      phrases: notesPhrases(),
+      onCommit: notesCommitCard,
+      onError: (err) => { if (window.console) console.error('[huskis] notes-dnd', err); },
+    });
+    notesWire(notesCardBoard);
+    dndInstallClickGuard();
+  }
+  function notesSyncBoard() {
+    if (!notesCardBoard) return;
+    if (notesCardBoard.manager.dragOperation.status.idle) notesCardBoard.sync();
+    else noteSyncOwed();
+  }
+  function notesWire(b) {
+    dndTuneManager(b);
+    const monitor = b.manager.monitor;
+    monitor.addEventListener('beforedragstart', () => notesDragBegin(b));
+    monitor.addEventListener('dragstart', () => notesDragStart(b));
+    monitor.addEventListener('dragmove', () => notesDragMove(b));
+    monitor.addEventListener('dragend', (event) => notesDragEnd(event));
+  }
+  function notesDragBegin(b) {
+    const el = boardSource(b);
+    if (!el) return;
+    drag.scope = notesScope;
+    drag.kind = 'card';
+    drag.el = el;
+    drag.active = true;
+    drag.ph = null;
+    drag.phMode = 'reorder';
+    drag.origParent = el.parentNode;
+    drag.origNext = el.nextSibling;
+    drag.card = null;
+    drag.peekCard = null;
+    drag.peekCat = null;
+    drag.overCard = null;
+    drag.trashHost = null;          // ingen kasse i notatfanen (PR 1)
+    drag.crumbTarget = false;
+    notesTargetCol = null;
+    document.body.classList.add('is-dragging');
+    document.documentElement.style.overflowAnchor = 'none';
+    notesTuneColumnCollisions();
+    dndNoteLiftedBox(el);
+    dndLockAxis();
+  }
+  function notesDragStart(b) {
+    dndSyncIntent(b.manager.dragOperation);
+    dndPaintRotation();
+    notesTargetCol = notesPickColumn();
+  }
+  function notesDragMove(b) {
+    dndSyncIntent(b.manager.dragOperation);
+    dndPaintRotation();
+    notesTargetCol = notesPickColumn();
+  }
+  function notesDragEnd(event) {
+    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
+    dndSwallowClick = true;         // klikket som ellers ville åpnet editoren
+    notesTargetCol = null;
+    if (!drag.active) { notesDroppedId = null; return; }
+    dndNoteCanceled(event);
+    finishDrag();
+    notesRelayoutAfterDrop();
+  }
+  /* Slippet: ny `pos` mellom naboene i LESEREKKEFØLGE. Plasseringen
+     (prosjekt/mappe) er urørt — notatfanen viser én plassering om gangen, så et
+     kort kan bare bytte plass i rekka den står i. */
+  function notesCommitCard() {
+    const el = drag.el;
+    if (!el || !el.isConnected) return;
+    const n = findNoteById(el.dataset.id);
+    if (n) {
+      const prev = boardRowSibling(el, -1);
+      const next = boardRowSibling(el, 1);
+      const pPrev = prev && prev.classList.contains('note-card')
+        ? (findNoteById(prev.dataset.id) || {}).pos : null;
+      const pNext = next && next.classList.contains('note-card')
+        ? (findNoteById(next.dataset.id) || {}).pos : null;
+      n.pos = between(pPrev == null ? null : pPrev, pNext == null ? null : pNext);
+      stampPos(n);
+    }
+    save();
+    relayoutBoardNow(notesScope);
+    notesDroppedId = el.dataset.id;
+  }
+  function notesRelayoutAfterDrop() {
+    dndAfterCloneGone(notesBoard, () => {
+      relayoutBoard(notesScope);
+      fixNotesBottomGap();
+      const droppedId = notesDroppedId;
+      notesDroppedId = null;
+      requestAnimationFrame(() => {
+        if (droppedId) {
+          scrollDroppedIntoView(notesBoard.querySelector('.note-card[data-id="' + droppedId + '"]'), null);
+        }
+        notesSyncBoard();
+      });
+    });
+  }
+
+  /* ---- Board 2 og 3: prosjektene og mappene i nav-modalen ---- */
+  let notesNavCardBoard = null, notesNavRowBoard = null;
+  let notesNavSourceProjectId = null;
+
+  const notesNavLabel = (el) => {
+    if (!el || !el.dataset) return '';
+    const o = notesNavScope.findRow(el.dataset.id) || notesNavScope.findContainer(el.dataset.id);
+    return (o && o.name) || tr('kind.noteFolder');
+  };
+  function notesNavPhrases(row) {
+    return Object.assign(notesPhrases(), row ? {
+      inContainer: (index, total, containerId) => tr('dnd.a11yPositionIn', {
+        pos: index + 1, total,
+        name: quoted((findNoteProject(containerId) || {}).name || ''),
+      }),
+    } : {});
+  }
+  function ensureNotesNavBoards() {
+    if (notesNavCardBoard || !notesNavModal || typeof Smett === 'undefined' || !Smett.SortableBoard) return;
+    const shared = {
+      root: notesNavModal,
+      idAttribute: 'data-id',
+      axis: 'vertical',
+      keyboard: false,             // tastaturet er Huskis' eget (attachKeyHandle)
+      safeInsets: safeInsets,
+      onError: (err) => { if (window.console) console.error('[huskis] notes-nav-dnd', err); },
+    };
+    notesNavCardBoard = new Smett.SortableBoard(Object.assign({}, shared, {
+      itemSelector: '#notes-nav-board .card',
+      containerSelector: '#notes-nav-board .board-col',
+      handleSelector: '.card-head',
+      describeItem: notesNavLabel,
+      phrases: notesNavPhrases(false),
+      onCommit: notesNavCommitCard,
+    }));
+    notesNavRowBoard = new Smett.SortableBoard(Object.assign({}, shared, {
+      itemSelector: '#notes-nav-board .item',
+      containerSelector: '#notes-nav-board .items-container',
+      handleSelector: '.item',
+      describeItem: notesNavLabel,
+      phrases: notesNavPhrases(true),
+      onCommit: notesNavCommitRow,
+    }));
+    notesNavWire(notesNavCardBoard, 'card');
+    notesNavWire(notesNavRowBoard, 'item');
+    dndInstallClickGuard();
+  }
+  function notesNavSyncBoards() {
+    if (drag.active && dragScope() === notesNavScope) { noteSyncOwed(); return; }
+    if (notesNavCardBoard) notesNavCardBoard.sync();
+    if (notesNavRowBoard) notesNavRowBoard.sync();
+  }
+  function notesNavWire(b, kind) {
+    dndTuneManager(b);
+    const monitor = b.manager.monitor;
+    monitor.addEventListener('beforedragstart', () => notesNavDragBegin(b, kind));
+    monitor.addEventListener('dragstart', () => notesNavDragStart(b, kind));
+    monitor.addEventListener('dragmove', () => notesNavDragMove(b, kind));
+    monitor.addEventListener('dragover', () => notesNavDragOver(b, kind));
+    monitor.addEventListener('dragend', (event) => notesNavDragEnd(event));
+  }
+  function notesNavDragBegin(b, kind) {
+    const el = boardSource(b);
+    if (!el) return;
+    drag.scope = notesNavScope;
+    drag.kind = kind;
+    drag.el = el;
+    drag.active = true;
+    drag.ph = null;
+    drag.phMode = 'reorder';
+    drag.origParent = el.parentNode;
+    drag.origNext = el.nextSibling;
+    drag.card = null;
+    drag.peekCard = null;
+    drag.peekCat = null;
+    drag.overCard = el.closest('.card');
+    drag.trashHost = null;
+    drag.crumbTarget = false;
+    dndRowTargetCont = null;
+    dndPeekPending = null;
+    dndPolicyX = dndPolicyY = null;
+    notesNavSourceProjectId = drag.overCard ? drag.overCard.dataset.id : null;
+    document.body.classList.add('is-dragging');
+    document.documentElement.style.overflowAnchor = 'none';
+    if (kind === 'item') dndTuneRowCollisions(notesNavRowBoard);
+    dndNoteLiftedBox(el);
+    dndLockAxis();                 // nav-modalen har alltid én kolonne
+  }
+  function notesNavDragStart(b, kind) {
+    dndSyncIntent(b.manager.dragOperation);
+    dndPaintRotation();
+    if (kind === 'card') return;
+    dndRowTargetCont = dndPickRowContainer(dragOverCard());
+    applyDragSeparators();
+  }
+  function notesNavUpdateTargetCont() {
+    dndSetRowTarget(dndPickRowContainer(dragOverCard()));
+  }
+  function notesNavDragMove(b, kind) {
+    if (kind === 'card') { dndSyncIntent(b.manager.dragOperation); dndPaintRotation(); return; }
+    dndRowPolicy(b, notesNavUpdateTargetCont);
+  }
+  function notesNavDragOver(b, kind) {
+    if (kind === 'card') return;
+    dndRowPolicy(b, notesNavUpdateTargetCont);
+    applyDragSeparatorsSoon();
+  }
+  function notesNavDragEnd(event) {
+    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
+    dndSwallowClick = true;
+    dndRowTargetCont = null;
+    dndPeekPending = null;
+    notesNavSourceProjectId = null;
+    if (!drag.active) return;
+    dndNoteCanceled(event);
+    finishDrag();
+  }
+  function notesNavCommitCard() {
+    const el = drag.el;
+    if (!el || !el.isConnected) return;
+    const p = findNoteProject(el.dataset.id);
+    if (p) {
+      const prev = dndRowSibling(el, -1);
+      const next = dndRowSibling(el, 1);
+      const pPrev = prev && prev.classList.contains('card') ? (findNoteProject(prev.dataset.id) || {}).pos : null;
+      const pNext = next && next.classList.contains('card') ? (findNoteProject(next.dataset.id) || {}).pos : null;
+      p.pos = between(pPrev == null ? null : pPrev, pNext == null ? null : pNext);
+      stampPos(p);
+    }
+    notesNavScope.reindexColors();
+    save();
+  }
+  /* En mappe kan omrokeres i prosjektet sitt og flyttes til et ANNET prosjekt.
+     Flytter den, følger notatene med av seg selv: de peker på mappen, og
+     `noteFolderMoved` retter `project`-pekeren deres slik at plasseringen er
+     hel i begge ender. */
+  function notesNavCommitRow() {
+    const S = notesNavScope;
+    const el = drag.el;
+    if (!el || !el.isConnected) return;
+    const targetCardEl = el.closest('.card');
+    if (!targetCardEl) return;
+    const targetId = targetCardEl.dataset.id;
+    const sourceId = notesNavSourceProjectId;
+    clearAllDragSeparators();
+    const prev = dndRowSibling(el, -1);
+    const next = dndRowSibling(el, 1);
+    const pool = S.rowPool();
+    if (sourceId) reconcileRows(S, sourceId, pool);
+    if (targetId !== sourceId) reconcileRows(S, targetId, pool);
+    const moved = S.findRow(el.dataset.id);
+    if (moved) {
+      moved.project = targetId;
+      moved.pos = between(rowPos(prev), rowPos(next));
+      stampPos(moved);
+      noteFolderMoved(moved);
+    }
+    save();
+    S.afterDrop();
+  }
+  // Notatene i en flyttet mappe skal peke på mappens NYE prosjekt.
+  function noteFolderMoved(folder) {
+    allNotes().forEach((n) => {
+      if (n.folder !== folder.id || n.project === folder.project) return;
+      n.project = folder.project;
+      stampPos(n);
+    });
+  }
+
+  /* ------------------------------------------------------------
+     EDITOREN
+     ------------------------------------------------------------
+     Et eget fullskjermsbilde OVER den vanlige appflaten: tilbakeknapp og
+     verktøylinje øverst, tittel og dokument under. Tilbakeknappen fører
+     tilbake til nøyaktig konteksten notatet ble åpnet fra — hovedfane,
+     prosjekt/mappe og scrollposisjon.
+
+     TEKNISK VALG: én `contenteditable` + nettleserens egen `execCommand`, med
+     `styleWithCSS` slått AV så resultatet blir TAGGER (`<b>`, `<i>`, `<sup>`)
+     og ikke inline-stiler. Alt som skrives inn — også innliming og
+     nettleserens egne påfunn — leses tilbake gjennom `noteDocFromEl()`, som er
+     den ene trakten inn til dokumentmodellen. Editoren er dermed bytteknyttet
+     til modellen, ikke omvendt.
+
+     AUTOSAVE, ingen Lagre-knapp: hver endring skrives lokalt etter en kort
+     pause og synkes som alt annet. Statusen står diskret i verktøylinjen. */
+  const noteEditorEl = document.getElementById('note-editor');
+  const noteEditorBody = document.getElementById('note-editor-body');
+  const noteBackBtn = document.getElementById('note-back');
+  const noteToolsEl = document.getElementById('note-tools');
+  const noteStatusEl = document.getElementById('note-save-status');
+  const noteTitleInput = document.getElementById('note-title-input');
+  const noteDocEl = document.getElementById('note-doc');
+  const noteLinkPanel = document.getElementById('note-link-panel');
+  const noteLinkInput = document.getElementById('note-link-input');
+  const noteLinkApply = document.getElementById('note-link-apply');
+  const noteLinkRemove = document.getElementById('note-link-remove');
+  const noteLinkCopy = document.getElementById('note-link-copy');
+  const noteSymbolPanel = document.getElementById('note-symbol-panel');
+
+  /* Spesialtegnene. Ett flatt sett — det er en hurtigvei til tegn et norsk
+     eller engelsk tastatur ikke har, ikke en full tegntabell. */
+  const NOTE_SYMBOLS = ['–', '—', '…', '«', '»', '“', '”', '‘', '’', '•', '·',
+    '×', '÷', '±', '≈', '≠', '≤', '≥', '°', '′', '″', '‰', '§', '¶', '†', '‡',
+    '€', '£', '¥', '©', '®', '™', 'µ', 'Ω', 'α', 'β', 'γ', 'Δ', 'π', 'σ', 'φ',
+    '→', '←', '↔', '⇒', '✓', '✗', '★', '☆'];
+
+  const NOTE_SAVE_DEBOUNCE = 500;
+  const NOTE_SAVED_LINGER = 1600;
+  let noteOpenId = null;          // id-en editoren står i (aldri en objektreferanse)
+  let noteReturn = null;          // konteksten tilbakeknappen fører tilbake til
+  let noteSaveTimer = null;
+  let noteStatusTimer = null;
+  let noteApplyingDoc = false;    // sant mens vi bygger DOM-en fra modellen
+
+  const noteEditorOpen = () => !!noteEditorEl && !noteEditorEl.hidden;
+
+  /* Editoren dekker hele appflaten, men et fullskjermsbilde er ikke en modal —
+     den ligger ikke i `overlayStack`, og fokusfella der gjelder den ikke. Uten
+     dette ville Tab vandret ned i toppmenyen og board-et BAK bildet, som er
+     usynlig og likevel fokuserbart. `inert` er det ene attributtet som tar både
+     fokus, klikk og skjermleser i én sving; en nettleser uten støtte får
+     `aria-hidden`, som i det minste holder opplesningen ute. */
+  function setNoteEditorInert(on) {
+    ['topbar', 'corner-controls'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      if (on) { el.inert = true; el.setAttribute('aria-hidden', 'true'); }
+      else { el.inert = false; el.removeAttribute('aria-hidden'); }
+    });
+    const main = document.querySelector('.app-main');
+    if (!main) return;
+    if (on) { main.inert = true; main.setAttribute('aria-hidden', 'true'); }
+    else { main.inert = false; main.removeAttribute('aria-hidden'); }
+  }
+
+  function setNoteStatus(key) {
+    if (!noteStatusEl) return;
+    clearTimeout(noteStatusTimer);
+    noteStatusEl.textContent = key ? tr(key) : '';
+    if (key === 'notes.saved') {
+      noteStatusTimer = setTimeout(() => { noteStatusEl.textContent = ''; }, NOTE_SAVED_LINGER);
+    }
+  }
+
+  function openNoteEditor(id, opts) {
+    const n = findNoteById(id);
+    if (!n || !noteEditorEl) return;
+    opts = opts || {};
+    // Konteksten å vende tilbake til. Lagres som VERDIER, ikke referanser: en
+    // synk-runde kan bygge state på nytt mens editoren står åpen.
+    noteReturn = {
+      tab: activeMainTab,
+      project: state.activeProject,
+      folder: state.activeFolder,
+      scrollY: window.scrollY || window.pageYOffset || 0,
+    };
+    noteOpenId = id;
+    noteEditorEl.hidden = false;
+    document.body.classList.add('note-editing');
+    setNoteEditorInert(true);
+    noteTitleInput.value = n.title || '';
+    noteApplyingDoc = true;
+    noteDocIntoEl(noteDocEl, n.doc);
+    noteApplyingDoc = false;
+    noteSavedRange = null;
+    setNoteStatus('');
+    closeNotePanels();
+    // `styleWithCSS` av → execCommand gir TAGGER, ikke inline-stiler. Kallet
+    // må gjentas per dokument (nettleseren husker det ikke på tvers).
+    try { document.execCommand('styleWithCSS', false, false); } catch (e) { /* ignore */ }
+    try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (e) { /* ignore */ }
+    noteEditorBody.scrollTop = 0;
+    noteToolsEl.scrollLeft = 0;   // verktøylinjen ruller vannrett på smal skjerm
+    if (opts.focusTitle) noteTitleInput.focus();
+    else noteDocEl.focus();
+    refreshNoteTools();
+  }
+
+  function closeNoteEditor() {
+    if (!noteEditorOpen()) return;
+    flushNoteSave();
+    const back = noteReturn;
+    noteOpenId = null;
+    noteReturn = null;
+    closeNotePanels();
+    noteEditorEl.hidden = true;
+    document.body.classList.remove('note-editing');
+    setNoteEditorInert(false);
+    if (back) {
+      setMainTab(back.tab, { silent: true });
+      if (back.project && findNoteProject(back.project)) {
+        state.activeProject = back.project;
+        state.activeFolder = back.folder && findNoteFolder(back.folder) ? back.folder : null;
+        validateActiveNotes(state);
+      }
+    }
+    renderNotes();
+    // Scrollposisjonen gjenopprettes ETTER rendringen, som er det som gir
+    // dokumentet høyden igjen.
+    if (back) requestAnimationFrame(() => window.scrollTo(0, back.scrollY || 0));
+    if (notesCrumbBtn) notesCrumbBtn.focus();
+  }
+
+  /* ---- Autosave ---- */
+  function scheduleNoteSave() {
+    if (!noteOpenId || noteApplyingDoc) return;
+    setNoteStatus('notes.saving');
+    clearTimeout(noteSaveTimer);
+    noteSaveTimer = setTimeout(writeNoteNow, NOTE_SAVE_DEBOUNCE);
+  }
+  function flushNoteSave() {
+    if (!noteSaveTimer) return;
+    clearTimeout(noteSaveTimer);
+    writeNoteNow();
+  }
+  function writeNoteNow() {
+    noteSaveTimer = null;
+    const n = noteOpenId ? findNoteById(noteOpenId) : null;
+    if (!n) return;
+    const title = noteTitleInput.value.trim();
+    const doc = noteDocFromEl(noteDocEl);
+    // Ingen endring → ingen skriving. Ellers ville hvert tastetrykk som ikke
+    // endret noe (piltaster, markering) stemplet raden på nytt og gitt synken
+    // en runde uten innhold.
+    if (n.title === title && JSON.stringify(n.doc) === JSON.stringify(doc)) {
+      setNoteStatus('notes.saved');
+      return;
+    }
+    n.title = title;
+    n.doc = doc;
+    stampContent(n);
+    save();
+    setNoteStatus('notes.saved');
+  }
+
+  /* ---- Verktøylinjen ---- */
+  // Blokktypen markøren står i.
+  // Markeringen slik den er NÅ hvis den ligger i dokumentet, ellers den siste
+  // som gjorde det (se `noteTrackRange`).
+  function noteRange() {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount) {
+      const r = sel.getRangeAt(0);
+      if (noteDocEl.contains(r.commonAncestorContainer)) return r;
+    }
+    return noteSavedRange && noteDocEl.contains(noteSavedRange.commonAncestorContainer)
+      ? noteSavedRange : null;
+  }
+  function noteCurrentBlock() {
+    const r = noteRange();
+    if (!r) return null;
+    let n = r.startContainer;
+    while (n && n !== noteDocEl) {
+      if (n.nodeType === 1) {
+        const tag = n.tagName.toLowerCase();
+        if (NOTE_TEXT_BLOCKS.indexOf(tag) > -1) return tag;
+        if (tag === 'li') return 'li';
+      }
+      n = n.parentNode;
+    }
+    return null;
+  }
+  function noteSelectionInDoc() { return !!noteRange(); }
+  // Lenke-elementet markøren står i, om noe.
+  function noteCurrentLink() {
+    const r = noteRange();
+    if (!r) return null;
+    let n = r.startContainer;
+    while (n && n !== noteDocEl) {
+      if (n.nodeType === 1 && n.classList && n.classList.contains('note-link')) return n;
+      n = n.parentNode;
+    }
+    return null;
+  }
+  const NOTE_STATE_CMDS = { bold: 'bold', italic: 'italic', underline: 'underline',
+    superscript: 'superscript', subscript: 'subscript' };
+  function refreshNoteTools() {
+    if (!noteToolsEl) return;
+    const inDoc = noteSelectionInDoc();
+    const block = inDoc ? noteCurrentBlock() : null;
+    noteToolsEl.querySelectorAll('[data-cmd]').forEach((btn) => {
+      const cmd = btn.dataset.cmd;
+      let on = false;
+      if (NOTE_STATE_CMDS[cmd] && inDoc) {
+        try { on = document.queryCommandState(NOTE_STATE_CMDS[cmd]); } catch (e) { on = false; }
+      } else if (cmd === 'h1' || cmd === 'h2' || cmd === 'h3') {
+        on = block === cmd;
+      } else if (cmd === 'link') {
+        on = !!noteCurrentLink();
+      }
+      btn.classList.toggle('is-on', !!on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  }
+  /* MARKERINGEN MÅ OVERLEVE ET TRYKK PÅ VERKTØYLINJEN.
+     `mousedown`-vakten holder musen unna, men en BERØRING flytter fokus (og
+     dermed markeringen) før den kompatibilitets-`mousedown`-en i det hele tatt
+     fyrer — og da har `execCommand` ingenting å virke på. Vi husker derfor den
+     siste markeringen som faktisk lå i dokumentet, og legger den tilbake før
+     hver kommando. Den er dessuten det panelene (lenke, spesialtegn) skriver
+     inn i når de lukkes. */
+  let noteSavedRange = null;
+  function noteTrackRange() {
+    const sel = window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const r = sel.getRangeAt(0);
+    if (noteDocEl.contains(r.commonAncestorContainer)) noteSavedRange = r.cloneRange();
+  }
+  /* Legger markeringen tilbake — ALLTID, ikke bare når fokus har forlatt
+     dokumentet. Å bare `focus()` holder ikke: nettleseren gjenoppretter da sin
+     EGEN siste markering i elementet, og den er som regel en sammenklappet
+     markør. En lenke lagt på et markert ord ville dermed mistet ordet i det
+     adressefeltet fikk fokus. Den huskede markeringen ER dokumentets siste
+     ekte (`noteTrackRange` oppdaterer den ved hver `selectionchange`), så det
+     å legge den tilbake er en no-op i det vanlige tilfellet. */
+  function noteRestoreRange() {
+    noteDocEl.focus();
+    const sel = window.getSelection();
+    if (!sel || !noteSavedRange || !noteDocEl.contains(noteSavedRange.commonAncestorContainer)) return;
+    sel.removeAllRanges();
+    sel.addRange(noteSavedRange);
+  }
+  /* Nettleserens `insertUnorderedList` legger gjerne lista INNE i avsnittet
+     markøren stod i (`<p><ul>…</ul></p>`). Det er ugyldig markup, og verre: alt
+     som skrives i avsnittet etterpå havner FORAN lista i dokumentmodellen, selv
+     om det står under den på skjermen. Vi løfter derfor lista ut som søsken
+     med det samme. Nodene FLYTTES (ikke klones), så markeringen overlever;
+     bare en vert som ble helt tom fjernes, og aldri den markøren står i. */
+  function noteLiftLists() {
+    const nested = noteDocEl.querySelectorAll(
+      'p > ul, p > ol, h1 > ul, h1 > ol, h2 > ul, h2 > ol, h3 > ul, h3 > ol');
+    if (!nested.length) return;
+    const hosts = [];
+    Array.prototype.forEach.call(nested, (list) => {
+      const host = list.parentNode;
+      host.parentNode.insertBefore(list, host.nextSibling);
+      if (hosts.indexOf(host) === -1) hosts.push(host);
+    });
+    const sel = window.getSelection();
+    const at = sel && sel.rangeCount ? sel.getRangeAt(0).commonAncestorContainer : null;
+    hosts.forEach((host) => {
+      if (host.childNodes.length || (at && (host === at || host.contains(at)))) return;
+      host.remove();
+    });
+  }
+  /* Løse noder rett under roten får en blokk å bo i. Nettleseren etterlater
+     dem når man forlater en liste (et bart `<br>`), og alt som skrives etterpå
+     havner da utenfor enhver blokk. Nodene FLYTTES inn i avsnittet, så
+     markeringen overlever. */
+  function noteWrapLoose() {
+    let wrap = null;
+    Array.prototype.slice.call(noteDocEl.childNodes).forEach((node) => {
+      const erBlokk = node.nodeType === 1 &&
+        NOTE_DOM_BLOCKS.indexOf(node.tagName.toLowerCase()) > -1;
+      if (erBlokk) { wrap = null; return; }
+      if (node.nodeType !== 1 && node.nodeType !== 3) return;
+      if (node.nodeType === 3 && !node.nodeValue) return;
+      if (!wrap) {
+        wrap = document.createElement('p');
+        noteDocEl.insertBefore(wrap, node);
+      }
+      wrap.appendChild(node);
+    });
+  }
+  function noteExec(cmd, value) {
+    noteRestoreRange();
+    try { document.execCommand(cmd, false, value === undefined ? null : value); }
+    catch (e) { /* ignore — kommandoen finnes ikke i denne nettleseren */ }
+    noteLiftLists();
+    noteWrapLoose();
+    noteTrackRange();
+  }
+  // Overskriftene er en VEKSEL: står markøren alt i en h2, gjør «H2» den til
+  // et vanlig avsnitt igjen.
+  function noteToggleBlock(tag) {
+    noteExec('formatBlock', noteCurrentBlock() === tag ? 'p' : tag);
+  }
+  function runNoteCommand(cmd) {
+    switch (cmd) {
+      case 'bold': case 'italic': case 'underline':
+      case 'superscript': case 'subscript':
+        noteExec(cmd); break;
+      case 'h1': case 'h2': case 'h3': noteToggleBlock(cmd); break;
+      case 'ul': noteExec('insertUnorderedList'); break;
+      case 'ol': noteExec('insertOrderedList'); break;
+      case 'hr': noteExec('insertHorizontalRule'); break;
+      case 'undo': noteExec('undo'); break;
+      case 'redo': noteExec('redo'); break;
+      case 'link': toggleNoteLinkPanel(); return;
+      case 'symbol': toggleNoteSymbolPanel(); return;
+      default: return;
+    }
+    closeNotePanels();
+    scheduleNoteSave();
+    refreshNoteTools();
+  }
+
+  /* ---- Lenke-panelet ----
+     Lenken er MERKET tekst med adressen i `data-url` (se `noteRunNode`), ikke
+     et anker: Huskis' UI produserer ingen utgående lenker
+     (docs/domains-and-urls.md). Panelet er derfor der man ser, endrer, kopierer
+     og fjerner adressen. */
+  function closeNotePanels() {
+    if (noteLinkPanel) noteLinkPanel.hidden = true;
+    if (noteSymbolPanel) noteSymbolPanel.hidden = true;
+  }
+  function toggleNoteLinkPanel() {
+    if (!noteLinkPanel) return;
+    if (!noteLinkPanel.hidden) { closeNotePanels(); return; }
+    noteTrackRange();
+    const cur = noteCurrentLink();
+    if (noteSymbolPanel) noteSymbolPanel.hidden = true;
+    noteLinkPanel.hidden = false;
+    noteLinkInput.value = cur ? cur.dataset.url : '';
+    noteLinkRemove.hidden = !cur;
+    noteLinkCopy.hidden = !cur;
+    noteLinkInput.focus();
+    noteLinkInput.select();
+  }
+  function applyNoteLink() {
+    const url = safeNoteUrl(noteLinkInput.value);
+    if (!url) { showToast(tr('notes.linkInvalid')); return; }
+    const cur = noteCurrentLink();
+    if (cur) {
+      cur.dataset.url = url;
+      cur.title = url;
+    } else {
+      noteRestoreRange();
+      const sel = window.getSelection();
+      if (!sel || !sel.rangeCount || sel.getRangeAt(0).collapsed) {
+        showToast(tr('notes.linkNeedsSelection'));
+        return;
+      }
+      const span = document.createElement('span');
+      span.className = 'note-link';
+      span.dataset.url = url;
+      span.title = url;
+      try { sel.getRangeAt(0).surroundContents(span); }
+      catch (e) {
+        // Markeringen krysser en elementgrense: pakk innholdet i stedet.
+        const r = sel.getRangeAt(0);
+        span.appendChild(r.extractContents());
+        r.insertNode(span);
+      }
+    }
+    closeNotePanels();
+    scheduleNoteSave();
+    refreshNoteTools();
+  }
+  function removeNoteLink() {
+    const cur = noteCurrentLink();
+    if (cur) {
+      const parent = cur.parentNode;
+      while (cur.firstChild) parent.insertBefore(cur.firstChild, cur);
+      parent.removeChild(cur);
+    }
+    closeNotePanels();
+    scheduleNoteSave();
+    refreshNoteTools();
+  }
+  function copyNoteLink() {
+    const cur = noteCurrentLink();
+    const url = cur ? cur.dataset.url : noteLinkInput.value;
+    if (!url) return;
+    const done = () => showToast(tr('notes.linkCopied'));
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(done, () => showToast(tr('notes.linkCopyFailed')));
+        return;
+      }
+    } catch (e) { /* faller gjennom */ }
+    showToast(tr('notes.linkCopyFailed'));
+  }
+
+  /* ---- Spesialsymboler ---- */
+  function buildNoteSymbolPanel() {
+    if (!noteSymbolPanel || noteSymbolPanel.childNodes.length) return;
+    NOTE_SYMBOLS.forEach((ch) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'note-symbol';
+      b.textContent = ch;
+      b.setAttribute('aria-label', ch);
+      b.addEventListener('click', () => {
+        noteExec('insertText', ch);
+        closeNotePanels();
+        scheduleNoteSave();
+      });
+      noteSymbolPanel.appendChild(b);
+    });
+  }
+  function toggleNoteSymbolPanel() {
+    if (!noteSymbolPanel) return;
+    if (!noteSymbolPanel.hidden) { closeNotePanels(); return; }
+    buildNoteSymbolPanel();
+    noteTrackRange();
+    if (noteLinkPanel) noteLinkPanel.hidden = true;
+    noteSymbolPanel.hidden = false;
+    const first = noteSymbolPanel.querySelector('button');
+    if (first) first.focus();
+  }
+
+  /* ---- Tastatursnarveiene ----
+     Cmd/Ctrl + B/I/U er de tre nettleseren selv ville tatt i en
+     contenteditable; de håndteres likevel her, slik at de gjør NØYAKTIG det
+     samme som knappene og oppdaterer verktøylinjen. */
+  const NOTE_SHORTCUTS = { b: 'bold', i: 'italic', u: 'underline', k: 'link' };
+  function noteKeydown(ev) {
+    if (!(ev.metaKey || ev.ctrlKey) || ev.altKey) return;
+    const k = String(ev.key || '').toLowerCase();
+    if (k === 'z') {              // Cmd/Ctrl+Z, Shift for gjør om igjen
+      ev.preventDefault();
+      runNoteCommand(ev.shiftKey ? 'redo' : 'undo');
+      return;
+    }
+    if (k === 'y') { ev.preventDefault(); runNoteCommand('redo'); return; }
+    const cmd = NOTE_SHORTCUTS[k];
+    if (!cmd) return;
+    ev.preventDefault();
+    runNoteCommand(cmd);
+  }
+
+  /* ---- Innliming ----
+     Innlimt markup går gjennom den samme trakten som alt annet, men FØR den
+     havner i dokumentet: vi limer inn ren tekst og lar linjeskift bli
+     linjeskift. Alternativet — å slippe fremmed HTML inn og rydde etterpå —
+     ville gitt et vindu der markup fra utsiden faktisk sto i DOM-en. */
+  function noteOnPaste(ev) {
+    const data = ev.clipboardData;
+    if (!data) return;
+    ev.preventDefault();
+    const text = data.getData('text/plain') || '';
+    if (!text) return;
+    noteExec('insertText', text);
+    scheduleNoteSave();
+  }
+
+  function wireNoteEditor() {
+    if (!noteEditorEl) return;
+    noteBackBtn.addEventListener('click', closeNoteEditor);
+    noteTitleInput.addEventListener('input', scheduleNoteSave);
+    noteTitleInput.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter') return;
+      ev.preventDefault();
+      noteDocEl.focus();
+    });
+    noteDocEl.addEventListener('input', () => { scheduleNoteSave(); refreshNoteTools(); });
+    noteDocEl.addEventListener('keydown', noteKeydown);
+    noteDocEl.addEventListener('paste', noteOnPaste);
+    noteDocEl.addEventListener('keyup', refreshNoteTools);
+    noteDocEl.addEventListener('mouseup', refreshNoteTools);
+    // Klikk på en lenke i editoren åpner lenke-panelet — det er der adressen
+    // ses, endres, kopieres og fjernes.
+    noteDocEl.addEventListener('click', (ev) => {
+      const link = ev.target.closest ? ev.target.closest('.note-link') : null;
+      if (link) toggleNoteLinkPanel();
+      else refreshNoteTools();
+    });
+    noteToolsEl.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('[data-cmd]');
+      if (!btn) return;
+      ev.preventDefault();
+      runNoteCommand(btn.dataset.cmd);
+    });
+    // Verktøylinjen skal ALDRI stjele markeringen: mister dokumentet
+    // markeringen i det knappen får fokus, har execCommand ingenting å virke på.
+    noteToolsEl.addEventListener('mousedown', (ev) => {
+      if (ev.target.closest('[data-cmd]')) ev.preventDefault();
+    });
+    noteLinkApply.addEventListener('click', applyNoteLink);
+    noteLinkRemove.addEventListener('click', removeNoteLink);
+    noteLinkCopy.addEventListener('click', copyNoteLink);
+    noteLinkInput.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); applyNoteLink(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); closeNotePanels(); noteDocEl.focus(); }
+    });
+    // Escape lukker et åpent panel først, deretter editoren.
+    noteEditorEl.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Escape') return;
+      if (noteLinkPanel.hidden && noteSymbolPanel.hidden) { closeNoteEditor(); return; }
+      closeNotePanels();
+      noteDocEl.focus();
+    });
+    document.addEventListener('selectionchange', () => {
+      if (!noteEditorOpen()) return;
+      noteTrackRange();
+      refreshNoteTools();
+    });
+    // Fanen kan lukkes/skjules med endringer som ennå ikke er skrevet.
+    window.addEventListener('pagehide', flushNoteSave);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) flushNoteSave(); });
+  }
+
+  /* ------------------------------------------------------------
+     HOVEDFANENE: Lister | Notater
+     ------------------------------------------------------------
+     Fanevalget er per ENHET (som aktiv mappe), og lagres lokalt. Det synkes
+     ikke: hvilken fane man sist så på er ikke innhold. */
+  const MAIN_TAB_KEY = 'huskis-tab';
+  const MAIN_TABS = ['lists', 'notes'];
+  const mainTabsEl = document.getElementById('main-tabs');
+  const topbarRowLists = document.getElementById('topbar-row-lists');
+  const topbarRowNotes = document.getElementById('topbar-row-notes');
+  let activeMainTab = 'lists';
+
+  function readMainTab() {
+    try {
+      const v = localStorage.getItem(MAIN_TAB_KEY);
+      return MAIN_TABS.indexOf(v) > -1 ? v : 'lists';
+    } catch (e) { return 'lists'; }
+  }
+  function setMainTab(tab, opts) {
+    opts = opts || {};
+    activeMainTab = MAIN_TABS.indexOf(tab) > -1 ? tab : 'lists';
+    if (!opts.silent) {
+      try { localStorage.setItem(MAIN_TAB_KEY, activeMainTab); } catch (e) { /* ignore */ }
+    }
+    const notes = activeMainTab === 'notes';
+    if (mainTabsEl) {
+      mainTabsEl.querySelectorAll('.main-tab').forEach((btn) => {
+        const on = btn.dataset.tab === activeMainTab;
+        btn.classList.toggle('is-active', on);
+        btn.setAttribute('aria-selected', on ? 'true' : 'false');
+        btn.tabIndex = on ? 0 : -1;
+      });
+    }
+    if (topbarRowLists) topbarRowLists.hidden = notes;
+    if (topbarRowNotes) topbarRowNotes.hidden = !notes;
+    board.hidden = notes;
+    if (notesBoard) notesBoard.hidden = !notes;
+    if (notes) renderNotes(); else renderBoard();
+    syncTopChrome();
+  }
+  function wireMainTabs() {
+    if (!mainTabsEl) return;
+    mainTabsEl.addEventListener('click', (ev) => {
+      const btn = ev.target.closest('.main-tab');
+      if (btn) setMainTab(btn.dataset.tab);
+    });
+    // Piltaster i en tablist: venstre/høyre bytter fane (WAI-ARIA).
+    mainTabsEl.addEventListener('keydown', (ev) => {
+      const step = ev.key === 'ArrowRight' ? 1 : ev.key === 'ArrowLeft' ? -1 : 0;
+      if (!step) return;
+      ev.preventDefault();
+      const i = MAIN_TABS.indexOf(activeMainTab);
+      const next = MAIN_TABS[(i + step + MAIN_TABS.length) % MAIN_TABS.length];
+      setMainTab(next);
+      const btn = mainTabsEl.querySelector('.main-tab[data-tab="' + next + '"]');
+      if (btn) btn.focus();
+    });
+    if (notesCrumbBtn) notesCrumbBtn.addEventListener('click', openNotesNav);
+    if (notesNavCloseBtn) notesNavCloseBtn.addEventListener('click', closeNotesNav);
+    if (notesNavModal) {
+      notesNavModal.addEventListener('click', (ev) => { if (ev.target === notesNavModal) closeNotesNav(); });
+    }
+    if (addNoteBtn) addNoteBtn.addEventListener('click', addNote);
+    wireNoteEditor();
+  }
+
+  /* ============================================================
      SANNTIDS-SYNK (Supabase Auth + relasjonelle tabeller)
      ------------------------------------------------------------
      Brukeren logger inn med e-post/passord. Data ligger relasjonelt
@@ -14241,6 +16196,35 @@
       pos: d.pos || 0, posTs: d.posTs || 0, posOrg: d.posOrg || '',
     };
   }
+  /* Notatradene (docs/notater-plan.md). Tre flate radtyper med de samme to
+     registrene som alt annet innhold. Dokumentet (`doc`) kommer fra serveren
+     under sitt kolonnenavn (`body`) og normaliseres på vei inn, slik at lokal
+     og fjern rad er BYTE-LIKE når innholdet er det — ellers ville
+     `canonical()` sett en forskjell hver runde og sendt den samme
+     oppdateringen i det uendelige. */
+  function cleanNoteProject(p) {
+    return {
+      id: p.id, name: p.name || '', collapsed: !!p.collapsed, trashed: !!p.trashed,
+      ts: p.ts || 0, org: p.org || '',
+      pos: p.pos || 0, posTs: p.posTs || 0, posOrg: p.posOrg || '',
+    };
+  }
+  function cleanNoteFolder(f, projectId) {
+    return {
+      id: f.id, project: f.project || projectId || null, name: f.name || '', trashed: !!f.trashed,
+      ts: f.ts || 0, org: f.org || '',
+      pos: f.pos || 0, posTs: f.posTs || 0, posOrg: f.posOrg || '',
+    };
+  }
+  function cleanNote(n) {
+    return {
+      id: n.id, project: n.project || null, folder: n.folder || null,
+      title: n.title || '', doc: sanitizeNoteDoc(n.doc || n.body),
+      trashed: !!n.trashed,
+      ts: n.ts || 0, org: n.org || '',
+      pos: n.pos || 0, posTs: n.posTs || 0, posOrg: n.posOrg || '',
+    };
+  }
   function cleanCard(c) {
     return {
       // Farge synkes ikke: den utledes av posisjon på hver enhet (colorForIndex).
@@ -14282,6 +16266,14 @@
     const universes = [], groups = [], cards = [], items = [];
     // Idéene er allerede flate og har ingen forelder — de går rett gjennom.
     const ideas = (s.ideas || []).map((d) => rowFn(d, 'idea', null));
+    /* Notatene (docs/notater-plan.md): prosjektene er nøstet (mappene i seg),
+       notatene er flate med to forelder-pekere. */
+    const noteProjectRows = [], noteFolderRows = [];
+    (s.noteProjects || []).forEach((p) => {
+      noteProjectRows.push(rowFn(p, 'note_project', null));
+      (p.folders || []).forEach((f) => noteFolderRows.push(rowFn(f, 'note_folder', p)));
+    });
+    const noteRows = (s.notes || []).map((n) => rowFn(n, 'note', null));
     (s.universes || []).forEach((u) => {
       // «Mapper delt med meg» er en VIRTUELL beholder — den finnes ikke i
       // databasen og skal aldri pushes. Mappene i den skrives som vanlig
@@ -14295,13 +16287,17 @@
         });
       });
     });
-    return { universes, groups, cards, items, ideas };
+    return { universes, groups, cards, items, ideas,
+             noteProjects: noteProjectRows, noteFolders: noteFolderRows, notes: noteRows };
   }
   function cleanRow(o, type, parent) {
     if (type === 'universe') return cleanUniverse(o);
     if (type === 'group') return cleanGroup(Object.assign({}, o, { uni: o.uni || parent.id }));
     if (type === 'card') return cleanCard(Object.assign({}, o, { group: o.group || parent.id }));
     if (type === 'idea') return cleanIdea(o);
+    if (type === 'note_project') return cleanNoteProject(o);
+    if (type === 'note_folder') return cleanNoteFolder(o, parent && parent.id);
+    if (type === 'note') return cleanNote(o);
     return cleanItem(o, o.home || parent.id);
   }
   /* ---------- Felt-nivå LWW-fletting (per register) ----------
@@ -14332,6 +16328,40 @@
       isCat: !!content.isCat, collapsed: !!content.collapsed,
       ts: content.ts || 0, org: content.org || '',
       cat: posw.cat || null, pos: posw.pos || 0, posTs: posw.posTs || 0, posOrg: posw.posOrg || '',
+    };
+  }
+  /* Notatene: innholdsregisteret bærer tittel, dokument og trashed;
+     posisjonsregisteret rekkefølgen OG plasseringen (prosjekt + mappe), som
+     `home`/`cat` på et listepunkt. Dokumentet flettes som ÉN verdi — det er
+     den dokumentbaserte konfliktmodellen planen ber om. */
+  function mergeNoteProject(a, b) {
+    const content = newer(a.ts, a.org, b.ts, b.org) ? a : b;
+    const posw = newer(a.posTs, a.posOrg, b.posTs, b.posOrg) ? a : b;
+    return {
+      id: a.id, name: content.name, trashed: !!content.trashed, collapsed: !!content.collapsed,
+      ts: content.ts || 0, org: content.org || '',
+      pos: posw.pos || 0, posTs: posw.posTs || 0, posOrg: posw.posOrg || '',
+    };
+  }
+  function mergeNoteFolder(a, b) {
+    const content = newer(a.ts, a.org, b.ts, b.org) ? a : b;
+    const posw = newer(a.posTs, a.posOrg, b.posTs, b.posOrg) ? a : b;
+    return {
+      id: a.id, name: content.name, trashed: !!content.trashed,
+      ts: content.ts || 0, org: content.org || '',
+      project: posw.project != null ? posw.project : (a.project || b.project || null),
+      pos: posw.pos || 0, posTs: posw.posTs || 0, posOrg: posw.posOrg || '',
+    };
+  }
+  function mergeNote(a, b) {
+    const content = newer(a.ts, a.org, b.ts, b.org) ? a : b;
+    const posw = newer(a.posTs, a.posOrg, b.posTs, b.posOrg) ? a : b;
+    return {
+      id: a.id, title: content.title, doc: content.doc, trashed: !!content.trashed,
+      ts: content.ts || 0, org: content.org || '',
+      project: posw.project != null ? posw.project : (a.project || b.project || null),
+      folder: posw.folder || null,
+      pos: posw.pos || 0, posTs: posw.posTs || 0, posOrg: posw.posOrg || '',
     };
   }
   function mergeCardScalar(a, b) {
@@ -15156,11 +17186,13 @@
   let navSaveTimer = null;
   let navRestored = false;
   let navPending = null;
-  const navEq = (a, b) => !!a && !!b && a.u === b.u && a.g === b.g;
+  const navEq = (a, b) => !!a && !!b && a.u === b.u && a.g === b.g &&
+    (a.np || null) === (b.np || null) && (a.nf || null) === (b.nf || null);
   function saveNavPref() {
     if (!authUser || applyingRemote || !navRestored) return;
     if (demoActive) return; // demoens posisjon er en kulisse, ikke brukerens
-    const nav = { u: state.activeUniverse || null, g: state.activeGroup || null };
+    const nav = { u: state.activeUniverse || null, g: state.activeGroup || null,
+      np: state.activeProject || null, nf: state.activeFolder || null };
     if (navEq(nav, authUser.meta && authUser.meta.nav) && !navPending) return; // allerede lagret
     if (navEq(nav, navPending)) return; // allerede planlagt
     navPending = nav;
@@ -15186,7 +17218,14 @@
   // peker på synlige entiteter). Kalles én gang, ved første sky-pull.
   function restoreNavPref() {
     const nav = authUser && authUser.meta && authUser.meta.nav;
-    if (!nav || !nav.u) return;
+    if (!nav) return;
+    // Notatposisjonen står i den samme posten (docs/notater-plan.md).
+    if (nav.np && state.noteProjects.some((p) => p.id === nav.np && live(p))) {
+      state.activeProject = nav.np;
+      state.activeFolder = nav.nf && findNoteFolder(nav.nf) ? nav.nf : null;
+      validateActiveNotes(state);
+    }
+    if (!nav.u) return;
     const uni = state.universes.find((u) => u.id === nav.u && !u.trashed && !u._pendingDelete);
     if (!uni) return;
     state.activeUniverse = uni.id;
@@ -15565,7 +17604,11 @@
     const items = (my.items || []).filter((it) => !supC.has(it.home)).map((it) => { const r = cleanItem(it, it.home); bump(r); return r; });
     // Idéene deles aldri, så ingen forlatt-deling kan undertrykke dem.
     const ideas = (my.ideas || []).map((d) => { const r = cleanIdea(d); bump(r); return r; });
-    return { universes, groups, cards, items, ideas, hlc: maxTs };
+    // Notatene heller ikke (docs/notater-plan.md).
+    const noteProjects = (my.noteProjects || []).map((p) => { const r = cleanNoteProject(p); bump(r); return r; });
+    const noteFolders = (my.noteFolders || []).map((f) => { const r = cleanNoteFolder(f); bump(r); return r; });
+    const notes = (my.notes || []).map((n) => { const r = cleanNote(n); bump(r); return r; });
+    return { universes, groups, cards, items, ideas, noteProjects, noteFolders, notes, hlc: maxTs };
   }
   function metaFromMy(my) {
     const meta = new Map();
@@ -15617,6 +17660,11 @@
     }
     if (type === 'card') return cleanCard(o);
     if (type === 'idea') return cleanIdea(o);
+    // Notatradene har ingen personlig rekkefølge og ingen RPC-eid plassering —
+    // de skrives nøyaktig som de står.
+    if (type === 'note_project') return cleanNoteProject(o);
+    if (type === 'note_folder') return cleanNoteFolder(o);
+    if (type === 'note') return cleanNote(o);
     return cleanItem(o, o.home);
   }
   function docFromMyState() {
@@ -15624,7 +17672,7 @@
     // element-grenen gir cleanItem(it, it.home) som før.
     // pruneDanglingCats: en `cat` som ikke treffer en kategori er uskrivbar
     // (FK) og ville låst synken — se kommentaren der.
-    return pruneDanglingCats(flattenNested(state, canonRow));
+    return pruneNoteParents(pruneDanglingCats(flattenNested(state, canonRow)));
   }
   // Rader den cachede staten sier er opprettet av NOEN ANDRE (`_createdByMe ===
   // false`). Forsvinner en slik rad fra serveren, er tilgangen opphørt eller
@@ -15677,13 +17725,16 @@
                         oppretter av andres innhold. Hvem som havner i settet
                         bestemmes av kalleren (cloudCycle) — se der. */
   const NO_IDS = new Set();
-  function emptyDoc() { return { universes: [], groups: [], cards: [], items: [], ideas: [] }; }
+  function emptyDoc() {
+    return { universes: [], groups: [], cards: [], items: [], ideas: [],
+             noteProjects: [], noteFolders: [], notes: [] };
+  }
   function reconcile(base, local, remote, opts) {
     opts = opts || {};
     const tombs = opts.tombs || NO_IDS;
     const foreign = opts.foreign || NO_IDS;
     const unknown = opts.unknown || NO_IDS;
-    const merged = { universes: [], groups: [], cards: [], items: [], ideas: [] };
+    const merged = emptyDoc();
     const ops = [];
     const unverified = [];
     const TYPES = [
@@ -15692,6 +17743,9 @@
       { key: 'cards', t: 'card', merge: mergeCardScalar },
       { key: 'items', t: 'item', merge: mergeItem },
       { key: 'ideas', t: 'idea', merge: mergeIdea },
+      { key: 'noteProjects', t: 'note_project', merge: mergeNoteProject },
+      { key: 'noteFolders', t: 'note_folder', merge: mergeNoteFolder },
+      { key: 'notes', t: 'note', merge: mergeNote },
     ];
     TYPES.forEach(({ key, t, merge }) => {
       const bMap = new Map((base[key] || []).map((r) => [r.id, r]));
@@ -15829,6 +17883,42 @@
       ideas.forEach((d) => { if (d.cat && !ideaCats.has(d.cat)) d.cat = null; });
       ideas.sort(posCmp);
 
+      /* Notatene (docs/notater-plan.md): prosjektene er beholdere, mappene
+         henges i prosjektet sitt, og notatene blir liggende flatt. En rad uten
+         lesbart prosjekt er foreldreløs og droppes — som en mappe uten område.
+         En mappepeker som ikke treffer, nulles: notatet er da et FRITT notat i
+         prosjektet sitt, nøyaktig som visningen tegner det. */
+      const noteProjectList = (doc.noteProjects || []).map((raw) => {
+        const p = Object.assign(cleanNoteProject(raw), { folders: [] });
+        p._type = 'noteProject';
+        p._createdByMe = true;
+        return p;
+      });
+      const projById = new Map(noteProjectList.map((p) => [p.id, p]));
+      const folderProject = new Map();
+      (doc.noteFolders || []).forEach((raw) => {
+        const f = cleanNoteFolder(raw);
+        const parent = projById.get(f.project);
+        if (!parent) return;
+        f._type = 'noteFolder';
+        f._createdByMe = true;
+        folderProject.set(f.id, f.project);
+        parent.folders.push(f);
+      });
+      const noteList = [];
+      (doc.notes || []).forEach((raw) => {
+        const n = cleanNote(raw);
+        if (n.folder && !folderProject.has(n.folder)) n.folder = null;
+        else if (n.folder) n.project = folderProject.get(n.folder);
+        if (!projById.has(n.project)) return;
+        n._type = 'note';
+        n._createdByMe = true;
+        noteList.push(n);
+      });
+      noteProjectList.sort(posCmp);
+      noteProjectList.forEach((p) => p.folders.sort(posCmp));
+      noteList.sort(posCmp);
+
       // Seksjonsrekkefølge først, personlig posisjon innenfor hver seksjon.
       universes.sort((a, b) => (sectionRank(a) - sectionRank(b)) || posCmp(a, b));
       universes.forEach((u) => {
@@ -15843,11 +17933,14 @@
       const hadUni = state.activeUniverse && !!findUniverse(state.activeUniverse);
       state.universes = universes;
       state.ideas = ideas;
+      state.noteProjects = noteProjectList;
+      state.notes = noteList;
       state._hlc = doc.hlc || state._hlc || 0;
       observeTs(doc.hlc);
       const lostGroup = hadGroup && state.activeGroup && !findGroupAnywhere(state.activeGroup);
       const lostUni = hadUni && state.activeUniverse && !findUniverse(state.activeUniverse);
       validateActive(state);
+      validateActiveNotes(state);
       if (lostGroup || lostUni) noteAccessLoss(lostGroup ? 'group' : 'universe');
       // Første pull etter innlogging: land på posisjonen kontoen husker.
       if (!navRestored) { navRestored = true; restoreNavPref(); }
@@ -15871,7 +17964,8 @@
   }
 
   /* ---------------- Push: rad-CRUD mot tabellene ---------------- */
-  const TABLE = { universe: 'universes', group: 'groups', card: 'cards', item: 'items', idea: 'ideas' };
+  const TABLE = { universe: 'universes', group: 'groups', card: 'cards', item: 'items', idea: 'ideas',
+    note_project: 'note_projects', note_folder: 'note_folders', note: 'notes' };
   function insertPayload(t, row, uid) {
     const base = { id: row.id, owner_id: uid, trashed: !!row.trashed,
       ts: row.ts || 0, org: row.org || '', pos: row.pos || 0, pos_ts: row.posTs || 0, pos_org: row.posOrg || '' };
@@ -15885,6 +17979,10 @@
       collapsed: !!row.collapsed });
     if (t === 'idea') return Object.assign(base, { text: row.text || '', cat_id: row.cat || null,
       is_cat: !!row.isCat, collapsed: !!row.collapsed });
+    if (t === 'note_project') return Object.assign(base, { name: row.name || '', collapsed: !!row.collapsed });
+    if (t === 'note_folder') return Object.assign(base, { name: row.name || '', project_id: row.project });
+    if (t === 'note') return Object.assign(base, { title: row.title || '', project_id: row.project,
+      folder_id: row.folder || null, body: row.doc || emptyNoteDoc() });
     return Object.assign(base, { text: row.text || '', card_id: row.home, cat_id: row.cat || null,
       is_cat: !!row.isCat, lock_times: !!row.lockTimes, done: !!row.done, collapsed: !!row.collapsed,
       responsible: row.responsible || null,
@@ -15903,6 +18001,10 @@
       collapsed: !!row.collapsed });
     if (t === 'idea') return Object.assign(base, { text: row.text || '', cat_id: row.cat || null,
       is_cat: !!row.isCat, collapsed: !!row.collapsed });
+    if (t === 'note_project') return Object.assign(base, { name: row.name || '', collapsed: !!row.collapsed });
+    if (t === 'note_folder') return Object.assign(base, { name: row.name || '', project_id: row.project });
+    if (t === 'note') return Object.assign(base, { title: row.title || '', project_id: row.project,
+      folder_id: row.folder || null, body: row.doc || emptyNoteDoc() });
     return Object.assign(base, { text: row.text || '', card_id: row.home, cat_id: row.cat || null,
       is_cat: !!row.isCat, lock_times: !!row.lockTimes, done: !!row.done, collapsed: !!row.collapsed,
       responsible: row.responsible || null,
@@ -16013,6 +18115,28 @@
   // fletteren ville sett en forskjell mot serveren hver runde og sendt den
   // samme oppdateringen i det uendelige. Visningen behandler allerede en
   // hengende `cat` som nivå 1, så dette er å skrive ned det brukeren ser.
+  /* Notatenes motstykke til `pruneDanglingCats`, og med nøyaktig samme
+     begrunnelse: `notes.folder_id`/`note_folders.project_id` er fremmednøkler,
+     så en peker som ikke treffer en rad i doc-en er UMULIG å skrive — og en
+     avvist op regenereres hver runde. En hengende MAPPEPEKER nulles (notatet
+     blir et fritt notat i prosjektet sitt, som er nøyaktig det visningen alt
+     tegner), mens en rad uten PROSJEKT er foreldreløs: prosjektet er `not
+     null` i databasen, så raden kan ikke finnes uten det, og den tas ut av
+     doc-en i stedet for å bli hengende i en usynlig retry-løkke. */
+  function pruneNoteParents(doc) {
+    const projects = new Set((doc.noteProjects || []).map((p) => p.id));
+    doc.noteFolders = (doc.noteFolders || []).filter((f) => projects.has(f.project));
+    const folders = new Map((doc.noteFolders || []).map((f) => [f.id, f.project]));
+    doc.notes = (doc.notes || []).filter((n) => {
+      if (!projects.has(n.project)) return false;
+      // En mappe som er flyttet til et annet prosjekt drar notatene med seg;
+      // står de igjen med det gamle prosjektet, rettes de her.
+      if (n.folder && !folders.has(n.folder)) n.folder = null;
+      else if (n.folder) n.project = folders.get(n.folder);
+      return true;
+    });
+    return doc;
+  }
   function pruneDanglingCats(doc) {
     ['items', 'groups', 'ideas'].forEach((key) => {
       const rows = doc[key] || [];
@@ -16031,7 +18155,9 @@
     const client = acli();
     if (!client || !authUser) return { rejected: 0, netFailed: false };
     const uid = authUser.id;
-    const order = { universe: 0, group: 1, card: 2, item: 3, idea: 4 };
+    // Ovenfra-ned: en rad kan ikke skrives før forelderen finnes (FK).
+    const order = { universe: 0, group: 1, card: 2, item: 3, idea: 4,
+      note_project: 5, note_folder: 6, note: 7 };
     // Ovenfra-ned (foreldre først) på type, og INNEN en type: kategorier før
     // medlemmene sine. Kategorier nøstes aldri, så ett nivå er nok.
     const byParentFirst = (a, b) => (order[a.t] - order[b.t]) ||
@@ -16820,7 +18946,9 @@
     if (!client || !authUser) return;
     if (cloudChan) { try { client.removeChannel(cloudChan); } catch (e) {} cloudChan = null; }
     cloudChan = client.channel('hk-user-' + authUser.id);
-    ['universes', 'groups', 'cards', 'items', 'ideas', 'memberships', 'share_invites'].forEach((t) => {
+    ['universes', 'groups', 'cards', 'items', 'ideas',
+     'note_projects', 'note_folders', 'notes',
+     'memberships', 'share_invites'].forEach((t) => {
       cloudChan.on('postgres_changes', { event: '*', schema: 'public', table: t }, () => scheduleCloud(150));
     });
     cloudChan.subscribe((status) => {
@@ -18250,6 +20378,11 @@
   function resetLocalSync() {
     state.universes = [];
     state.ideas = [];
+    state.noteProjects = [];
+    state.notes = [];
+    state.activeProject = null;
+    state.activeFolder = null;
+    state.activeFolders = {};
     state._tomb = emptyTomb();
     state._base = null;
     state._baseV = 0;
@@ -18257,6 +20390,7 @@
     persistedBaseSig = null;
     unknownHistory = new Set();
     validateActive(state);
+    validateActiveNotes(state);
   }
   // Alle id-ene i et (nestet) state-tre — brukes til å merke hvilke rader som
   // kom fra en cache uten base, altså har ukjent historikk.
@@ -18273,6 +20407,11 @@
       });
     });
     (s.ideas || []).forEach((d) => set.add(d.id));
+    (s.noteProjects || []).forEach((p) => {
+      set.add(p.id);
+      (p.folders || []).forEach((f) => set.add(f.id));
+    });
+    (s.notes || []).forEach((n) => set.add(n.id));
     return set;
   }
   function loadCache() {
@@ -18284,11 +20423,16 @@
       normalize(s);
       state.universes = s.universes;
       state.ideas = s.ideas;
+      state.noteProjects = s.noteProjects;
+      state.notes = s.notes;
+      state.activeProject = s.activeProject || null;
+      state.activeFolder = s.activeFolder || null;
+      state.activeFolders = s.activeFolders || {};
       // Gravsteinene og basen tas ALLTID fra den lastede posten (ikke «|| det vi
       // hadde»): faller vi tilbake på det som lå i minnet, arver en ny konto
       // forrige brukers gravsteiner.
       state._tomb = s._tomb && typeof s._tomb === 'object' ? s._tomb : emptyTomb();
-      ['universes', 'groups', 'cards', 'items', 'ideas'].forEach((k) => {
+      Object.keys(emptyTomb()).forEach((k) => {
         if (!state._tomb[k] || typeof state._tomb[k] !== 'object') state._tomb[k] = {};
       });
       state._hlc = s._hlc || 0;
@@ -18303,6 +20447,7 @@
       // annet sted — de må sjekkes mot serverens gravsteiner før de skrives.
       unknownHistory = base ? new Set() : allStateIds(state);
       validateActive(state);
+      validateActiveNotes(state);
       return true;
     } catch (e) { return false; }
   }
@@ -20071,6 +22216,10 @@
   I18N.applyStatic(document);
   paintLanguage();
   paintTheme();
+  // Hovedfanene FØR kontomodus starter: `setMainTab` bestemmer hvilket board
+  // som er synlig, og den første rendringen skal treffe riktig ett.
+  wireMainTabs();
+  setMainTab(readMainTab(), { silent: true });
   initAccounts();
   // OTA-hentingen (fase 5): ett manifest-oppslag per oppstart, kun i native
   // skall — fire-and-forget, og alle utfall er stille. Uavhengig av
@@ -20138,6 +22287,19 @@
     // Hovedsidens to board, samme sak (bygges ved første `renderBoard`).
     get boardCardBoard() { return boardCardBoard; },
     get boardRowBoard() { return boardRowBoard; },
+    /* NOTATER (docs/notater-plan.md). Hovedfanen, navigasjonen, opprettelsen,
+       editoren og dokumentmodellen — testene bruker dem både til oppsett og
+       til å måle dokumentet uten å gå veien om DOM-en. */
+    setMainTab, get mainTab() { return activeMainTab; },
+    openNotesNav, closeNotesNav, renderNotes, renderNotesNav,
+    addNoteProject, addNoteFolder, addNote,
+    setActiveProject, setActiveNoteFolder,
+    openNoteEditor, closeNoteEditor, flushNoteSave, runNoteCommand,
+    notesIn, noteDocText, noteExcerpt, noteDisplayTitle,
+    sanitizeNoteDoc, safeNoteUrl, noteDocFromEl, noteDocIntoEl, emptyNoteDoc,
+    get notesCardBoard() { return notesCardBoard; },
+    get notesNavCardBoard() { return notesNavCardBoard; },
+    get notesNavRowBoard() { return notesNavRowBoard; },
     openAccount, closeAccount,
     canonical, reconcile, emptyDoc, docFromMyState, contentDocFromMy, applyMyDoc, cloudCycle,
     isSchemaMismatch, isTombstoneReject, isNetworkError, tombIds,

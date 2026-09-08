@@ -129,7 +129,25 @@ stående). Autoritativt: `docs/trash.md` («Slett ved å dra objektet i kassen»
 ## Toppmenyen (`.topbar`)
 
 Ett fast panel øverst (`position: fixed`, full bredde, samme DOM på mobil og
-desktop). To deler:
+desktop). Panelet er en KOLONNE med to rader:
+
+0. **Hovedfanene** (`.main-tabs`, `#main-tabs`, `role="tablist"`): `Lister |
+   Notater` — Huskis' to hoveddeler ([`notater-plan.md`](notater-plan.md)).
+   Fanen er en VISNING, ikke et eget program: toppkontrollene under tilhører
+   hele appen og dupliseres ikke per fane. Den aktive fanen bærer `.is-active`
+   og `aria-selected="true"`; venstre/høyre piltast bytter fane (WAI-ARIA), og
+   bare den aktive er i tabbrekkefølgen. Valget er per ENHET
+   (`localStorage['huskis-tab']`) og synkes ikke — hvilken fane man sist så på
+   er ikke innhold. Fanene er kompakte med vilje: raden koster høyde, og høyde
+   er det knappeste i landskap.
+1. **Den aktive fanens rad** (`.topbar-row`): én per fane, og bare den aktive
+   er synlig. Listefanens rad har navigasjonsknappen og listefunksjonene
+   (under); notatfanens har sin egen breadcrumb (`#notes-crumb`,
+   `[prosjektnavn] › [mappenavn]`, der mappenavnet er «Frie notater» når man
+   står rett i prosjektet) og «＋ Notat» (`#add-note-btn`, avskrudd uten et
+   aktivt prosjekt).
+
+Listefanens rad har to deler:
 
 1. **Navigasjonsknappen** (`.crumb-btn.nav-crumb`, `#nav-crumb`): ÉN knapp som
    viser hele lokasjonen som en breadcrumb — bare navnene, uten ikoner —
@@ -144,7 +162,7 @@ desktop). To deler:
    spør FORELDEREN»).
 
 **Én linje der bredden rekker.** De to delene deler linje på desktop og på en
-telefon i LANDSKAP: panelet blir én kontrollhøyde høyt, og i landskap er høyde
+telefon i LANDSKAP: fanenes rad pluss ÉN kontrollhøyde, og i landskap er høyde
 det knappeste vi har (~360 px viewport). Listefunksjonene står **rett til høyre
 for nav-knappen**, ikke skjøvet ut til kanten: breadcrumben krymper (`flex: 0 1
 auto`, navnene kappes med ellipsis) når linjen blir trang, men vokser aldri.
@@ -165,7 +183,9 @@ så plassen til dem må holdes av noe annet: på én linje er det en
 `margin-right` i ENDEN av linjen (listefunksjonenes), i det stablede oppsettet
 holder BEGGE radene av den samme plassen (breadcrumbens `padding-right` og
 listefunksjonenes `margin-right`) — er hjørnegruppen også to rader (under
-560 px), ligger én gruppe-rad ved siden av hver av dem. Begge leser
+560 px), ligger én gruppe-rad ved siden av hver av dem. Fanenes rad holder av
+den samme plassen (`.main-tabs` sin `margin-right`): den er panelets FØRSTE, og
+det er den gruppens første rad ligger ved siden av. Begge leser
 `--corner-btns-w`, som appen MÅLER (`syncTopChrome`) som gruppens BREDESTE rad,
 så plassen holder takt med hvor mange knapper gruppen faktisk har. Har gruppen
 flere rader enn panelet, skyves overskuddet over panelets egne rader ned i
@@ -359,6 +379,24 @@ handling å kollidere med.
 Gotcha: å bytte mappe lukker modalen (bytt kontekst og gå), men **sletting
 lukker den IKKE** — brukeren skal kunne angre fra søppelkassen med én gang
 (søppelkasse-modalen ligger over, samme z-index men senere i DOM).
+
+## Notat-navigasjonen (`#notes-nav-modal`, åpnes fra notatfanens breadcrumb)
+
+Samme modal-skall og samme oppsett som nav-modalen over, bare for notatenes
+tre: hvert PROSJEKT er et `.card.uni-card.note-project-card`
+(`#note-project-template`) med MAPPENE sine som `.item.group-row.note-folder-row`-rader
+(`#note-folder-template`) i `.items-container`, og en `＋ Mappe`-knapp i kortets
+`.add-item-row`. Nederst i kolonnen ligger «Nytt prosjekt»
+(`.notes-add-project`), som «Nytt område» gjør i nav-modalen.
+
+Klikkdelingen er den samme som for områder og mapper: **tittel-klikk omdøper**
+(inline, `editText`), **klikk ellers navigerer** — på en mapperad inn i mappen,
+på prosjekthodet til prosjektets FRIE notater (notater uten mappe). Den aktive
+plasseringen bærer `.is-active`.
+
+Det som IKKE finnes her, er med vilje (PR 1, [`notater-plan.md`](notater-plan.md)):
+ingen objektmeny, ingen deling, ingen låser, ingen kategorier og ingen
+søppelkasse. Arkiv, sletting og gjenoppretting kommer i PR 2.
 
 ## Konto-modalen (`#account-modal`, kontoknappen)
 

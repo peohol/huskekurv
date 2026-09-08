@@ -392,7 +392,10 @@ async function lift(p, sel) {
     });
     await p.waitForTimeout(400);
     const empty = await live();
-    log('8 tom mappe slipper alle kort-observasjoner', empty.total <= 3 && empty.detached === 0, JSON.stringify(empty));
+    /* Fire PERMANENTE mål står igjen: toppmenyen, hjørnegruppen og de to
+       board-ene (listenes og notatenes — docs/notater-plan.md). Kortene skal
+       være meldt av. */
+    log('8 tom mappe slipper alle kort-observasjoner', empty.total <= 4 && empty.detached === 0, JSON.stringify(empty));
     log('8 ingen JS-feil', errs.length === 0, errs.join(' | '));
     await p.close();
   }

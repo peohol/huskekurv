@@ -44,9 +44,11 @@ Når brukeren åpner et prosjekt eller en mappe i Notater, vises notatene som ko
 - klikk-og-hold / eksisterende pekersemantikk starter DnD;
 - omrokering skal bruke samme grunnprinsipp som omrokering av lister i en mappe.
 
-Et notatkort har en `×`-knapp som åpner en liten popover med **Arkiver** og
-**Slett**. Sletting bruker Huskis' søppelkassemodell. Arkivering flytter notatet
-til et arkiv hvor det kan gjenopprettes eller slettes videre.
+Et notatkort skal få en `×`-knapp som åpner en liten popover med **Arkiver** og
+**Slett** (PR 2). Sletting bruker Huskis' søppelkassemodell. Arkivering flytter
+notatet til et arkiv hvor det kan gjenopprettes eller slettes videre. I PR 1
+finnes ingen av dem: `trashed` ligger i modellen, men det er ingen vei til den
+fra UI-et.
 
 ## Oppretting
 
@@ -211,7 +213,35 @@ synk mot konto. Mobilvisningen skal være reelt brukbar.
 koblinger Lister ↔ Notater og full notatdeling, med mindre en liten del er
 teknisk nødvendig for å etablere en trygg datamodell.
 
-Status: **ikke startet**.
+Status: **gjennomført**.
+
+Slik ble det:
+
+- **Datamodellen** er tre nye kontotabeller — `note_projects`, `note_folders`,
+  `notes` — med samme to registre, gravsteiner og insert-vakter som resten av
+  innholdet, og `owner_id = auth.uid()` som hele autorisasjonen (som idéene).
+  Klienten holder prosjektene nøstet (mappene i dem) og notatene FLATT med to
+  forelder-pekere: `project` (alltid) og `folder` (null = fritt notat).
+  Autoritativt: [`data-model.md`](data-model.md) og
+  [`arkitektur-brukere-deling.md`](arkitektur-brukere-deling.md).
+- **Innholdet** er et strukturert riktekstdokument (`{v, blocks}` med
+  inline-kjøringer), ikke rå editor-HTML: det kan redigeres videre uten
+  formattap, gjøres om til lesbar tekst for søk, og rendres node for node — aldri
+  som markup. Hele dokumentet rir på innholdsregisteret, så konflikter avgjøres
+  per DOKUMENT.
+- **Editoren** er én `contenteditable` med nettleserens egen `execCommand`
+  (tagger, ikke inline-stiler), og alt som kommer inn — innliming inkludert —
+  leses tilbake gjennom den samme trakten. Autosave, ingen Lagre-knapp.
+- **Lenker** er merket tekst med adressen i `data-url`, ikke ankere: Huskis'
+  UI produserer fortsatt ingen utgående lenker
+  ([`domains-and-urls.md`](domains-and-urls.md)). Å ÅPNE en notatlenke hører til
+  PR 3, sammen med mobilskallets ruting.
+- **Sletting av notater/mapper/prosjekter er IKKE med.** Den hører sammen med
+  arkivet og søppelkassen i PR 2, og en «slett» uten en kasse å hente fra igjen
+  ville vært tap av data uten vei tilbake.
+
+Dekket av `tests/notes-tab.test.js` (nettleser, desktop + mobil) og
+`supabase/tests/test-notes.sql` (RLS, LWW, gravsteiner, kontosletting).
 
 ### PR 2 — Livssyklus + integrasjon mellom hoveddelene
 
@@ -268,8 +298,10 @@ Status: **ikke startet**.
 
 | Leveranse | Status |
 |---|---|
-| PR 1 — Fundament + fungerende Notater-fane | Ikke startet |
+| PR 1 — Fundament + fungerende Notater-fane | **Gjennomført** |
 | PR 2 — Livssyklus + integrasjon | Ikke startet |
 | PR 3 — Deling, robusthet og polering | Ikke startet |
 
-**Neste steg:** Implementer PR 1 som én sammenhengende, testbar leveranse.
+**Neste steg:** PR 2 — livssyklus og integrasjon. Det første som mangler for en
+bruker er å kunne FJERNE et notat: arkiv og søppelkasse hører sammen, og PR 1
+lot begge stå ute med vilje.

@@ -2,9 +2,14 @@
 
 ## Prosjekt
 
-Huskis er en statisk vanilla-JS-app uten bundler eller rammeverk. Innholdet er
-hierarkisk: **Område > Mappe > Liste > Listepunkt**, der en liste i tillegg kan
-ha ett nivå med **kategorier**.
+Huskis er en statisk vanilla-JS-app uten bundler eller rammeverk. Appen har to
+hovedfaner øverst — **Lister** og **Notater** — og toppkontrollene (varsler,
+kalender, søk, idéer, drakt, konto) tilhører hele appen, ikke én fane.
+
+Listefanens innhold er hierarkisk: **Område > Mappe > Liste > Listepunkt**, der
+en liste i tillegg kan ha ett nivå med **kategorier**. Notatfanen har sitt eget
+tre — **Prosjekt > Mappe > Notat** — bygget av de samme komponentene og den
+samme synken; autoritativt: `docs/notater-plan.md`.
 
 De to øverste nivåene er bygget av samme komponenter som de to nederste: et
 område ER et kort, en mappe ER en rad. Dra-og-slipp kjører i to scope —
@@ -12,6 +17,9 @@ område ER et kort, en mappe ER en rad. Dra-og-slipp kjører i to scope —
 Smett** (`vendor/smett-0.2.0.js`). Selve gesten er dnd-kits; hva et slipp BETYR
 er Huskis', og den politikken er delt mellom scopene. Autoritativt:
 `docs/drag-and-drop.md`.
+
+Notatinnholdet er et strukturert riktekstdokument (ikke HTML), redigert i en
+fullskjermseditor med autosave.
 
 `dist/` er generert output fra `node build.js` og skal aldri redigeres direkte.
 Mobilskallet (Capacitor + `android/`) pakker den samme `dist/`-en inn i native

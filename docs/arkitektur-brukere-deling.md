@@ -43,8 +43,9 @@ beskriver databasesiden.
 ## Datamodell
 
 Fire objekttabeller — `universes` > `groups` > `cards` (= «lister» i UI-et)
-> `items` — med `on delete cascade` nedover. (`ideas` er en femte innholdstabell
-uten forelder; se «Flere tabeller hører til BRUKEREN» under.) Hver rad har:
+> `items` — med `on delete cascade` nedover. (`ideas` og de tre notattabellene
+er innholdstabeller uten plass i dette treet; se «Flere tabeller hører til
+BRUKEREN» under.) Hver rad har:
 
 - `owner_id` — **oppretteren** (`created_by`). Uforanderlig (trigger-vakt), og
   gir **ingen** rettigheter. Kolonnenavnet er beholdt av migreringshensyn.
@@ -67,6 +68,7 @@ for et objekt to brukere har sammen:
 | Tabell | Hva den er | Klientvei |
 |---|---|---|
 | `ideas` | kontoens idéer og idékategorier ([`ideer.md`](ideer.md)) | RLS `owner_id = auth.uid()` |
+| `note_projects`, `note_folders`, `notes` | kontoens notater, Prosjekt > Mappe > Notat ([`notater-plan.md`](notater-plan.md)) | RLS `owner_id = auth.uid()` |
 | `notifications` | varselhistorikken | RLS `user_id = auth.uid()` |
 | `notification_prefs` | de fire varselvalgene + generator-markøren | RLS `user_id = auth.uid()` |
 | `push_subscriptions` | ett abonnement per nettleserkontekst, med gjenkjennelig metadata | RLS på egne rader; skrives kun av RPC-ene |
@@ -80,6 +82,29 @@ tilgang fra — derfor står den her og ikke over. Skrivevakten
 (`ideas_before_update`) gjør bare det RLS ikke kan: holder registrene i orden
 og hindrer at oppretteren endres. `cat_id` peker på tabellens egen id
 (`on delete set null`, `deferrable initially deferred`).
+
+**De tre notattabellene** er innhold på samme måte som `ideas`: de er med i
+synk-doc-et, har de samme to LWW-registrene, og de samme gravstein- og
+insert-vaktene. Formen er notatenes eget tre:
+
+| Tabell | Forelder | Merk |
+|---|---|---|
+| `note_projects` | ingen | notatenes øverste nivå, som et område |
+| `note_folders` | `project_id` (`on delete cascade`) | mapper nøstes aldri i mapper |
+| `notes` | `project_id` (cascade) + `folder_id` (`on delete set null`) | `folder_id = null` → et FRITT notat rett i prosjektet |
+
+Begge forelder-pekerne følger POSISJONSREGISTERET (som `card_id`/`cat_id` på et
+listepunkt), og begge er `deferrable initially deferred` — doc-rekkefølgen er
+vilkårlig. `notes.body` er editorens dokument som `jsonb`; databasen lagrer det
+og tolker det ikke, og hele verdien rir på INNHOLDSREGISTERET, altså er
+konfliktmodellen per dokument.
+
+At mappen og notatet ligger i MITT prosjekt er en egen betingelse i
+`note_folders_insert`/`notes_insert`/`-_update` (`exists (… owner_id =
+auth.uid())`), ikke bare i eierskapet på raden selv: uten den kunne en bruker
+hekte sin egen rad inn i et prosjekt hen ikke eier — usynlig for eieren, men
+bundet til raden hans av fremmednøkkelen. `supabase/tests/test-notes.sql` prøver
+nettopp det, i begge retninger.
 
 De to låste tabellene har ingen klientvei i det hele tatt: `push_deliveries`
 røres kun av senderens funksjoner (`service_role`), og `device_sessions` kun av
@@ -287,7 +312,7 @@ Full modell: [`rettigheter-og-deling.md`](rettigheter-og-deling.md).
 | Kall | Rolle |
 |---|---|
 | `supabase.auth.signUp/signInWithPassword/…` | registrering/innlogging (bekreftelses-e-post håndteres av Supabase) |
-| `get_my_doc()` | hele brukerens datasett som ETT flatt jsonb-doc: universes/groups/cards/items + `role`, `free`, `personalPos`, `ownerKey`, `shared` og `caps` + invitasjoner + varsler/varselvalg |
+| `get_my_doc()` | hele brukerens datasett som ETT flatt jsonb-doc: universes/groups/cards/items + `role`, `free`, `personalPos`, `ownerKey`, `shared` og `caps` + idéer + noteProjects/noteFolders/notes + invitasjoner + varsler/varselvalg |
 | vanlige `insert/update/delete` på tabellene | CRUD med RLS + server-side LWW; klienten stempler `ts/org`-registrene som i dag |
 | `import_doc(doc)` | engangs-migrering av lokalt/legacy doc til egne data (deterministiske id-er per bruker, idempotent) |
 | `create_share_invite(type, id, email, role)` / `accept_share_invite(invite)` / `decline_share_invite` / `revoke_share_invite` | delingsflyt, medlem eller eierskap; aksept krever ingen plassering |

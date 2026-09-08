@@ -321,7 +321,16 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   listefunksjoner.
 - `.crumb-btn`: navigasjonsknappen i toppmenyen — ÉN knapp med begge nivåene
   (bare navn, uten ikoner, på flate-mønsteret; `.crumb-name` med ellipsis);
-  `.crumb-sep` er ›-skilletegnet mellom dem.
+  `.crumb-sep` er ›-skilletegnet mellom dem. Notatfanen har sin egen
+  (`#notes-crumb`, `[prosjekt] › [mappe]`) med nøyaktig den samme klassen.
+- `.main-tabs` + `.main-tab`: hovedfanene `Lister | Notater`, panelets FØRSTE
+  rad (`docs/menus.md`, `docs/notater-plan.md`). Flate-mønsteret i hvile, full
+  kortflate + tyngre skrift + dypere skygge på den aktive — forskjellen bæres av
+  mer enn fargen alene. `.topbar-row` er den aktive fanens egen rad.
+- `.note-card`: notatkortet — `.card`-flaten med tittel, utdrag (tre linjer,
+  `-webkit-line-clamp`) og «sist endret». Hele kortet er klikkflate og dra-sone,
+  så det har pekehånd og `:focus-visible`-ring; `overflow: visible` fordi
+  `.card`s egen `hidden` ville klippet ringen.
 - `.trashcan`: ALLE søppelkasse-knapper — hvit avrundet beholder, antall i grå
   sirkel (`.trashcan-count`), **skjult (`hidden`) når tom**.
 - `.corner-controls` + `.corner-btn`: toppkontrollgruppen i øvre høyre hjørne
@@ -652,6 +661,30 @@ konto» i konto-modalen: «Forlat» bruker dør-ut-ikonet (`ICONS.logout`), «Sl
 … for alle» søppelkassen (`ICONS.trashGlyph`). Hver har sitt eget `aria-label`,
 så skjermlesere aldri forveksler dem — og de fire endelige/reversible
 handlingene i appen får samme form uansett hvilken modal de står i.
+
+## Notat-editoren (`.note-editor`)
+
+Et eget fullskjermsbilde OVER hele appflaten — også over toppkontrollene, som er
+`z-index: 35`; editoren er 60, og `body.note-editing` skjuler gruppen så den
+ikke ligger oppå verktøylinjen. Den sikre sonen legges på editorens egne kanter
+(baren og kroppen), ikke på barna.
+
+Skriveflaten er PAPIR (`--surface`), ikke board-bakgrunnen: brødteksten er
+`--ink`, og det paret er det som er målt i begge draktene
+(`docs/tilgjengelighet.md`). Verktøylinjen står på `--surface-2` med en
+`--line`-kant under.
+
+- `.note-tools` ruller VANNRETT når den ikke får plass; knappene krymper aldri —
+  et for lite mål er verre enn en rull. På telefon i portrett legger den seg på
+  sin egen rad under tilbakeknappen.
+- `.note-tool` er en flat ikon-/tegnknapp; `.is-on` (+ `aria-pressed`) viser at
+  markeringen står i den tilstanden. `.note-tool-sep` er den tynne
+  gruppeskilleren.
+- `.note-panel` (lenke og spesialtegn) henger under verktøylinjen som et ark med
+  `--shadow-lg`.
+- `.note-doc` er `white-space: pre-wrap` — linjeskift inne i en blokk bæres som
+  et tegn i dokumentmodellen. `.note-link` er MERKET tekst med adressen i
+  `data-url`, ikke et anker (`docs/domains-and-urls.md`).
 
 ## Flate-mønsteret
 

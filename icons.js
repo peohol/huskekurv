@@ -207,6 +207,26 @@ window.ICONS = {
     '<path d="M10.5 12h7"></path>' +
     '</svg>',
 
+  // Notat: et ark med skrevne linjer og et brettet hjørne. Hvit flate som
+  // liste-ikonet, så de to hoveddelene leses som samme familie — men motivet er
+  // et DOKUMENT, ikke en rad med punkter (docs/notater-plan.md).
+  note: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M6 3h7.5L19 8.5V21H6Z" fill="#ffffff"></path>' +
+    '<path d="M13.5 3v5.5H19"></path>' +
+    '<path d="M8.8 12.5h6.4"></path>' +
+    '<path d="M8.8 15.5h6.4"></path>' +
+    '<path d="M8.8 18.5h3.6"></path>' +
+    '</svg>',
+
+  // Notatprosjekt: mappen med et ark i — prosjektet er notatenes øverste nivå,
+  // slik området er listenes. Manilamappe-tan som `folder`, arket hvitt som
+  // `note`, så slektskapet begge veier er synlig.
+  noteProject: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1.05" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M2.5 19.5V6a1.8 1.8 0 0 1 1.8-1.8h3.1a1.8 1.8 0 0 1 1.45.73l1 1.35a1.8 1.8 0 0 0 1.45.72h6.4A1.8 1.8 0 0 1 19.5 8.8v10.7a1.8 1.8 0 0 1-1.8 1.8H4.3a1.8 1.8 0 0 1-1.8-1.8Z" fill="#c9a06a"></path>' +
+    '<path d="M9.5 9.5h6.2l2.6 2.6v6.6H9.5Z" fill="#ffffff"></path>' +
+    '<path d="M15.7 9.5v2.6h2.6"></path>' +
+    '</svg>',
+
   // Kryss (×) for lukk-/slett-knapper: egen SVG med samme strek (1.05) og runde
   // ender som resten av settet. Bruker currentColor så CSS styrer farge (svart i
   // hvile, rød ved hover på slett-knappene — se .icon-btn/-delete i styles.css).

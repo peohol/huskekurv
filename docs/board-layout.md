@@ -4,6 +4,14 @@ Les denne når oppgaven berører kolonnefordelingen eller avstander/padding/gap 
 selve listevisningen (kolonnene med lister/kort), IKKE menyene rundt (se
 `docs/menus.md`).
 
+**Notatfanen bruker det samme board-et.** `#notes-board` er et `.board` med
+`.board-col`-containere og `.note-card`-kort, og går gjennom nøyaktig den samme
+`relayoutBoard`/`packBoardColumns`-motoren (scopet `notesScope`). Notatkortene
+er derfor flere kolonner på desktop og én på mobil av samme grunn og etter samme
+regnestykke som listene — ingen egen grid, ingen egne terskler. Bare ETT av de to
+board-ene er synlig om gangen, og fordelingen hoppes over for et skjult board:
+alt måler 0 der. Se [`notater-plan.md`](notater-plan.md).
+
 ## Kolonner: fyll venstre kolonne først
 
 Board-et er **ikke** CSS multi-column. Kolonnene er ekte containere

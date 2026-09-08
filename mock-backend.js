@@ -66,6 +66,10 @@
         // Idéene (docs/ideer.md): kontoens egne rader, uten forelder i
         // hierarkiet — eierskapet er hele autorisasjonen.
         ideas: [],
+        // Notatene (docs/notater-plan.md): kontoens egne rader, Prosjekt >
+        // Mappe > Notat. Ingen deling, ingen roller — eierskapet er hele
+        // autorisasjonen, som for idéene.
+        note_projects: [], note_folders: [], notes: [],
         memberships: [], share_invites: [], tombstones: [],
         notifications: [], notification_prefs: [],
         push_subscriptions: [], push_deliveries: [],
@@ -81,6 +85,10 @@
     // En seedet eller eldre mock-database har ikke idé-tabellen; klienten leser
     // den ved hver runde, så den må alltid finnes.
     if (!Array.isArray(db.ideas)) db.ideas = [];
+    // Samme grunn: en seedet eller eldre database har ikke notattabellene.
+    if (!Array.isArray(db.note_projects)) db.note_projects = [];
+    if (!Array.isArray(db.note_folders)) db.note_folders = [];
+    if (!Array.isArray(db.notes)) db.notes = [];
     return migrateRoles(db);
   }
   // Speiler rolle-backfillen i users-and-sharing.sql: en database fra FØR
@@ -897,6 +905,10 @@
     var myItems = db.items.filter(function (i) { return myCardIds[i.card_id]; });
     // Idéer henger på KONTOEN, ikke på hierarkiet: ingen join, bare eierskap.
     var myIdeas = (db.ideas || []).filter(function (d) { return d.owner_id === uid; });
+    // Notatene likeså (docs/notater-plan.md).
+    var myNoteProjects = (db.note_projects || []).filter(function (p) { return p.owner_id === uid; });
+    var myNoteFolders = (db.note_folders || []).filter(function (f) { return f.owner_id === uid; });
+    var myNotes = (db.notes || []).filter(function (n) { return n.owner_id === uid; });
 
     var email = emailOf(db, uid);
     var selfProf = db.profiles.find(function (x) { return x.id === uid; }) || {};
@@ -960,6 +972,28 @@
           cat: d.cat_id || null, isCat: !!d.is_cat, collapsed: !!d.collapsed,
           trashed: !!d.trashed,
           ts: d.ts, org: d.org, pos: d.pos, posTs: d.pos_ts, posOrg: d.pos_org,
+        };
+      }),
+      noteProjects: myNoteProjects.map(function (p) {
+        return {
+          id: p.id, creator: p.owner_id, createdByMe: true, name: p.name,
+          collapsed: !!p.collapsed, trashed: !!p.trashed,
+          ts: p.ts, org: p.org, pos: p.pos, posTs: p.pos_ts, posOrg: p.pos_org,
+        };
+      }),
+      noteFolders: myNoteFolders.map(function (f) {
+        return {
+          id: f.id, creator: f.owner_id, createdByMe: true, project: f.project_id,
+          name: f.name, trashed: !!f.trashed,
+          ts: f.ts, org: f.org, pos: f.pos, posTs: f.pos_ts, posOrg: f.pos_org,
+        };
+      }),
+      notes: myNotes.map(function (n) {
+        return {
+          id: n.id, creator: n.owner_id, createdByMe: true,
+          project: n.project_id, folder: n.folder_id || null,
+          title: n.title, body: n.body, trashed: !!n.trashed,
+          ts: n.ts, org: n.org, pos: n.pos, posTs: n.pos_ts, posOrg: n.pos_org,
         };
       }),
       invites_in: db.share_invites.filter(function (s) {
@@ -1216,7 +1250,8 @@
     return { code: '23503', message: 'insert or update on table "' + table +
       '" violates foreign key constraint "' + table + '_cat_id_fkey"' };
   }
-  var TYPE_OF_TABLE = { universes: 'universe', groups: 'group', cards: 'card', items: 'item', ideas: 'idea' };
+  var TYPE_OF_TABLE = { universes: 'universe', groups: 'group', cards: 'card', items: 'item', ideas: 'idea',
+    note_projects: 'note_project', note_folders: 'note_folder', notes: 'note' };
   // Speiler guard_object_insert: en gravlagt id kan ikke settes inn igjen.
   // Returneres som en feil (ikke et kast), med samme distinkte kode som
   // PostgREST gir for PT409, slik at klientens isTombstoneReject treffer.
@@ -1237,7 +1272,8 @@
     var rows = Array.isArray(payload) ? payload : [payload];
     // Objekt-tabellene har uuid-kolonner (som ekte Postgres): avvis ugyldige
     // id-er slik at klienten faktisk må generere UUID-er.
-    var OBJ = { universes: 1, groups: 1, cards: 1, items: 1, ideas: 1 };
+    var OBJ = { universes: 1, groups: 1, cards: 1, items: 1, ideas: 1,
+      note_projects: 1, note_folders: 1, notes: 1 };
     if (OBJ[table]) {
       for (var i = 0; i < rows.length; i++) {
         if (!UUID_RE.test(String(rows[i].id || ''))) {
@@ -1263,6 +1299,17 @@
         throw new Error('mangler tilgang til mappen');
       if (table === 'items' && findC(db, row.card_id) && !canCreateChild(db, 'card', row.card_id, uid))
         throw new Error('mangler tilgang til listen');
+      /* Notatene: forelderen må være MIN. Speiler `with check`-vilkåret i
+         note_folders_insert/notes_insert — uten det kunne en rad hektes inn i
+         et prosjekt som tilhører noen andre. */
+      if (table === 'note_folders' || table === 'notes') {
+        var eier = (db.note_projects || []).find(function (p) { return p.id === row.project_id; });
+        if (!eier || eier.owner_id !== uid) throw new Error('mangler tilgang til notatprosjektet');
+      }
+      if (table === 'notes' && row.folder_id) {
+        var mappe = (db.note_folders || []).find(function (f) { return f.id === row.folder_id; });
+        if (!mappe || mappe.owner_id !== uid) throw new Error('mangler tilgang til notatmappen');
+      }
       // Nye objekter arver invitasjonspolicy dynamisk → lagres som 'inherit'.
       if (table === 'universes' || table === 'groups') { if (!row.invite_policy) row.invite_policy = 'inherit'; }
       db[table].push(row);
@@ -1326,6 +1373,27 @@
         if (regNewer(patch.pos_ts, patch.pos_org, row.pos_ts, row.pos_org)) {
           if ('pos' in patch) row.pos = patch.pos;
           if ('cat_id' in patch) row.cat_id = patch.cat_id;
+          row.pos_ts = patch.pos_ts; row.pos_org = patch.pos_org;
+        }
+        return;
+      }
+      /* Notatene: samme felt-LWW som idéene, og av samme grunn uten
+         capability-oppslag — RLS har alt avgjort at raden er min
+         (*_before_update i users-and-sharing.sql). Forelder-pekerne rir på
+         posisjonsregisteret. */
+      if (table === 'note_projects' || table === 'note_folders' || table === 'notes') {
+        if (row.owner_id !== uid) return;
+        if ('owner_id' in patch && patch.owner_id !== row.owner_id) throw new Error('owner_id (oppretter) kan ikke endres');
+        if (regNewer(patch.ts, patch.org, row.ts, row.org)) {
+          ['name', 'title', 'body', 'collapsed', 'trashed'].forEach(function (k) {
+            if (k in patch) row[k] = patch[k];
+          });
+          row.ts = patch.ts; row.org = patch.org;
+        }
+        if (regNewer(patch.pos_ts, patch.pos_org, row.pos_ts, row.pos_org)) {
+          ['pos', 'project_id', 'folder_id'].forEach(function (k) {
+            if (k in patch) row[k] = patch[k];
+          });
           row.pos_ts = patch.pos_ts; row.pos_org = patch.pos_org;
         }
         return;
@@ -1426,6 +1494,37 @@
         writeTombstone(db, 'idea', row.id);
         db.ideas.forEach(function (d) { if (d.cat_id === row.id) d.cat_id = null; });
         return false;
+      });
+      return;
+    }
+    /* Notatene: mine egne, uten capability-oppslag. `note_folders.project_id`
+       og `notes.project_id` er `on delete cascade` (et notat uten prosjekt
+       finnes ikke), mens `notes.folder_id` er `on delete set null` — en
+       slettet mappe etterlater FRIE notater, den sletter dem ikke. */
+    if (table === 'note_projects' || table === 'note_folders' || table === 'notes') {
+      var kaskade = [];
+      db[table] = db[table].filter(function (row) {
+        if (!matches(row, filters)) return true;
+        if (row.owner_id !== uid) return true;
+        writeTombstone(db, TYPE_OF_TABLE[table], row.id);
+        kaskade.push(row.id);
+        return false;
+      });
+      kaskade.forEach(function (id) {
+        if (table === 'note_projects') {
+          db.note_folders = db.note_folders.filter(function (f) {
+            if (f.project_id !== id) return true;
+            writeTombstone(db, 'note_folder', f.id);
+            return false;
+          });
+          db.notes = db.notes.filter(function (n) {
+            if (n.project_id !== id) return true;
+            writeTombstone(db, 'note', n.id);
+            return false;
+          });
+        } else if (table === 'note_folders') {
+          db.notes.forEach(function (n) { if (n.folder_id === id) n.folder_id = null; });
+        }
       });
       return;
     }
@@ -1804,6 +1903,15 @@
           writeTombstone(db, 'idea', d.id);
           return false;
         });
+        // 4a2. notatene — mine alene, som idéene (docs/notater-plan.md).
+        [['notes', 'note'], ['note_folders', 'note_folder'], ['note_projects', 'note_project']]
+          .forEach(function (par) {
+            db[par[0]] = (db[par[0]] || []).filter(function (r) {
+              if (r.owner_id !== uid) return true;
+              writeTombstone(db, par[1], r.id);
+              return false;
+            });
+          });
         // 4b. varselhistorikken, preferansene, push-abonnementene og utboksen —
         //     alt sammen mitt alene (som kaskaden i delete_account()).
         db.notifications = db.notifications.filter(function (n) { return n.user_id !== uid; });

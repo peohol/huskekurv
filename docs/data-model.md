@@ -33,7 +33,13 @@ state = {
               items: [ { id, text, trashed, done, responsible, start, due, home, cat, isCat, lockTimes } ] } ] } ] } // done: avkrysset; responsible: ansvarlig bruker-id (delte lister); start/due: tidsplan; cat/isCat/lockTimes: kategorier (se under)
   ],
   ideas: [ { id, text, cat, isCat, collapsed, trashed } ],  // KONTOENS idéer, flatt — se docs/ideer.md
-  _tomb: { universes:{}, groups:{}, cards:{}, items:{}, ideas:{} }, // gravsteiner: id → ts (permanent slettet)
+  // NOTATER (docs/notater-plan.md): kontoens andre hoveddel, Prosjekt > Mappe > Notat
+  noteProjects: [ { id, name, trashed, collapsed, folders: [ { id, project, name, trashed } ] } ],
+  notes: [ { id, project, folder, title, doc, trashed } ], // folder = null → fritt notat i prosjektet
+  activeProject: <projId>, activeFolder: <folderId|null>,  // aktiv posisjon i Notater (per enhet)
+  activeFolders: { projId: folderId|null },                // per enhet: sist aktive mappe per prosjekt
+  _tomb: { universes:{}, groups:{}, cards:{}, items:{}, ideas:{},
+           noteProjects:{}, noteFolders:{}, notes:{} },    // gravsteiner: id → ts (permanent slettet)
   _base: { universes:[], groups:[], cards:[], items:[] }, // synk-base: forrige serverkjente doc
   _baseV: 1,                                              // basens versjon (BASE_VERSION)
 }
@@ -47,6 +53,20 @@ fletteren lese basens rader som «slettet lokalt». Se «Gjenoppstandelse» i
 
 Forelder-peker på hvert nivå: `listepunkt.home → kort`, `kort.group → mappe`,
 `mappe.uni → område`.
+
+**`noteProjects`/`notes` står også utenfor hierarkiet.** Notatene er Huskis'
+ANDRE hoveddel, ved siden av listene, og har sitt eget tre: **Prosjekt > Mappe >
+Notat**. Prosjektene er nøstet (mappene ligger i dem), mens notatene er en FLAT
+liste med to forelder-pekere — `project` (alltid satt) og `folder` (null = et
+fritt notat rett i prosjektet). Et fritt notat har ingen mappe å ligge under, så
+nøsting ville krevd en syntetisk beholder på hvert prosjekt. Begge pekerne rir
+på posisjonsregisteret, som `home`/`cat` på et listepunkt; et notat hvis mappe
+ikke finnes leses som fritt, nøyaktig som et listepunkt med en hengende `cat`
+leses som nivå 1. Innholdet (`doc`) er et strukturert riktekstdokument, ikke
+HTML, og rir på innholdsregisteret som ÉN verdi — konfliktmodellen er altså per
+DOKUMENT. Notatene deles ikke, har ingen roller, låser eller kategorier, og
+`activeProject`/`activeFolder` huskes per enhet (og på kontoen, se under).
+Autoritativt: [`notater-plan.md`](notater-plan.md).
 
 **`ideas` står UTENFOR hierarkiet.** Idéene hører til kontoen, ikke til et
 område eller en mappe, så de har ingen forelder-peker — bare `cat` innen sin
@@ -78,13 +98,16 @@ holdes i takt (`goToGroup` brukes fra nav-modalen, der et mappevalg også kan
 bytte område).
 
 **Aktiv posisjon huskes på kontoen (kontomodus).** `activeUniverse`/`activeGroup`
-lagres på selve brukerkontoen (Supabase Auth `user_metadata.nav = {u,g}`), ikke i
-synk-doc'et. Skrives debouncet fra `setActiveGroup()` (`saveNavPref`), og
+lagres på selve brukerkontoen (Supabase Auth `user_metadata.nav = {u,g,np,nf}`
+— `np`/`nf` er notatfanens prosjekt og mappe), ikke i synk-doc'et. Skrives debouncet fra `setActiveGroup()` (`saveNavPref`), og
 gjenopprettes én gang ved første sky-pull etter innlogging (`restoreNavPref`, kalt
 fra `applyMyDoc` bak `navRestored`-flagget). Da lander man på samme område/mappe
 neste gang appen lastes — også på en ny enhet. Løpende synk flytter IKKE
 visningen (restore skjer kun på første pull), så to åpne enheter kan stå i hver
 sin mappe. `activeGroups`-minnet er alltid per enhet (synkes aldri).
+
+**Hovedfanen (`Lister | Notater`) er per ENHET og synkes ikke** — den ligger i
+`localStorage['huskis-tab']`. Hvilken fane man sist så på er ikke innhold.
 
 ## Hierarkiet: Område > Mappe > Liste > Listepunkt
 
