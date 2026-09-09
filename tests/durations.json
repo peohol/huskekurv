@@ -42,6 +42,7 @@
   "tests/nav-modal.test.js": 63,
   "tests/no-legacy-domain.test.js": 0,
   "tests/notes-lifecycle-links.test.js": 14,
+  "tests/notes-sharing.test.js": 30,
   "tests/notes-tab.test.js": 30,
   "tests/notif-channels.test.js": 91,
   "tests/notif-modal.test.js": 35,

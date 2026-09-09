@@ -19583,8 +19583,10 @@
     const each = (type, rows) => {
       const srvRows = new Map((my[NOTE_SERVER_KEY[type]] || []).map((r) => [r.id, r]));
       rows.forEach((o) => {
-        if (!o._caps) return;                       // ukjent rettighet → la det stå
-        if (cap(o, 'editContent', !frozen(o))) return;
+        // Serverens capability, direkte: kjøres hver synk-runde over hver rad,
+        // så det lokale låse-anslaget (`frozen`) skal ikke regnes ut her.
+        // Mangler `_caps` er raden ny og ikke på serveren ennå.
+        if (!o._caps || o._caps.editContent !== false) return;
         const raw = srvRows.get(o.id);
         if (!raw) return;                           // ikke på serveren (ennå)
         const srv = NOTE_CLEAN[type](raw);
