@@ -1,5 +1,5 @@
 /*
-  Nettlesertest for DELING AV NOTATER (docs/rettigheter-og-deling.md del 15,
+  Nettlesertest for DELING AV NOTATER (docs/rettigheter-og-deling.md del 14,
   docs/notater-plan.md) — mot mock-backenden (?mock=1).
 
   Dekker den klientvendte oppførselen SQL-testene ikke ser:
@@ -133,14 +133,18 @@ async function menuPick(p, sel, label) {
   await p.locator('#obj-menu-panel .obj-menu-row', { hasText: label }).first().click();
   await p.waitForTimeout(500);
 }
-// Én synk-runde, og vent til køen er tom.
-async function sync(p) {
-  await p.evaluate(() => window.__huskis.cloudCycle());
-  await p.waitForFunction(() => {
-    const el = document.getElementById('sync-status');
-    return el && el.dataset.state !== 'saving';
-  }, null, { timeout: 8000, polling: 150 });
-  await p.waitForTimeout(250);
+/* Synk-runder til `pred` slår til. `cloudCycle()` no-op-er hvis en runde alt
+   er i gang, og synk-pillen kan stå på «saved» før den nye runden har startet —
+   et rått `await` på den er derfor IKKE et ferdig-signal (tests/CLAUDE.md).
+   Vi venter på selve TILSTANDEN i stedet. */
+async function sync(p, pred) {
+  for (let i = 0; i < 15; i++) {
+    await p.evaluate(() => window.__huskis.cloudCycle());
+    await p.waitForTimeout(350);
+    if (!pred) return true;
+    if (await p.evaluate(pred)) return true;
+  }
+  return false;
 }
 const readDB = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('hk-mock-db')));
 const writeDB = (p, db) => p.evaluate((d) => {
@@ -233,7 +237,10 @@ async function run(label, viewport, mobile) {
   const låst = await readDB(p);
   låst.note_projects.find((x) => x.id === ids.P).locked = true;
   await writeDB(p, låst);
-  await sync(p);
+  await sync(p, () => {
+    const pr = (window.__huskis.state.noteProjects || [])[0];
+    return !!pr && pr._locked === true;
+  });
   const bLåst = await p.evaluate(async (id) => {
     const H = window.__huskis;
     H.openNoteEditor(id);
@@ -268,6 +275,30 @@ async function run(label, viewport, mobile) {
   }, ids.N1);
   log(label + ' 4: serveren ruller tilbake leserens rå skriving',
     bSkriv.tittel === 'Utvalg', JSON.stringify(bSkriv));
+  /* En LOKAL endring gjort før låsen kom (autosaven rakk den ikke): den kan
+     aldri lande, og skal derfor verken bli en evig push-løkke eller bli
+     stående som en kopi som ser lagret ut. Serverens verdi vinner ved neste
+     runde, og VÅRT doc slutter å avvike fra den. */
+  await p.evaluate((id) => {
+    const H = window.__huskis;
+    const n = H.state.notes.find((x) => x.id === id);
+    n.title = 'Skrevet før låsen'; n.ts = 9e12; n.org = 'b';
+    H.save();
+  }, ids.N1);
+  const stopper = await sync(p, () => {
+    const H = window.__huskis;
+    const mine = H.docFromMyState().notes.find((x) => x.id === H.state.notes[0].id);
+    const serv = H.contentDocFromMy(H.lastMy).notes.find((x) => x.id === mine.id);
+    return JSON.stringify(mine) === JSON.stringify(serv);
+  });
+  const etterLås = await p.evaluate((id) => {
+    const db2 = JSON.parse(localStorage.getItem('hk-mock-db'));
+    return { lokal: (window.__huskis.state.notes.find((x) => x.id === id) || {}).title,
+      server: (db2.notes.find((x) => x.id === id) || {}).title };
+  }, ids.N1);
+  log(label + ' 4: en lokal endring uten skriverett slutter å avvike (ingen evig retry)',
+    stopper === true && etterLås.lokal === 'Utvalg' && etterLås.server === 'Utvalg',
+    JSON.stringify(etterLås));
   await p.evaluate(() => window.__huskis.closeNotesNav());
   await p.waitForTimeout(200);
 
@@ -313,7 +344,7 @@ async function run(label, viewport, mobile) {
   const trukket = await readDB(p);
   trukket.memberships = trukket.memberships.filter((m) => !(m.user_id === 'uC' && m.note_id === ids.N1));
   await writeDB(p, trukket);
-  await sync(p);
+  await sync(p, () => window.__huskis.state.notes.length === 0);
   const cEtter = await p.evaluate(() => ({
     editor: !document.getElementById('note-editor').hidden,
     notater: window.__huskis.state.notes.length,
@@ -384,7 +415,7 @@ async function run(label, viewport, mobile) {
   const tilbake = await readDB(p);
   tilbake.memberships = tilbake.memberships.filter((m) => !(m.user_id === 'uC' && m.note_id === ids.N1));
   await writeDB(p, tilbake);
-  await sync(p);
+  await sync(p, () => window.__huskis.state.notes.length === 0);
   const uten = await p.evaluate(() => window.__huskis.state.notes.length);
   const igjen = await readDB(p);
   igjen.memberships.push({ id: 'm-igjen', user_id: 'uC',
@@ -392,7 +423,7 @@ async function run(label, viewport, mobile) {
     note_project_id: null, note_folder_id: null, note_id: ids.N1,
     role: 'member', pos: 0, created_at: 1 });
   await writeDB(p, igjen);
-  await sync(p);
+  await sync(p, () => window.__huskis.state.notes.length === 1);
   const med = await p.evaluate(() => ({
     notater: window.__huskis.state.notes.map((n) => n.title),
     koblinger: (window.__huskis.state.links || []).length,
@@ -416,7 +447,7 @@ async function run(label, viewport, mobile) {
     localStorage.setItem('hk-mock-db', JSON.stringify(db2));
     return true;
   }, ids.N1);
-  await sync(p);
+  await sync(p, () => (window.__huskis.state.notes[0] || {}).title === 'As nyere versjon');
   const etterFlett = await p.evaluate((id) => {
     const db2 = JSON.parse(localStorage.getItem('hk-mock-db'));
     return {

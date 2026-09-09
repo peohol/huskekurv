@@ -426,16 +426,25 @@ appen (`.obj-menu-btn` → `#obj-menu`), med de radene notatsiden faktisk har:
 
 | # | Rad | Gjelder |
 |---|---|---|
-| 1 | **Endre navn** | alle tre (i editoren peker den på tittelfeltet) |
+| 1 | **Endre navn** | alle tre (i editoren peker den på tittelfeltet), ved redigeringsrett |
 | 2 | **Flytt** ▸ | alle tre (opp/ned; notatsiden har ingen «Flytt til …») |
-| 3 | **Koblinger** | alle tre — åpner koblingsmodalen, med antallet som hint |
-| 4 | **Arkiver** / **Hent ut av arkivet** | alle tre |
-| 5 | **Slett …** | alle tre (til søppelkassen, i rødt og sist) |
+| 3 | **Deling og medlemmer** | alle tre — åpner den SAMME `#share-modal` som områder og mapper |
+| 4 | **Lås for redigering** / **Gjør unntak** | alle tre, når objektet er delt og man kan styre låsen |
+| 5 | **Forlat …** | alle tre, når man kan forlate ([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14) |
+| 6 | **Koblinger** | alle tre — åpner koblingsmodalen, med antallet som hint |
+| 7 | **Arkiver** / **Hent ut av arkivet** | alle tre, ved redigeringsrett |
+| 8 | **Slett …** | alle tre, ved sletterett (til søppelkassen, i rødt og sist) |
 
 Notatet har menyen både på kortet og i editorens verktøylinje (`#note-menu-btn`),
-så et åpent notat ikke er en blindvei. Deling, låser og kategorier finnes
-fortsatt ikke her — notatene hører til kontoen alene
-([`notater-plan.md`](notater-plan.md)).
+så et åpent notat ikke er en blindvei. **Deling ligger i den vanlige menyen på
+alle tre nivåene** — notatsiden fikk ingen egen menytype og ingen egen modal
+([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14). Kategorier
+finnes fortsatt ikke på notatsiden.
+
+Radene gates av serverens capabilities: en REN LESER (medlem av et låst objekt)
+får verken «Endre navn», «Arkiver» eller «Slett», og bokhyllekortets
+＋-knapp forsvinner. Den virtuelle «Delt med meg»-bokhyllen er en SEKSJON og har
+ingen meny i det hele tatt.
 
 **Kassene og arkivene** speiler listenes: notat-kassen og -arkivet står i
 notatfanens topplinje (per plassering), notatbokens i bokhyllekortet, og

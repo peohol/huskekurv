@@ -10,7 +10,7 @@ Ved motstrid gjelder det dokumentet som er merket autoritativt for feltet — og
 
 | Dokument | Les når oppgaven gjelder | Autoritativ for |
 |---|---|---|
-| [rettigheter-og-deling.md](rettigheter-og-deling.md) | hvem som får redigere, dele, låse, flytte, slette; roller (`owner`/`member`), capabilities, arvet lås + unntak, invitasjonspolicy | **ja** — fasiten for rettighetsmodellen |
+| [rettigheter-og-deling.md](rettigheter-og-deling.md) | hvem som får redigere, dele, låse, flytte, slette; roller (`owner`/`member`), capabilities, arvet lås + unntak, invitasjonspolicy — på BEGGE hoveddelene (notatsiden i del 14) | **ja** — fasiten for rettighetsmodellen |
 | [data-model.md](data-model.md) | state-strukturen, foreldre-pekere, kategorier, id-er, hva som lagres lokalt vs. i databasen | **ja** — klientens datamodell |
 | [arkitektur-brukere-deling.md](arkitektur-brukere-deling.md) | tabellene, RLS-policyene, triggerne, RPC-ene, LWW-stemplingen, gravsteinene, e-postvarsel-triggeren | **ja** — databasearkitekturen |
 | [accounts.md](accounts.md) | auth-UI, sesjonen og resten av det enheten lagrer, **innloggede enheter og økter** (fjern-utlogging, utloggings-scopene), synk-motoren (`get_my_doc` → fletting → rad-CRUD), operasjonskøen, delings-UI, innboks, mock-backenden | **ja** — klientsiden av kontoer og synk |

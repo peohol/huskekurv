@@ -19,8 +19,10 @@ Supabase Auth (e-post + passord, bekreftelseslenke)
                        tombstones                           ← mot gjenoppliving offline
 ```
 
-Deling finnes **kun på områder og mapper**. Lister, kategorier og listepunkter
-arver tilgangen. `supabase/setup.sql` dropper den gamle éndoc-modellen
+Deling finnes på **områder og mapper** i listefanen, og på **alle tre nivåene**
+i notatfanen (bokhylle, notatbok, notat). Lister, kategorier og listepunkter
+arver tilgangen. Alle fem delbare typene bruker den SAMME `memberships`-tabellen
+og de samme RPC-ene. `supabase/setup.sql` dropper den gamle éndoc-modellen
 (`public.lists` + `get_list`/`save_list`).
 
 Den autoritative rettighetsmodellen står i
@@ -50,8 +52,10 @@ BRUKEREN» under.) Hver rad har:
 - `owner_id` — **oppretteren** (`created_by`). Uforanderlig (trigger-vakt), og
   gir **ingen** rettigheter. Kolonnenavnet er beholdt av migreringshensyn.
 - `trashed` — søppelkasseflagget, **felles** for alle med tilgang.
-- `locked`/`unlocked` (ikke på items) — lås/unntak, se «Låsing».
-- `invite_policy` (kun universes/groups) — `inherit`/`allow`/`deny`.
+- `locked`/`unlocked` (ikke på items) — lås/unntak, se «Låsing». Finnes også på
+  de tre notattabellene.
+- `invite_policy` — `inherit`/`allow`/`deny`. På universes/groups og på de tre
+  notattabellene; ikke på cards/items.
 - LWW-registre: `ts`/`org` (innhold), `pos_ts`/`pos_org` (posisjon +
   forelder-peker), `lab_ts`/`lab_org` (K/P på cards). **Håndheves på serveren**:
   BEFORE UPDATE-triggere lar en skriving med eldre register-stempel tape mot
@@ -68,8 +72,7 @@ for et objekt to brukere har sammen:
 | Tabell | Hva den er | Klientvei |
 |---|---|---|
 | `ideas` | kontoens idéer og idékategorier ([`ideer.md`](ideer.md)) | RLS `owner_id = auth.uid()` |
-| `note_projects`, `note_folders`, `notes` | kontoens notater, Bokhylle > Notatbok > Notat ([`notater-plan.md`](notater-plan.md)) | RLS `owner_id = auth.uid()` |
-| `object_links` | koblinger mellom notatsiden og listesiden ([`notater-plan.md`](notater-plan.md)) | RLS `owner_id = auth.uid()`; INSERT krever i tillegg at notatsiden er min og listesiden lesbar |
+| `object_links` | koblinger mellom notatsiden og listesiden ([`notater-plan.md`](notater-plan.md)) | RLS `owner_id = auth.uid()`; INSERT krever i tillegg at BEGGE sider er lesbare for meg |
 | `notifications` | varselhistorikken | RLS `user_id = auth.uid()` |
 | `notification_prefs` | de fire varselvalgene + generator-markøren | RLS `user_id = auth.uid()` |
 | `push_subscriptions` | ett abonnement per nettleserkontekst, med gjenkjennelig metadata | RLS på egne rader; skrives kun av RPC-ene |
@@ -84,9 +87,13 @@ tilgang fra — derfor står den her og ikke over. Skrivevakten
 og hindrer at oppretteren endres. `cat_id` peker på tabellens egen id
 (`on delete set null`, `deferrable initially deferred`).
 
-**De tre notattabellene** er innhold på samme måte som `ideas`: de er med i
-synk-doc-et, har de samme to LWW-registrene, og de samme gravstein- og
-insert-vaktene. Formen er notatenes eget tre:
+**De tre notattabellene er DELBART INNHOLD**, ikke kontoens egne rader. De har
+de samme to LWW-registrene, de samme gravstein- og insert-vaktene som
+objekttabellene — og fra og med delingsrunden også `locked`/`unlocked`,
+`invite_policy` og roller i `memberships`. Autorisasjonen er derfor RLS bygget
+på de samme capability-funksjonene som listesiden bruker
+([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14). Formen er
+notatenes eget tre:
 
 | Tabell | Forelder | Merk |
 |---|---|---|
@@ -111,15 +118,16 @@ vilkårlig. `notes.body` er editorens dokument som `jsonb`; databasen lagrer det
 og tolker det ikke, og hele verdien rir på INNHOLDSREGISTERET, altså er
 konfliktmodellen per dokument.
 
-At notatboken og notatet ligger i MIN bokhylle er en egen betingelse i
-`note_folders_insert`/`notes_insert`/`-_update` (`exists (… owner_id =
-auth.uid())`), ikke bare i eierskapet på raden selv: uten den kunne en bruker
-hekte sin egen rad inn i en bokhylle hen ikke eier — usynlig for eieren, men
-bundet til raden hans av fremmednøkkelen. `supabase/tests/test-notes.sql` prøver
-nettopp det, i begge retninger.
+At man har lov til å legge noe i bokhyllen/notatboken er en egen betingelse i
+`note_folders_insert`/`notes_insert` (`can_create_child` / `can_create_note`),
+ikke bare i eierskapet på raden selv: uten den kunne en bruker hekte sin egen rad
+inn i en bokhylle hen ikke får skrive i — og et medlem av en LÅST bokhylle kunne
+lagt inn rader ingen etterpå kunne redigere. `supabase/tests/test-notes.sql` og
+`test-note-sharing.sql` prøver nettopp det, i begge retninger.
 
 **De to forelder-pekerne på et notat kan heller ikke motsi hverandre.** RLS sier
-at både bokhyllen og notatboken er mine, men ikke at de hører sammen — og siden
+at jeg har tilgang til både bokhyllen og notatboken, men ikke at de hører
+sammen — og siden
 `notes.project_id` er `on delete cascade`, ville et notat som pekte på bokhylle
 A og en notatbok i bokhylle B blitt SLETTET når A forsvant, mens UI-et viste det
 under notatboken i B. To triggere håndhever invarianten:
@@ -220,7 +228,7 @@ PostgREST — og ikke hva som «kunne vært nyttig»:
 
 | Tabell | `authenticated` | Hvem skriver ellers |
 |---|---|---|
-| `universes`, `groups`, `cards`, `items`, `ideas` | SELECT, INSERT, UPDATE, DELETE | rad-CRUD i synk-motoren |
+| `universes`, `groups`, `cards`, `items`, `ideas`, `note_projects`, `note_folders`, `notes` | SELECT, INSERT, UPDATE, DELETE | rad-CRUD i synk-motoren |
 | `profiles` | SELECT, UPDATE(`display_name`, `avatar`) | e-posten speiles fra `auth.users` av triggerne |
 | `memberships` | SELECT, UPDATE | roller lages/slettes av RPC-ene og opprettelses-triggerne; UPDATE er kun den personlige `pos` |
 | `share_invites` | SELECT | alt går via `create`/`accept`/`decline`/`revoke_share_invite` |
@@ -262,8 +270,9 @@ er upåvirket — den hviler på TRIGGER-rettigheten på TABELLEN, ikke på EXEC
 
 ## Deling (invitasjon → aksept → rolle)
 
-1. `create_share_invite(type, id, email, role)` — `type` er `'universe'` eller
-   `'group'`; `role` er `'member'` eller `'owner'`. Medlemsinvitasjoner krever
+1. `create_share_invite(type, id, email, role)` — `type` er én av de fem i
+   `shareable_types()` (`universe`, `group`, `note_project`, `note_folder`,
+   `note`); `role` er `'member'` eller `'owner'`. Medlemsinvitasjoner krever
    `can_invite_to` (eier på nivået, eller et medlem når policyen tillater det);
    **eierskaps**-invitasjoner krever `can_invite_owner` (kun eiere). Mottakeren
    trenger ikke ha konto — invitasjonen kobles ved registrering. Redundante
@@ -383,7 +392,7 @@ Full modell: [`rettigheter-og-deling.md`](rettigheter-og-deling.md).
 | Kall | Rolle |
 |---|---|
 | `supabase.auth.signUp/signInWithPassword/…` | registrering/innlogging (bekreftelses-e-post håndteres av Supabase) |
-| `get_my_doc()` | hele brukerens datasett som ETT flatt jsonb-doc: universes/groups/cards/items + `role`, `free`, `personalPos`, `ownerKey`, `shared` og `caps` + idéer + noteProjects/noteFolders/notes + invitasjoner + varsler/varselvalg |
+| `get_my_doc()` | hele brukerens datasett som ETT flatt jsonb-doc: universes/groups/cards/items + noteProjects/noteFolders/notes — begge med `role`, `free`, `personalPos`, `shared` og `caps` (`ownerKey` kun på områder) — + idéer + koblinger + invitasjoner + varsler/varselvalg |
 | vanlige `insert/update/delete` på tabellene | CRUD med RLS + server-side LWW; klienten stempler `ts/org`-registrene som i dag |
 | `import_doc(doc)` | engangs-migrering av lokalt/legacy doc til egne data (deterministiske id-er per bruker, idempotent) |
 | `create_share_invite(type, id, email, role)` / `accept_share_invite(invite)` / `decline_share_invite` / `revoke_share_invite` | delingsflyt, medlem eller eierskap; aksept krever ingen plassering |
@@ -430,7 +439,10 @@ medlemslistens kategorier, invitasjoner (medlem + eierskap + avviste liste-
 invitasjoner), låser og unntak, sletting/forlatelse med opprydding av ansvar,
 personlig rekkefølge, mappeflytting (reorder/reparent/kopier-og-slett med
 gravsteiner), server-side LWW, import (determinisme + idempotens + foreldreløse),
-gravsteiner, anon-avvisning og hele migreringen av gamle listedelinger.
+gravsteiner, anon-avvisning, hele migreringen av gamle listedelinger og
+NOTATDELINGEN (roller og arv på tre nivåer, ren leser via lås, flytting mellom
+foreldre med ulike delingsforhold, tilbakekalling, koblinger på tvers av delt og
+privat, kontosletting).
 
 ## Manuelle steg (utenfor SQL — én gang, i Supabase-dashboardet)
 

@@ -446,7 +446,7 @@ alter table public.note_projects add column if not exists archived boolean not n
 alter table public.note_folders  add column if not exists archived boolean not null default false;
 alter table public.notes         add column if not exists archived boolean not null default false;
 
--- DELING (docs/rettigheter-og-deling.md del 15). Notatene har fra og med denne
+-- DELING (docs/rettigheter-og-deling.md del 14). Notatene har fra og med denne
 -- runden den SAMME rettighetsmodellen som områder og mapper: roller i
 -- `memberships`, invitasjoner i `share_invites`, capabilities beregnet på
 -- serveren — og de to kolonnene låsemodellen hviler på. `locked`/`unlocked`
@@ -1339,7 +1339,7 @@ returns uuid[] language sql stable security definer set search_path = public as 
    where m.universe_id = p_universe and m.role = 'owner';
 $$;
 
--- ---- Notatsidens roller (docs/rettigheter-og-deling.md del 15) ----
+-- ---- Notatsidens roller (docs/rettigheter-og-deling.md del 14) ----
 -- Bokhylle > Notatbok > Notat har den SAMME rollemodellen som Område > Mappe,
 -- i den samme tabellen: `owner` og `member`, ingen tredje rolle. Forskjellen
 -- er at notatsiden kan deles på ALLE TRE nivåene — et notat ER dokumentet,
@@ -2466,7 +2466,7 @@ create trigger ideas_guard before update on public.ideas
   for each row execute function public.ideas_before_update();
 
 /* Notater: samme felt-nivå-LWW som listene, og fra og med delingsrunden også
-   de samme CAPABILITY-spørsmålene (docs/rettigheter-og-deling.md del 15).
+   de samme CAPABILITY-spørsmålene (docs/rettigheter-og-deling.md del 14).
    Formen er `universes_before_update`/`groups_before_update` sin, og med vilje:
 
      * `owner_id` (oppretteren) er uforanderlig;
@@ -2887,7 +2887,7 @@ create policy ideas_delete on public.ideas
 
 /* note_projects/note_folders/notes: notatsidens tre nivåer, med den SAMME
    rettighetsmodellen som områder og mapper (docs/rettigheter-og-deling.md
-   del 15). Eierskapet på raden (`owner_id`) er ren historikk her også — all
+   del 14). Eierskapet på raden (`owner_id`) er ren historikk her også — all
    myndighet kommer fra ROLLER i `memberships`.
 
    Formen er identisk med listesidens policyer, og det er poenget: én modell,

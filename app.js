@@ -5243,11 +5243,20 @@
     const S = dragScope();
     const id = drag.el && drag.el.dataset.id;
     if (!id) return false;
-    // Notatene er kontoens egne: det finnes ingen lås og ingen delt myndighet
-    // å spørre om (docs/notater-plan.md). Kassen armes så snart objektet finnes.
-    if (S === notesScope) return !!findNoteById(id);
+    /* Notatene deles nå på alle tre nivåene, så kassen spør om den SAMME
+       capabilityen som objektmenyens «Slett»-rad — og feiler lukket. Den
+       virtuelle «Delt med meg»-bokhyllen kan aldri slettes. */
+    if (S === notesScope) {
+      const n = findNoteById(id);
+      return !!n && cap(n, 'delete', !frozen(n));
+    }
     if (S === notesNavScope) {
-      return drag.kind === 'card' ? !!findNoteProject(id) : !!findNoteFolder(id);
+      if (drag.kind === 'card') {
+        const p2 = findNoteProject(id);
+        return !!p2 && !p2._virtual && cap(p2, 'delete', !frozen(p2));
+      }
+      const f = findNoteFolder(id);
+      return !!f && cap(f, 'delete', !frozen(f));
     }
     if (drag.kind === 'card') {
       if (S === navScope) {
@@ -9791,7 +9800,10 @@
        navnetreff (se `searchCmp`), så tittelen alltid vinner. */
     noteProjects().forEach((p) => {
       if (!noteVisible(p)) return;
-      add('noteProject', p, p.name, []);
+      // Den virtuelle «Delt med meg»-bokhyllen er en SEKSJON, ikke et objekt:
+      // den kan ikke åpnes som en bokhylle og skal derfor ikke søkes fram
+      // (som «Delte mapper» på listesiden). Innholdet i den er med som vanlig.
+      if (!p._virtual) add('noteProject', p, p.name, []);
       (p.folders || []).forEach((f) => {
         if (!noteVisible(f)) return;
         add('noteFolder', f, f.name, [p.name]);
@@ -16656,9 +16668,23 @@
         if (el) paintCardColor(el, p.color);
       });
     },
-    lockedTargetMsg: '',
-    refusesRow: () => false,
+    lockedTargetMsg: tr('dnd.shelfLocked'),
+    refusesRow: (targetCardId) => !!notesNavRejectTarget(targetCardId, notesNavSourceProjectId),
   };
+
+  /* Kan en notatbok slippes i DENNE bokhyllen? Samme svar som knappene og
+     serveren gir: opprettelsesrett i målet, og aldri inn i den virtuelle
+     «Delt med meg»-bokhyllen — den finnes ikke i databasen.
+     (`navRejectTarget` er motstykket på listesiden.) */
+  function notesNavRejectTarget(targetCardId, sourceCardId) {
+    if (!targetCardId || targetCardId === sourceCardId) return null;
+    const tc = notesNavScope.findContainer(targetCardId);
+    if (!tc) return null;
+    if (tc._virtual) return tr('dnd.notebookNeedsShelf');
+    if (frozen(tc)) return notesNavScope.lockedTargetMsg;
+    if (!canAddNoteFolder(tc)) return tr('dnd.cannotCreateNotebookHere');
+    return null;
+  }
 
   /* ---- Board 1: notatkortene på hovedflaten ---- */
   let notesCardBoard = null;
@@ -17038,6 +17064,11 @@
     if (!targetCardEl) return;
     const targetId = targetCardEl.dataset.id;
     const sourceId = notesNavSourceProjectId;
+    // Samme svar som `refusesRow` ga under draget: et slipp serveren ville
+    // avvist skal ikke skje. Vi sier fra og kaster — Smett ruller da
+    // rekkefølgen tilbake til der draget startet (som på listesiden).
+    const reason = notesNavRejectTarget(targetId, sourceId);
+    if (reason) { showToast(reason); throw new Error(reason); }
     clearAllDragSeparators();
     const prev = dndRowSibling(el, -1);
     const next = dndRowSibling(el, 1);
@@ -17053,6 +17084,8 @@
         // plasseringen røres ikke.
         commitPos(moved, 'noteFolder', np);
       } else {
+        // En EKTE flytting: den kanoniske overstyringen gjelder ikke lenger.
+        delete moved._canonProject;
         moved.project = targetId;
         moved.pos = np;
         stampPos(moved);
@@ -19327,7 +19360,7 @@
      som er delt DIREKTE med meg, uten at jeg ser bokhyllen de egentlig står i.
      Den finnes ikke i databasen, pushes aldri, og har verken delings- eller
      opprettelseskontroller — nøyaktig som «Mapper delt med meg»
-     (docs/rettigheter-og-deling.md del 15). */
+     (docs/rettigheter-og-deling.md del 14). */
   const SHARED_NOTES_ID = '__shared_notes__';
   // Hvilken av de tre seksjonene et toppnivå-objekt hører til.
   const SECTION_OWNED = 0, SECTION_SHARED = 1, SECTION_FREE = 2;
@@ -19480,7 +19513,7 @@
     const items = (my.items || []).filter((it) => !supC.has(it.home)).map((it) => { const r = cleanItem(it, it.home); bump(r); return r; });
     // Idéene deles aldri, så ingen forlatt-deling kan undertrykke dem.
     const ideas = (my.ideas || []).map((d) => { const r = cleanIdea(d); bump(r); return r; });
-    // Notatene DELES nå (docs/rettigheter-og-deling.md del 15), så de har den
+    // Notatene DELES nå (docs/rettigheter-og-deling.md del 14), så de har den
     // samme undertrykkingen som områdene og mappene.
     const noteProjects = (my.noteProjects || []).filter((p) => !supNP.has(p.id))
       .map((p) => { const r = cleanNoteProject(p); bump(r); return r; });
@@ -19523,6 +19556,51 @@
      medlemskapsraden, ikke på objektet — `.pos` i state er da den personlige
      verdien, og den KANONISKE står i `_canon`. Den kanoniske skrives tilbake
      uendret, så en personlig omrokkering aldri kan endre hva andre ser. */
+  /* EN SKRIVING VI VET SERVEREN RULLER TILBAKE SKAL ALDRI BLI EN OP.
+     Vaktene (`*_before_update`) reverterer stille et innholds- eller
+     posisjonsregister man mangler rett til å endre. Tar vi med den lokale
+     verdien i VÅRT doc, finner fletteren den samme divergensen hver runde og
+     pusher den samme skrivingen i det uendelige — en varm løkke uten et eneste
+     signal, og en lokal kopi som ser lagret ut uten å være det.
+
+     Løsningen er å bygge doc-et med SERVERENS siste kjente verdi for nettopp
+     de registrene vi ikke har rett til å skrive. Da blir lokal og fjern like,
+     ingen op oppstår, og neste `applyMyDoc` viser serverens verdi — som er den
+     eneste som finnes. Rettighetene er serverens; dette er bare klienten som
+     slutter å banke på en dør som er låst.
+
+     Gjelder notatsiden, som er den delen denne runden ga låser og roller. */
+  const NOTE_SERVER_KEY = { note_project: 'noteProjects', note_folder: 'noteFolders', note: 'notes' };
+  const NOTE_CONTENT_FIELDS = {
+    note_project: ['name', 'collapsed', 'trashed', 'archived'],
+    note_folder: ['name', 'trashed', 'archived'],
+    note: ['title', 'doc', 'trashed', 'archived'],
+  };
+  const NOTE_CLEAN = { note_project: cleanNoteProject, note_folder: cleanNoteFolder, note: cleanNote };
+  function revertUnwritableNoteEdits(my) {
+    if (!my) return false;
+    let changed = false;
+    const each = (type, rows) => {
+      const srvRows = new Map((my[NOTE_SERVER_KEY[type]] || []).map((r) => [r.id, r]));
+      rows.forEach((o) => {
+        if (!o._caps) return;                       // ukjent rettighet → la det stå
+        if (cap(o, 'editContent', !frozen(o))) return;
+        const raw = srvRows.get(o.id);
+        if (!raw) return;                           // ikke på serveren (ennå)
+        const srv = NOTE_CLEAN[type](raw);
+        NOTE_CONTENT_FIELDS[type].concat(['ts', 'org']).forEach((f) => {
+          if (JSON.stringify(o[f]) === JSON.stringify(srv[f])) return;
+          o[f] = srv[f];
+          changed = true;
+        });
+      });
+    };
+    each('note_project', state.noteProjects || []);
+    (state.noteProjects || []).forEach((p) => each('note_folder', p.folders || []));
+    each('note', state.notes || []);
+    return changed;
+  }
+
   // Den KANONISKE posisjonen tilbake på raden, når `.pos` er den personlige.
   function withCanonPos(row, o) {
     if (!o._canon) return row;
@@ -19563,15 +19641,19 @@
        tilbake UENDRET — en personlig omrokkering skal aldri endre hva andre
        ser, og en visning skal aldri kunne flytte noe i en annens bokhylle. */
     if (type === 'note_project') return withCanonPos(cleanNoteProject(o), o);
+    /* Overstyringene gjelder KUN så lenge raden faktisk vises i den virtuelle
+       bokhyllen (eller uten notatbok). Drar man den ut i en ekte bokhylle, er
+       det en reell flytting — og da skal den nye plasseringen skrives, ikke
+       den gamle kanoniske. */
     if (type === 'note_folder') {
       const r = withCanonPos(cleanNoteFolder(o), o);
-      if (o._canonProject) r.project = o._canonProject;
+      if (o._canonProject && o.project === SHARED_NOTES_ID) r.project = o._canonProject;
       return r;
     }
     if (type === 'note') {
       const r = withCanonPos(cleanNote(o), o);
-      if (o._canonProject) r.project = o._canonProject;
-      if (o._canonFolder !== undefined) r.folder = o._canonFolder || null;
+      if (o._canonProject && o.project === SHARED_NOTES_ID) r.project = o._canonProject;
+      if (o._canonFolder !== undefined && !o.folder) r.folder = o._canonFolder || null;
       return r;
     }
     if (type === 'object_link') return cleanLink(o);
@@ -20865,6 +20947,13 @@
          den som allerede var i gang. Runden tas igjen når demoen er ferdig. */
       if (demoActive) return;
       lastMy = my;
+      /* Rader vi IKKE har rett til å skrive: en lokal endring på dem kan aldri
+         lande, og skal derfor ikke bli stående. Uten dette ville fletteren
+         funnet den samme divergensen hver runde og pushet den samme skrivingen
+         i det uendelige (vakten reverterer stille), mens kopien på skjermen så
+         lagret ut. `lastViewSig` nullstilles så gjentegningen faktisk skjer —
+         staten er endret her, ikke i fletteresultatet. */
+      if (revertUnwritableNoteEdits(my)) { lastViewSig = null; saveLocal(); }
       const remote = contentDocFromMy(my);
       const meta = metaFromMy(my);
       // `unknownHistory` er ikke-tom når cachen ble lest uten en gyldig base (kald
@@ -21964,6 +22053,15 @@
     inherited: 'share.removeHintInherited',
     lastOwner: 'share.removeHintLastOwner',
   };
+  /* «Har tilgang via …» skal peke på det NIVÅET tilgangen faktisk kommer fra,
+     ikke alltid på «området». Kategorien serveren sender sier hvilket det er,
+     så den ene koden `inherited` holder — teksten velges her. */
+  const INHERITED_HINT_BY_CATEGORY = {
+    noteProjectOwner: 'share.removeHintInheritedShelf',
+    noteProjectMember: 'share.removeHintInheritedShelf',
+    noteFolderOwner: 'share.removeHintInheritedNotebook',
+    noteFolderMember: 'share.removeHintInheritedNotebook',
+  };
 
   function renderShareModal(type, id, obj, body, closeFn) {
     body.innerHTML = '';
@@ -22136,8 +22234,10 @@
         // Serveren sender en språknøytral kode (`removeHintCode`) som vi
         // oversetter selv; `removeHint` er den gamle, norske teksten og brukes
         // kun hvis koden mangler (en server som ennå ikke er migrert).
-        hint.textContent = REMOVE_HINT_KEY[mbr.removeHintCode]
-          ? tr(REMOVE_HINT_KEY[mbr.removeHintCode]) : mbr.removeHint;
+        const hintKey = mbr.removeHintCode === 'inherited'
+          ? (INHERITED_HINT_BY_CATEGORY[mbr.category] || REMOVE_HINT_KEY.inherited)
+          : REMOVE_HINT_KEY[mbr.removeHintCode];
+        hint.textContent = hintKey ? tr(hintKey) : mbr.removeHint;
         box.appendChild(hint);
       }
       row.classList.toggle('is-inherited', mbr.direct === false);

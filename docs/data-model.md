@@ -79,9 +79,15 @@ SLETTET når den bokhyllen forsvant. Klienten leser den samme regelen
 
 Innholdet (`doc`) er et strukturert riktekstdokument, ikke HTML, og rir på
 innholdsregisteret som ÉN verdi — konfliktmodellen er altså per DOKUMENT.
-Notatene deles ikke, har ingen roller, låser eller kategorier, og
-`activeProject`/`activeFolder` huskes per enhet (og på kontoen, se under).
-Autoritativt: [`notater-plan.md`](notater-plan.md).
+Notatene **deles på alle tre nivåene**, med de samme rollene, låsene og
+capabilities som områder og mapper
+([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14): objektene bærer
+`_role`, `_caps`, `_locked`/`_unlocked` og `_shared` som listesidens. Kategorier
+finnes ikke, og `activeProject`/`activeFolder` huskes per enhet (og på kontoen,
+se under). En notatbok eller et notat som er delt DIREKTE uten at bokhyllen er
+lesbar, samles i én virtuell bokhylle (`__shared_notes__`) som aldri pushes —
+`_canonProject`/`_canonFolder` bærer da den kanoniske plasseringen, som `_canon`
+gjør for frie mapper. Autoritativt: [`notater-plan.md`](notater-plan.md).
 
 **TO UAVHENGIGE TILSTANDER PÅ HVERT NOTATNIVÅ.** `trashed` er søppelkassen —
 den samme som på de fire listenivåene ([`trash.md`](trash.md)) — og `archived`

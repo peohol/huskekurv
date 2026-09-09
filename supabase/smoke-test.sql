@@ -113,7 +113,7 @@ begin
     -- Notater (docs/notater-plan.md): Bokhylle > Notatbok > Notat.
     -- `folder_id` er null for et fritt notat rett i bokhyllen. Låsen og
     -- invitasjonspolicyen er delingsmodellens (docs/rettigheter-og-deling.md
-    -- del 15) — de settes av RPC-er, men kolonnene må finnes.
+    -- del 14) — de settes av RPC-er, men kolonnene må finnes.
     'note_projects:id', 'note_projects:owner_id', 'note_projects:name',
     'note_projects:collapsed', 'note_projects:trashed', 'note_projects:archived',
     'note_projects:locked', 'note_projects:unlocked', 'note_projects:invite_policy',

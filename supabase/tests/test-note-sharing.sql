@@ -1,5 +1,5 @@
 -- ============================================================
--- Testsuite for DELING AV NOTATER (docs/rettigheter-og-deling.md del 15,
+-- Testsuite for DELING AV NOTATER (docs/rettigheter-og-deling.md del 14,
 -- docs/notater-plan.md). Kjøres mot en LOKAL PostgreSQL med
 -- tests/local-stub.sql + users-and-sharing.sql lastet først. Se run-tests.sh.
 --

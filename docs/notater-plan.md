@@ -191,6 +191,13 @@ finnes heller ingen unik indeks på paret: to enheter som lager den samme
 koblingen offline ville ellers fått den ene skrivingen permanent avvist. Klienten
 viser og fjerner koblinger PER PAR, så en dublett er usynlig.
 
+**Koblingen er den ENKELTE brukerens egen.** Nå som notatene kan deles, kan
+flere se det samme notatet — men koblingene fra det vises bare for den som lagde
+dem. Den andre siden er ofte et privat område eller en privat liste, og en delt
+kobling ville røpet både at objektet finnes og hva det heter. Å opprette en
+kobling krever lesetilgang til BEGGE sider i det øyeblikket; den gir aldri
+tilgang i seg selv.
+
 **UI-et er én modal og én rad.** «Koblinger» i objektmenyen (på begge sider)
 åpner `#links-modal`: øverst koblingene som finnes — trykk åpner målet, ✕
 fjerner koblingen — og under dem det GLOBALE SØKET scopet til den andre siden.
@@ -249,13 +256,38 @@ Autoritativt for hele mekanikken: [`trash.md`](trash.md).
 
 ## Deling og rettigheter
 
-Datamodellen skal fra starten unngå valg som gjør fremtidig deling vanskelig.
-Full deling av bokhyller, notatbøker og notater trenger likevel ikke inngå i
-første leveranse.
+Notatsiden har den SAMME rettighetsmodellen som områder og mapper — samme
+rolletabell, samme invitasjonsflyt, samme capability-funksjoner, samme
+delemodal. Autoritativt:
+[`rettigheter-og-deling.md`](rettigheter-og-deling.md) **del 14**.
 
-Når deling implementeres, skal autorisasjon følge Huskis' eksisterende
-serverhåndhevede rettighetsmodell. Deling og samtidig redigering av riktekst må
-vurderes som et eget risikoområde og testes eksplisitt.
+Det korte:
+
+- **Alle tre nivåene kan deles.** Det er den ene bevisste forskjellen fra
+  listesiden, og grunnen er at objektene ikke er de samme: en liste er en del av
+  mappens struktur, mens et NOTAT er dokumentet — enheten folk faktisk vil dele.
+- **Arven går én vei, nedover.** En rolle på bokhyllen gjelder notatbøkene og
+  notatene i den; en rolle på notatboken gjelder notatene i den. Motsatt vei gir
+  en rolle ingenting: den som har fått ett notat delt med seg, ser verken
+  notatboken, bokhyllen eller navnene deres.
+- **To roller, ikke tre.** `owner` og `member`. En ren LESER er et medlem av et
+  LÅST objekt, akkurat som i listefanen — låsen er mekanismen, og den har den
+  samme tretilstandsmodellen langs kjeden notat → notatbok → bokhylle.
+- **Å arkivere er innhold, å slette er destruktivt.** Arkivet krever
+  redigeringsrett; søppelkassen krever sletterett. Et rent DIREKTE medlem av et
+  objekt kan aldri slette det for alle.
+- **Flytting reparenter, den kopierer aldri.** Id-ene består, innholdet består,
+  direkte roller består; tilgangen regnes om fra den nye forelderen. Det finnes
+  ingen kryssdomene-kopiering på notatsiden.
+- **«Delt med meg».** En notatbok eller et notat som er delt direkte uten at
+  bokhyllen er lesbar, vises i én virtuell bokhylle — som frie mapper i
+  listefanen. Bokhyllens navn lekker aldri.
+- **En kobling er den enkelte brukerens egen.** Den gir aldri tilgang, den
+  vises bare for eieren sin, og den blir stående (uåpnelig) hvis man mister
+  tilgang til målet.
+
+Sanntids samskriving i samme notat er fortsatt ikke med: konfliktmodellen er per
+DOKUMENT (innholdsregisteret), som planen sier.
 
 ## Leveranseplan
 
@@ -381,24 +413,81 @@ Slik ble det:
   koblingsmål finnes, og `on delete cascade` gjør en hengende kobling umulig.
   Raden har ingen mutable felter, så den har verken UPDATE-policy eller
   konfliktfletting — gravsteinene avgjør.
-- **Deling er fortsatt ikke med.** Notatene hører til kontoen alene, og
-  koblingene er den enkelte brukerens egne krysshenvisninger.
+- **Deling var ikke med i dette steget.** Notatene hørte til kontoen alene, og
+  koblingene var den enkelte brukerens egne krysshenvisninger. Delingen kom i
+  PR 3A; koblingen er fortsatt den enkeltes egen.
 
 Dekket av `tests/notes-lifecycle-links.test.js` (nettleser, desktop + mobil),
 `supabase/tests/test-note-links.sql` (arkivregisteret, RLS mellom to brukere,
 kaskadene, gravsteinene, kontosletting) og
 `tests/notes-tab.test.js` som regresjonsvern for PR 1.
 
-### PR 3 — Deling, robusthet og polering
+### PR 3A — Deling og rettigheter
 
-**Mål:** Gjøre Notater til en moden del av den delte og mobile Huskis-opplevelsen.
+**Mål:** Notatsystemet får en komplett, serverhåndhevet delingsmodell.
 
-Omfang vurderes mot faktisk produktbehov etter PR 1–2, men forventes å omfatte:
+Omfang:
 
-- deling/rettigheter for bokhylle, notatbok og notat — og hva en kobling betyr
-  når det ene objektet er delt og det andre ikke er det;
-- flerbruker- og konfliktatferd;
-- offline/redigering under nettverksbrudd;
+- deling av bokhylle, notatbok og notat, med roller, invitasjoner og
+  capabilities i den EKSISTERENDE modellen;
+- eksplisitt arv nedover, og ingen lekkasje oppover;
+- eier / redaktør / ren leser;
+- flytting mellom foreldre med ulike delingsforhold;
+- tilbakekalling som rydder all underliggende tilgang;
+- hva en kobling betyr når det ene objektet er delt og det andre ikke er det;
+- flerbruker- og konfliktatferd, offline og synk;
+- SQL-tester for serverkontrakten og nettlesertester på desktop og mobil;
+- oppdatert autoritativ dokumentasjon.
+
+Status: **gjennomført**.
+
+Slik ble det:
+
+- **Én modell, ikke to.** Notatsidens tre nivåer bruker den SAMME
+  `memberships`-tabellen, de samme `share_invites`, de samme
+  capability-funksjonene (`can_read`, `can_edit_content`, `can_delete_object`,
+  `can_leave`, `can_manage_members` …) og den samme `#share-modal`-en. Utvidelsen
+  er nye grener i de eksisterende funksjonene, ikke et parallelt system.
+- **Alle tre nivåene kan deles**, og deling ligger i den VANLIGE objektmenyen på
+  hvert av dem — ingen ny menytype ([`menus.md`](menus.md)).
+- **Låsen lager leseren.** Ingen tredje rolle ble innført: notatobjektene fikk
+  `locked`/`unlocked` og `invite_policy` som områder og mapper, og et medlem av
+  et låst objekt ER en ren leser. Editoren blir da skrivebeskyttet, verktøylinjen
+  skjult, og ＋-knappene og menyens skrive-rader forsvinner.
+- **Å opprette spør FORELDEREN.** `can_create_child`/`can_create_note` er
+  vilkåret i `notes_insert`/`note_folders_insert`, ikke eierskapet på raden —
+  ellers kunne et medlem av en låst bokhylle lagt inn rader ingen kunne redigere.
+- **Flytting reparenter.** `note_folders_before_update`/`notes_before_update`
+  krever destruktiv myndighet i kilden og opprettelsesrett i målet; ingenting
+  kopieres og ingen id endres. Kaskaden som drar notatene etter en flyttet
+  notatbok er invarianten, ikke en flytting, og krever derfor ingen egen
+  myndighet per notat.
+- **«Delt med meg»** er én virtuell bokhylle for notatbøker og notater delt
+  direkte, bygget av nøyaktig den samme mekanikken som «Mapper delt med meg».
+  Den pushes aldri, og den kanoniske plasseringen skrives tilbake uendret.
+- **Koblingen er brukerens egen.** Nå som flere kan se det samme notatet, kunne
+  en delt kobling røpet både at et privat område finnes og hva det heter. Den
+  vises derfor bare for sin egen eier; å opprette den krever lesetilgang til
+  BEGGE sider, og tap av tilgang lar raden stå (uåpnelig) i stedet for å ødelegge
+  den.
+- **Ingen gjenoppstandelse.** En rad som forsvinner fra `get_my_doc` står i
+  synk-basen og dropper derfor stille lokalt — den leses aldri som «laget her» og
+  settes aldri inn igjen. Editoren lukkes hvis notatet var åpent.
+- **Migrering:** hver bokhylle uten EN ENESTE rolle får oppretteren som eier.
+  Kriteriet gjør backfillen naturlig idempotent og hindrer at en bevisst fjernet
+  rolle kommer tilbake.
+
+Dekket av `supabase/tests/test-note-sharing.sql` (fire brukere: roller og arv på
+tre nivåer, ren leser, sletterett, flytting, tilbakekalling, uautoriserte
+skrivinger, koblinger, gravsteiner, kontosletting) og
+`tests/notes-sharing.test.js` (nettleser, desktop + mobil).
+
+### PR 3B — Robusthet og polering
+
+**Mål:** Gjøre Notater til en moden del av den mobile Huskis-opplevelsen.
+
+Omfang vurderes mot faktisk produktbehov:
+
 - Android/Capacitor-regresjoner;
 - tilgjengelighet og tastaturnavigasjon;
 - endelig mobilpolering;
@@ -438,20 +527,18 @@ databasekontrakten; døp dem ikke om.
 |---|---|
 | PR 1 — Fundament + fungerende Notater-fane | **Gjennomført** |
 | PR 2 — Livssyklus + integrasjon | **Gjennomført** |
-| PR 3 — Deling, robusthet og polering | Ikke startet |
+| PR 3A — Deling og rettigheter | **Gjennomført** |
+| PR 3B — Robusthet og polering | Ikke startet |
 
-**Neste steg:** PR 3 — deling, robusthet og polering. Notatene er nå en hel del
-av appen for ÉN bruker: de kan legges bort og hentes fram igjen, de finnes i
-søket, og de henger sammen med listene. Det som står igjen er å slippe andre
-til — og da må det avgjøres hva en kobling betyr når det ene objektet er delt
-og det andre ikke er det.
+**Neste steg:** PR 3B — robusthet og polering. Notatene er nå en hel del av
+appen, også for flere brukere: de kan deles på alle tre nivåene, med de samme
+rollene, den samme delemodalen og den samme serverhåndhevede modellen som
+listene.
 
-**Datamodellen forbereder ting som IKKE er implementert.** Det er ikke det
-samme som ferdig:
+**Datamodellen forbereder fortsatt ting som IKKE er implementert.** Det er ikke
+det samme som ferdig:
 
 - `object_links` kan bære flere typer per side enn de seks som finnes i dag —
   men bare de seks er koblingsbare nå.
-- Notatradene har `owner_id` og de samme registrene som delt innhold — men det
-  finnes ingen roller, ingen capabilities og ingen delings-UI for dem.
 - Lenker i et notat lagres med adressen i `data-url` — men UI-et åpner dem
   fortsatt ikke.

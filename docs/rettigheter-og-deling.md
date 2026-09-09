@@ -18,16 +18,33 @@ opQueue).
 
 ## 1. Hva kan deles
 
-Bare **områder** og **mapper**.
+Huskis har to hoveddeler, og de deler modell — ikke kode ved siden av
+hverandre:
+
+| Hoveddel | Delbare nivåer | Arver tilgangen |
+|---|---|---|
+| **Lister** | område, mappe | liste, listepunkt, kategori |
+| **Notater** | bokhylle, notatbok, **notat** | – |
+
+På listesiden kan bare **områder** og **mapper** deles.
 
 * En **liste** kan aldri deles direkte. Den arver tilgangen fra mappen sin.
 * **Listepunkter og kategorier** arver fra listen og dermed fra mappen.
 
-Hierarkiet er som før:
+På notatsiden kan **alle tre nivåene** deles. Det er den ene bevisste
+forskjellen, og grunnen er at objektene ikke er de samme: en liste er en del av
+mappens struktur, mens et NOTAT er selve dokumentet — den enheten folk faktisk
+vil dele. Alt annet er likt: samme rolletabell, samme invitasjonsflyt, samme
+capability-funksjoner, samme delemodal.
+
+Hierarkiene:
 
 ```
-Område > Mappe > Liste > Listepunkt/kategori
+Område   > Mappe    > Liste > Listepunkt/kategori
+Bokhylle > Notatbok > Notat
 ```
+
+Detaljene for notatsiden står i **del 14**.
 
 Hver mappe har **alltid ett kanonisk område**. «Mapper delt med meg» er bare
 en alternativ *visning* av direkte delte mapper — ikke en reell forelder, og
@@ -35,8 +52,8 @@ aldri et gyldig flyttemål.
 
 Serveren avviser ethvert forsøk på å dele en liste — også fra en gammel klient,
 en modifisert klient eller et rått PostgREST-kall (`create_share_invite` godtar
-kun `universe`/`group`, og `memberships`/`share_invites` har en CHECK som holder
-`card_id` tom).
+kun de fem typene i `shareable_types()`, og `memberships`/`share_invites` har en
+CHECK som holder `card_id` tom og krever nøyaktig én av de fem id-kolonnene).
 
 ---
 
@@ -119,6 +136,10 @@ et optimistisk «alt er lov» viste da eier-kontroller («Lås nå», «Slett �
 alle») til vanlige medlemmer, som deretter fikk avslag fra serveren. En kontroll
 brukeren ikke har lov til å bruke skal ikke være synlig; det motsatte er en
 feilmelding forkledd som en knapp.
+
+Alle capability-funksjonene tar `p_type`, og de fem delbare typene er
+`universe`, `group`, `note_project`, `note_folder` og `note` (`shareable_types()`
+er lista). Låser og lås-unntak finnes i tillegg på `card`.
 
 | Capability | SQL-funksjon |
 |---|---|
@@ -695,7 +716,161 @@ på nytt — en rolle som senere er fjernet med vilje skal ikke komme tilbake.
 
 ---
 
-## 14. Testdekning
+---
+
+## 14. Notatsiden: Bokhylle > Notatbok > Notat
+
+Notatene har den SAMME modellen som områder og mapper — roller i
+`memberships`, invitasjoner i `share_invites`, capabilities regnet ut på
+serveren — i den samme tabellen og med den samme koden. Det som er notatsidens
+eget står her.
+
+### Hva som kan deles, og hvordan arven går
+
+Alle tre nivåene kan deles direkte. **Arven går ÉN vei, nedover:**
+
+* en rolle på **bokhyllen** gjelder notatbøkene og notatene i den;
+* en rolle på **notatboken** gjelder notatene i den;
+* en rolle på **notatet** gjelder notatet.
+
+Motsatt vei gir en rolle ingenting. Den som har fått ett notat delt med seg,
+ser verken notatboken, bokhyllen, navnene deres eller medlemslistene deres —
+nøyaktig som en direkte mappemottaker aldri ser området mappen står i.
+
+### Roller
+
+`owner` og `member`, som ellers. Det finnes **ingen egen leser-rolle**: en ren
+leser er et medlem av et LÅST objekt, akkurat som i listefanen. Låsen er derfor
+mekanismen som skiller redaktør fra leser, og den har den samme
+tretilstandsmodellen (låst / unntak / arv) langs kjeden **notat → notatbok →
+bokhylle**.
+
+* **Bokhylleeiere** er dynamiske supereiere av alle notatbøker og notater i
+  bokhyllen — de trenger ingen egne rader.
+* **Eksplisitte notatbokeiere** har full myndighet i notatboken og notatene i
+  den.
+* **Eksplisitte notateiere** har full myndighet over notatet.
+* Den som oppretter noe blir eier — med mindre rollen alt er arvet ovenfra. En
+  konto som jobber alene får derfor ÉN rad per bokhylle, ikke én per notat.
+
+**Siste-eier-invarianten gjelder BOKHYLLEN** (som et område). En notatbok og et
+notat kan stå uten eksplisitt eier, for bokhylleeierne dekker dem.
+
+### Hvem får gjøre hva
+
+| Handling | Bokhylle | Notatbok | Notat |
+|---|---|---|---|
+| **lese** | rolle på bokhyllen | rolle på notatboken **eller** bokhyllen | rolle på notatet, notatboken **eller** bokhyllen |
+| **redigere innhold** | lesetilgang + (eier ELLER ikke effektivt låst) | ⟶ | ⟶ |
+| **opprette under** | redigeringsrett på bokhyllen | redigeringsrett på notatboken | – |
+| **omrokkere** | alltid (PERSONLIG rekkefølge) | redigeringsrett på bokhyllen | redigeringsrett på forelderen |
+| **arkivere / hente ut av arkivet** | redigeringsrett | ⟶ | ⟶ |
+| **slette / gjenopprette (felles søppel)** | kun bokhylleeiere | notatbokeiere, ELLER et bokhylle­medlem når notatboken er åpen | notateiere, ELLER et medlem ARVET ovenfra når notatet er åpent |
+| **dele videre (medlem)** | eiere, ELLER medlemmer når invitasjons­policyen tillater det | ⟶ | ⟶ |
+| **dele videre (eierskap)** | kun eiere på nivået | ⟶ | ⟶ |
+| **låse / gjøre unntak** | bokhylleeiere | notatbokeiere; unntak fra en bokhyllelås kun av bokhylleeiere | notateiere; unntak som over |
+| **forlate** | rolle på bokhyllen (siste eier kan ikke) | direkte rolle **og** ingen rolle i bokhyllen | direkte rolle **og** ingen rolle i notatboken eller bokhyllen |
+
+**Å arkivere er INNHOLD, å slette er destruktivt.** Arkivet er reversibelt og
+tar ingenting fra noen, så det krever bare redigeringsrett. Søppelkassen er
+felles for alle med tilgang, så den krever sletterett. Skillet er verdt å holde
+presist: et medlem skal kunne rydde uten å kunne ta noe fra alle andre.
+
+**Et rent DIREKTE medlem kan aldri slette objektet for alle.** Samme grense som
+holder et direkte mappemedlem fra å slette mappen: deler man et notat med noen,
+deler man lesing og redigering — ikke retten til å ta det fra resten.
+
+### Flytting mellom foreldre med ulike delingsforhold
+
+Et notat eller en notatbok som flyttes til en ny forelder blir **reparentet** —
+aldri kopiert og slettet. Id-ene består, innholdet består, og ingen rad
+forsvinner. Kravet er destruktiv myndighet i KILDEN (`can_move_note_object` =
+`can_delete_object`) og opprettelsesrett i MÅLET (`can_create_child` /
+`can_create_note`); begge håndheves av vaktene (`note_folders_before_update`,
+`notes_before_update`).
+
+Tilgangen regnes om fra den nye forelderen:
+
+* de som bare ARVET tilgang fra den gamle forelderen, mister den;
+* målets medlemmer får den;
+* **DIREKTE roller på objektet som flyttes, består.**
+
+Det finnes altså ingen kryssdomene-kopiering på notatsiden, og dermed heller
+ingen id-mapping å holde rede på. En notatbok som flyttes drar notatene sine med
+seg (`note_folders_cascade`); den kaskaden er invarianten, ikke en flytting, og
+krever derfor ingen egen myndighet på hvert notat.
+
+### Hva som skjer når tilgang trekkes tilbake
+
+`revoke_share` og `leave_share` rydder NEDOVER: fjernes bokhyllerollen, ryddes
+også direkte roller på notatbøker og notater i bokhyllen, og ventende
+invitasjoner på alle tre nivåene. Ingen skjult tilgang blir stående igjen.
+
+Har brukeren ingen DIREKTE rolle, men likevel tilgang, kommer den ovenfra — og
+da avvises kallet med `PT409` og en forklaring som peker på nivået over, i
+stedet for å bli en stille no-op.
+
+Hos mottakeren forsvinner raden fra neste `get_my_doc`. Klienten dropper den
+lokalt (den står i synk-basen, så den leses ikke som «nyopprettet her»),
+editoren lukkes hvis notatet var åpent, og en nøktern melding forklarer hva som
+skjedde. **En gammel lokal kopi blir aldri stående redigerbar.**
+
+### «Delt med meg» på notatsiden
+
+En notatbok eller et notat kan være delt direkte uten at bokhyllen over er
+lesbar (`free = true` i `get_my_doc`). Da finnes det ingen forelder å tegne dem
+i — og bokhyllens navn skal aldri lekke. De samles derfor i ÉN virtuell
+bokhylle, «Delt med meg», nøyaktig som frie mapper samles i «Mapper delt med
+meg». Den finnes ikke i databasen, pushes aldri, og har verken delings- eller
+opprettelseskontroller. Rekkefølgen i den er personlig, og den KANONISKE
+plasseringen skrives tilbake uendret.
+
+### Rekkefølge
+
+* **Personlig** (`memberships.pos`): bokhyllene på toppnivå, og notatbøker/notater
+  som vises i «Delt med meg».
+* **Felles** (`pos` på objektraden): notatbøkene i en bokhylle, og notatene i en
+  notatbok eller blant de frie notatene.
+
+### Koblinger når notatene deles
+
+En kobling er den ENKELTE brukerens egen krysshenvisning: `owner_id` eier den,
+og bare hen ser den — også når begge objektene er delt. Det er en avgjørelse,
+ikke en forglemmelse: den andre siden er ofte et privat område eller en privat
+liste, og en delt kobling ville røpet både at objektet finnes og hva det heter
+for alle som deler notatet.
+
+* Å opprette en kobling krever **lesetilgang til BEGGE sider** i det øyeblikket.
+* En kobling gir **aldri tilgang** i seg selv.
+* Mister man tilgang til målet, blir raden stående, men kan ikke åpnes. Kommer
+  tilgangen tilbake, virker den igjen.
+* Permanent sletting av et objekt tar koblingene med (`on delete cascade`) og
+  gravlegger dem.
+
+### Kontosletting
+
+Samme regel som ellers: **det som blir stående uten eier når jeg er borte, er
+mitt og følger med.**
+
+| Objektet | Hva skjer |
+|---|---|
+| Bokhylle jeg er eneste eier av | slettes helt, med notatbøker og notater og gravstein for hver rad — også for dem jeg har delt med |
+| Bokhylle med andre eiere | står igjen; jeg fjernes som medlem |
+| Bokhylle jeg bare er medlem av | urørt; jeg fjernes som medlem |
+| Notatbok/notat jeg er eneste eksplisitte eier av | står igjen — bokhylleeierne er dynamiske supereiere |
+| Innhold jeg har OPPRETTET i noe som overlever | står igjen; oppretteren arves av en gjenværende bokhylleeier |
+| Koblingene mine | slettes (de er mine alene) |
+
+### Migrering
+
+Notatene var eierstyrte før denne runden. `users-and-sharing.sql` gir hver
+bokhylle som ennå ikke har EN ENESTE rolle, oppretteren som eier; notatbøkene og
+notatene arver. Kriteriet «ingen rader i det hele tatt» gjør backfillen naturlig
+idempotent og hindrer at en bevisst fjernet rolle kommer tilbake.
+
+---
+
+## 15. Testdekning
 
 * `supabase/tests/test-roles-and-sharing.sql` — roller, medlemslister,
   invitasjoner, låser, sletting/forlatelse, siste-eier-invarianten, personlig
@@ -712,3 +887,10 @@ på nytt — en rolle som senere er fjernet med vilje skal ikke komme tilbake.
   fullt / tastatur) og utfallet i «databasen» (desktop + mobil).
 * `tests/roles-and-sections.test.js` — de tre seksjonene, capability-styrte
   knapper, medlemskategorier, breadcrumbs, tap av tilgang (desktop + mobil).
+* `supabase/tests/test-note-sharing.sql` — notatsiden: roller og arv på tre
+  nivåer, ren leser via lås, sletterett, flytting mellom foreldre med ulike
+  delingsforhold, tilbakekalling, uautoriserte skrivinger, koblinger på tvers av
+  delt og privat, gravsteiner og kontosletting (fire brukere).
+* `tests/notes-sharing.test.js` — delerad i den vanlige objektmenyen på alle
+  tre nivåene, delemodalen, eier/redaktør/leser, «Delt med meg»-bokhyllen,
+  tilbakekalling og samtidige endringer (desktop + mobil).

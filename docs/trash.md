@@ -62,8 +62,10 @@ Detaljer som er lette å bryte:
   kjøres, så objektet ikke også blir omrokkert eller overført.
 - **Uten slette-rett vises ingen kasse.** `draggedCanBeTrashed()` bruker de
   samme capabilities som objektmenyens «Slett»-rad og feiler LUKKET — man kan
-  ikke sikte på noe serveren ville avvist. Notatene har ingen lås å spørre om:
-  de hører til kontoen alene, så der armes kassen så snart objektet finnes.
+  ikke sikte på noe serveren ville avvist. Det gjelder også notatsiden, som nå
+  har roller og låser som resten ([`rettigheter-og-deling.md`](rettigheter-og-deling.md)
+  del 14): en ren leser får ingen kasse å sikte på, og den virtuelle «Delt med
+  meg»-bokhyllen kan aldri slettes.
 - **Kassen må ligge under board-ets ROT for å bli registrert som sone.** Både
   liste-kassen og notat-kassen står i TOPPLINJA, utenfor selve board-et, så de
   to board-ene har `document.body` som rot (selektorene er fortsatt scopet).

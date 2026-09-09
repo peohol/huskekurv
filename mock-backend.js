@@ -1307,7 +1307,7 @@
     // Idéer henger på KONTOEN, ikke på hierarkiet: ingen join, bare eierskap.
     var myIdeas = (db.ideas || []).filter(function (d) { return d.owner_id === uid; });
     /* Notatene hentes på ROLLE, ikke eierskap (docs/rettigheter-og-deling.md
-       del 15): bokhyller jeg har en rolle på, notatbøker i dem PLUSS
+       del 14): bokhyller jeg har en rolle på, notatbøker i dem PLUSS
        notatbøker delt direkte med meg (`free`), og notater i lesbare
        bokhyller/notatbøker PLUSS notater delt direkte med meg. */
     var myNoteProjects = (db.note_projects || []).filter(function (p) {
@@ -1778,7 +1778,7 @@
       if (table === 'items' && findC(db, row.card_id) && !canCreateChild(db, 'card', row.card_id, uid))
         throw new Error('mangler tilgang til listen');
       /* Notatene: å OPPRETTE spør FORELDEREN (docs/rettigheter-og-deling.md
-         del 15). En notatbok krever opprettelsesrett i bokhyllen, et notat i
+         del 14). En notatbok krever opprettelsesrett i bokhyllen, et notat i
          notatboken sin — eller i bokhyllen, for et fritt notat. */
       if (table === 'note_folders') {
         if (findNP(db, row.project_id) && !canCreateChild(db, 'note_project', row.project_id, uid)) {
