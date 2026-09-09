@@ -395,6 +395,16 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   og ikke flex: med `flex: 1 1 0` blir beholderen bare like bred som innholdet,
   og `min-width: auto` klemmer det lengste segmentet ut av takt.)
 
+  **Like brede er en INVARIANT, og den må håndheves helt ned i bredden.**
+  Rutenett-elementer har `min-width: auto` og nekter å krympe under sitt eget
+  innhold, så på en smal nok skjerm sluttet sporene å være like — og da traff
+  verken den glidende flaten eller dragets geometri segmentene lenger, siden
+  begge regner den samme brøken. `.seg-btn` setter derfor `min-width: 0`.
+  Teksten må da gi etter for noe, og hvert bruksted velger selv hvordan: en
+  bryter på en linje som koster høyde lar etiketten fylle sporet, mens
+  tidshorisonten — som står i en modal med plass nedover — lar den BREKKE
+  (se [`kommende-hendelser.md`](kommende-hendelser.md)).
+
   Hvilket attributt det er, avgjøres av ROLLEN bruksstedet satte: en fane-rekke
   (`role="tablist"`) melder `aria-selected`, en innstilling med n stillinger
   (`role="radiogroup"`, tidshorisonten) melder `aria-checked`. Formen,

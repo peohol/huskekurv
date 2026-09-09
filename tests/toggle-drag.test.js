@@ -24,6 +24,11 @@
     8. TIDSHORISONTEN i «Kommende hendelser» er den SAMME bryteren: `.seg` med
        den grønne, glidende flaten og den samme gesten — men fortsatt med
        radiogruppens `aria-checked`, ikke fane-rekkens `aria-selected`.
+    9. SEGMENTENE ER LIKE BREDE HELT NED I BREDDEN (320, 280 og 200 px), og
+       bryteren renner ikke ut av sin egen boks — både den glidende flaten og
+       dragets geometri regner `100% / n`, så ulike spor gjør begge feil. Og
+       tidshorisontens etikett beholder luften inn til segmentkanten i stedet
+       for å legge seg kant i kant med naboen.
 
   Kjøres på BÅDE desktop- og mobil-viewport (mus og finger er den samme
   pekerkoden, men terskelen og `touch-action` er ikke det).
@@ -230,6 +235,61 @@ async function run(label, viewport, mobile) {
     horisontEtter.drag === '' &&
     horisontEtter.aria.join(',') === 'week=true,month=false,all=false',
     JSON.stringify(horisontEtter));
+
+  /* 9) LIKE BREDE SEGMENTER ER SELVE FORUTSETNINGEN, helt ned i bredden.
+     Flaten som glir er `100% / --seg-n` bred, og dragets geometri regner den
+     SAMME brøken (`togGeometry`) — begge er feil i det øyeblikket sporene
+     slutter å være like. Rutenett-elementer har `min-width: auto` og nekter å
+     krympe under innholdet sitt, så uten `min-width: 0` på `.seg-btn` sprikte
+     segmentene på en smal nok skjerm og bryteren rant ut av sin egen boks
+     (MÅLT: 37/57/38 i en 120 px bred bryter). Måles på BEGGE bryterne, siden
+     de deler regelen, og helt ned: invarianten er kontrollens, ikke en bestemt
+     skjerms. Modalen klipper (`overflow: hidden`), så det som renner ut, er
+     borte. */
+  for (const bredde of [320, 280, 200]) {
+    await p.setViewportSize({ width: bredde, height: 780 });
+    await p.waitForTimeout(250);
+    const smal = await p.evaluate(() => {
+      const mål = (el) => {
+        if (!el) return null;
+        const b = [...el.children].map((k) => Math.round(k.getBoundingClientRect().width));
+        return { b, likeBrede: Math.max(...b) - Math.min(...b) <= 1,
+          renner: el.scrollWidth > Math.ceil(el.getBoundingClientRect().width) };
+      };
+      return { horisont: mål(document.getElementById('events-horizon')),
+        faner: mål(document.getElementById('main-tabs')) };
+    });
+    log(label + ' 9 @' + bredde + 'px: segmentene er fortsatt like brede, og bryteren renner ikke ut',
+      !!smal.horisont && smal.horisont.likeBrede && !smal.horisont.renner &&
+      !!smal.faner && smal.faner.likeBrede && !smal.faner.renner,
+      JSON.stringify(smal));
+
+    /* … OG ETIKETTEN BEHOLDER LUFTEN SIN. Like brede spor er bare halve
+       svaret: teksten må fortsatt få plass INNENFOR sitt eget segment. Med
+       `white-space: nowrap` gjorde den ikke det — den ble ikke kappet, men
+       spiste hele polstringen og la seg kant i kant med nabosegmentet, så
+       «1 måned» endte under den grønne markeringen til «Alle» (MÅLT på
+       280 px: tekst 65 px i et 65 px spor, 0 igjen på hver side). Med
+       brekkingen står den på to linjer med luften i behold. Måles bare på de
+       ekte telefonbreddene: på 200 px er det lengste ORDET bredere enn
+       sporet uansett, og da finnes det ingen luft å kreve. */
+    if (bredde >= 280) {
+      const luft = await p.evaluate(() => [...document.querySelectorAll('#events-horizon .seg-btn')]
+        .map((b) => {
+          const r = b.getBoundingClientRect();
+          // Ekte glyfbredde, ikke boksens: et Range ser hva teksten krever.
+          const rng = document.createRange(); rng.selectNodeContents(b);
+          const t = rng.getBoundingClientRect();
+          return { t: b.textContent, venstre: Math.round(t.left - r.left),
+            høyre: Math.round(r.right - t.right) };
+        }));
+      log(label + ' 9 @' + bredde + 'px: … og etiketten står med luft inn til segmentkanten',
+        luft.length === 3 && luft.every((x) => x.venstre >= 4 && x.høyre >= 4),
+        JSON.stringify(luft));
+    }
+  }
+  await p.setViewportSize(viewport);
+  await p.waitForTimeout(250);
   await p.evaluate(() => window.__huskis.closeEventsModal());
   await p.waitForTimeout(250);
 

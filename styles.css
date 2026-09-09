@@ -4426,6 +4426,23 @@ body.no-auth .corner-controls { display: none; }
    pille under en venstrestilt overskrift står ikke på noen linje. Panelet står
    i selektoren fordi `.seg` kommer SENERE i fila og ellers vinner på likt. */
 .events-horizon-panel .events-horizon { align-self: stretch; }
+/* … og HVORDAN etiketten gir etter når sporet krymper. Segmentene holder seg
+   like brede uansett (`min-width: 0` på `.seg-btn`), men da må teksten vike
+   for noe. Her er etiketten ren tekst i en modal med plass NEDOVER, så den
+   BREKKER i stedet for å bli kappet — «1 måned» over to linjer er lesbart,
+   «1 må…» er det ikke. Den glidende flaten er `top`/`bottom`-forankret og
+   strekker seg med høyden, så markeringen følger med.
+
+   Polstringen er knappere enn hovedbryterens 14 px, og det er regnet, ikke
+   smak: den lengste etiketten er «1 måned» på 65 px (engelsk «1 month», 63).
+   På 320 px — den smaleste telefonen som fortsatt er i bruk — er sporet 78 px,
+   og 6 px på hver side lar de 65 stå på ÉN linje. Under det brekker den, som
+   den gamle bryteren gjorde allerede fra 320 (den hadde 10 px og bare 55 px
+   igjen til teksten). */
+.events-horizon-panel .events-horizon .seg-btn {
+  white-space: normal;
+  padding-inline: 6px;
+}
 
 /* Luften bærer inndelingen. Gapet er det samme i begge ledd (30 px), så
    avstanden mellom to SEKSJONER er den samme som mellom to grupper og mellom
@@ -5553,6 +5570,14 @@ body.no-auth .corner-controls { display: none; }
 .seg.is-tog-drag::before { transition: none; }
 .seg-btn {
   position: relative;        /* over den glidende flaten */
+  /* LIKE BREDE ER EN INVARIANT, IKKE ET ØNSKE. Rutenett-elementer har
+     `min-width: auto` og nekter å krympe under sitt eget innhold, så på en
+     smal nok skjerm sluttet sporene å være like: da traff verken den glidende
+     flaten (`100% / --seg-n`) eller dragets geometri (`togGeometry`, samme
+     regnestykke) segmentene lenger, og etiketten rant ut av pillen (MÅLT på
+     280 px: 68/93/60 px i en 200 px bred bryter, med markøren på 65). Med 0
+     krymper sporene i takt og regnestykket holder hele veien ned. */
+  min-width: 0;
   appearance: none;
   cursor: pointer;
   display: inline-flex;
