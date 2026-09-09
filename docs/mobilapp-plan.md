@@ -2544,6 +2544,14 @@ linje. SVG-ens `<rect rx>` og `<circle>` finnes ikke i en VectorDrawable og er
 skrevet ut som `pathData`; konverteringen er verifisert pikselidentisk med
 `favicon.svg`.
 
+**Ett sted skiller de to med vilje: STREKEN.** I webappen er merkets strek 1 px
+uansett visningsstørrelse (`docs/design-system.md` → «Ikoner»), fordi den vises
+i alt fra en 16 px favicon til en 52 px `.brand-mark`. Appikonet tegnes derimot
+ÉN gang, stort — 1 px av 108dp ville ikke vært en kontur, men ingenting — så
+vektoren beholder en strek som skalerer med tegningen (`strokeWidth 0.9` i
+24-rutenettet). Geometrien er fortsatt den samme; det er bare strekregelen som
+er ulik, og av samme grunn som for varselikonene (`docs/varsler.md`).
+
 **Rasterfilene er UTLEDET av `favicon.svg`, ikke tegnet på nytt.** Endres
 merket, må de genereres om — og `tests/android-release.test.js` sier fra: den
 leser fargene ut av hver enkelt bildefil og krever at merkets tre kortfarger

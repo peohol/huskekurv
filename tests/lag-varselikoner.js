@@ -49,6 +49,12 @@ const ROOT = path.join(__dirname, '..');
    til at en sirkulær maske ikke klipper hjørnene av kortene. */
 const IKON_SKALA = 0.86;
 
+/* Strekbredden merket rasteriseres med, i favicon-ens eget 24-rutenett. Se
+   `ikonSvg()`: webappens merke har 1 px strek uansett visningsstørrelse, og
+   den regelen må skrus av her — en 192 px raster trenger en strek som
+   skalerer med tegningen. */
+const IKON_STREK = 0.9;
+
 /* MASKEN, i favicon-ens eget 24-rutenett — men med sine egne mål.
 
    Motivet er det samme: det fremste kortet med tre punkter og tre linjer, og
@@ -105,7 +111,15 @@ function faviconKropp() {
 function ikonSvg() {
   return '<svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 24 24">' +
     '<g transform="translate(12 12) scale(' + IKON_SKALA + ') translate(-12 -12)">' +
-    faviconKropp() + '</g></svg>';
+    faviconKropp() + '</g>' +
+    /* Skrur AV favicon-ens `non-scaling-stroke` for denne ene rasteren. I
+       appen skal merket ha 1 px strek uansett størrelse
+       (docs/design-system.md → «Ikoner»), men her tegnes det 192 px bredt og
+       skal SES som et varselikon: 1 px av 192 er ikke en kontur, det er
+       ingenting. Rasteren vil ha en strek som skalerer med tegningen, og
+       IKON_STREK er den bredden i favicon-ens eget 24-rutenett. */
+    '<style>* { vector-effect: none; stroke-width: ' + IKON_STREK + '; }</style>' +
+    '</svg>';
 }
 
 function badgeSvg() {

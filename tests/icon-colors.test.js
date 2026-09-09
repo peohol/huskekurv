@@ -69,12 +69,13 @@ const LAAST = '#c15c56';        // hengelås, låst
 const APEN = '#5da172';         // hengelås, åpen
 const SKJERM = '#7a90ab';       // enheter: skjerm
 const TELEFON = '#a8967a';      // enheter: telefon
+const HYLLETRE = '#b07d4a';     // bokhyllens treplate + braketter, eik
 const KONTO_BLAGRONN = '#85adad'; // kontoikon/kamera-linse/hånd-opp — palettfarge 4, med vilje
 
 const LOVLIGE = new Set([
   ...PALETTE,
   BJELLE, KALENDER_ROD, SOKELINSE, SOL, MAANE, MAPPE, BLYANT, LYSPAERE,
-  SPRAK, LAAST, APEN, SKJERM, TELEFON,
+  SPRAK, LAAST, APEN, SKJERM, TELEFON, HYLLETRE,
   '#ffffff', '#c0c4c9', '#111', '#111111', 'none',
 ]);
 
@@ -222,6 +223,37 @@ const LOVLIGE = new Set([
     html.includes('<rect x="2.5" y="5" width="13" height="9.5" rx="1.6" fill="' + SKJERM + '"></rect>'));
   check('enhets-ikonets telefon er varm grå-tan (' + TELEFON + ')',
     html.includes('<rect x="17" y="9" width="4.5" height="10" rx="1.2" fill="' + TELEFON + '"></rect>'));
+}
+
+/* ---- 9b. Bokhylla: tre bøker i tre ULIKE farger på en treplate ---- */
+// Motivet er beskrevet i icons.js og docs/design-system.md: én hylle (plate +
+// to braketter) og nøyaktig tre bøker. Her sjekkes FARGENE; geometrien — de
+// delte kantene som holder streken på 1 px — vaktes av
+// tests/icon-stroke.test.js. Flatene plukkes ut på farge, ikke på koordinat,
+// så en justert tegning ikke feiler her uten grunn.
+{
+  const BOKFARGER = [LAAST, SOKELINSE, BLYANT];  // rød, blå, gul
+  const hylla = (kilde) => {
+    const svgs = kilde.match(/<svg[\s\S]*?<\/svg>/g) || [];
+    return svgs.filter((v) => v.includes(HYLLETRE));
+  };
+  for (const [navn, kilde] of [['icons.js', icons], ['index.html', html]]) {
+    const treff = hylla(kilde);
+    check('fant bokhylla i ' + navn, treff.length === 1, treff.length + ' forekomster');
+    if (treff.length !== 1) continue;
+    const flater = [...treff[0].matchAll(/fill="(#[0-9a-f]{6})" stroke="none"/g)].map((m) => m[1]);
+    const tre = flater.filter((f) => f === HYLLETRE);
+    const boker = flater.filter((f) => f !== HYLLETRE);
+    check('bokhylla i ' + navn + ' har platen + to braketter i EIK (' + HYLLETRE + ')',
+      tre.length === 3, tre.length + ' flater');
+    check('bokhylla i ' + navn + ' har nøyaktig tre bokrygger', boker.length === 3,
+      boker.join(', '));
+    check('bokryggene i ' + navn + ' har tre ULIKE farger', new Set(boker).size === 3,
+      boker.join(', '));
+    check('bokryggene i ' + navn + ' er de tre motivfargene',
+      BOKFARGER.every((c) => boker.includes(c)), boker.join(', '));
+  }
+  check('hylletreet er ulikt mappens manila-tan', HYLLETRE !== MAPPE, HYLLETRE + ' ≠ ' + MAPPE);
 }
 
 /* ---- 10. Ingen fyllfarge utenfor det tillatte settet ---- */

@@ -1410,6 +1410,13 @@ runder av det store varselikonet, så et merke som fyller kvadratet får hjørne
 av kortene klippet vekk. Merket skaleres derfor ned om sitt eget sentrum til
 det ligger innenfor den innskrevne sirkelen. Bakgrunnen er gjennomsiktig.
 
+**Det store får en strek som SKALERER.** I webappen er merkets strek 1 px
+uansett visningsstørrelse (`docs/design-system.md` → «Ikoner»); her tegnes det
+192 px bredt, og 1 px av 192 er ikke en kontur. Generatoren skrur derfor den
+regelen av for nettopp denne rasteren og bruker en strekbredde i favicon-ens
+eget 24-rutenett i stedet (`IKON_STREK`). Appikonet på Android gjør det samme,
+av samme grunn (`docs/mobilapp-plan.md`).
+
 Den native `largeIcon` er en PNG og ikke en vector drawable fordi pluginen
 dekoder ressursen med `BitmapFactory.decodeResource`, som ikke kan lese en
 vector. `smallIcon` skal stå støtt alene uansett: et varsel i statuslinjen har

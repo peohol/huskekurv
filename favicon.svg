@@ -1,5 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <g stroke="#111" stroke-width="0.9" stroke-linecap="round" stroke-linejoin="round">
+  <!-- ÉN PIKSEL STREK, UANSETT HVOR STORT MERKET VISES. Streken skal ikke
+       skaleres med tegningen: `vector-effect` tar stroke-width ut av
+       24-rutenettet og måler den i skjermpiksler i stedet, så «1» er 1 px i
+       fanen, på innloggingsskjermen og overalt ellers. Regelen står som en
+       <style> fordi filen også lastes frittstående (<link rel="icon">), der
+       styles.css ikke gjelder — og fordi `vector-effect` ikke arves og derfor
+       ikke kan settes på en <g>. Samme regel for resten av ikonsettet står i
+       styles.css. Se docs/design-system.md → «Ikoner». -->
+  <style>* { vector-effect: non-scaling-stroke; }</style>
+  <g stroke="#111" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">
     <rect x="3.3" y="3.3" width="11.4" height="11.4" rx="2.8" fill="#85ad85"></rect>
     <rect x="6.3" y="6.3" width="11.4" height="11.4" rx="2.8" fill="#adad85"></rect>
     <rect x="9.3" y="9.3" width="11.4" height="11.4" rx="2.8" fill="#ad8585"></rect>
@@ -9,7 +18,7 @@
     <circle cx="12.4" cy="15" r="0.6"></circle>
     <circle cx="12.4" cy="17.1" r="0.6"></circle>
   </g>
-  <g fill="none" stroke="#111" stroke-width="0.9" stroke-linecap="round">
+  <g fill="none" stroke="#111" stroke-width="1" stroke-linecap="round">
     <path d="M14.3 12.9h3.9"></path>
     <path d="M14.3 15h3.9"></path>
     <path d="M14.3 17.1h3.9"></path>
