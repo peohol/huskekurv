@@ -14,9 +14,10 @@
     • notatfanens to scope er ALDRI låst: de har et arkiv OG en søppelkasse side
       om side (`sideTargets`), og da betyr sidelengs noe også i én kolonne.
 
-  Den dynamiske rotasjonen (`dndPaintRotation`, ±5° etter horisontal posisjon)
-  hører til flerkolonnevisningen og skrus av i samme åndedrag: står objektet
-  stille i x, ville vinkelen ellers svingt av en intensjon ingen ser.
+  INGENTING ROTERES LENGER. Den dynamiske rotasjonen (±5° etter horisontal
+  posisjon) er fjernet: et rotert lag rasteriseres og resamples av
+  kompositoren, og teksten i det som dras ble merkbart uklar. Filen vokter
+  fraværet — også i flerkolonne, der vinkelen slo hardest ut.
 
   Låsen er en LEDESNOR, ikke en spiker: det løftede objektet er kompakt og
   sentrert på grepet (`dndCompactLift`), og en ren nulling av x slapp fingeren ut
@@ -212,21 +213,21 @@ async function sidelengs(p, sel, root, touch, dx) {
     const kort = await sidelengs(p, '#board .card[data-id="card-A"] .card-head', '#board', false, 250);
     log('1 flerkolonne: lista følger fingeren sidelengs',
       kort.flyttet >= 200, kort.spor + ' (Δ ' + Math.round(kort.flyttet) + ')');
-    /* Rotasjonen er en FUNKSJON AV DEN VANNRETTE POSISJONEN (±5° ut mot
-       viewportkantene), ikke et fast utslag per dratt piksel: det løftede
-       objektet er kompakt og sentrert på grepet, så senteret når helt ut til
-       kantene og kurven er slakere på midten. Påstanden måles derfor som
-       kontrakten er formulert — dra lenger ut, og vinkelen skal følge etter. */
+    /* INGENTING ROTERES — heller ikke her, der draget faktisk KAN gå sidelengs
+       og den gamle dynamiske rotasjonen slo hardest ut. Et rotert lag
+       rasteriseres og resamples av kompositoren, og teksten i det som dras ble
+       merkbart uklar; vinkelen er derfor fjernet. Den lange gesten er med med
+       vilje: den ville gitt fullt utslag før. */
     const lengre = await sidelengs(p, '#board .card[data-id="card-A"] .card-head', '#board', false, 700);
-    log('1 flerkolonne: … og rotasjonen følger den vannrette posisjonen',
-      parseFloat(lengre.rot) > parseFloat(kort.rot) && Math.abs(parseFloat(lengre.rot) || 0) > 1,
+    log('1 flerkolonne: … men INGEN rotasjon, uansett hvor langt ut man drar',
+      kort.rot === '' && lengre.rot === '',
       'rotate=' + JSON.stringify(kort.rot) + ' → ' + JSON.stringify(lengre.rot));
 
     const rad = await sidelengs(p, '#board .card[data-id="card-A"] .item', '#board', false, 250);
     log('1 flerkolonne: listepunktet følger fingeren sidelengs',
       rad.flyttet >= 200, rad.spor + ' (Δ ' + Math.round(rad.flyttet) + ')');
-    log('1 flerkolonne: … og bærer rotasjonen',
-      Math.abs(parseFloat(rad.rot) || 0) > 0.5, 'rotate=' + JSON.stringify(rad.rot));
+    log('1 flerkolonne: … og males uten rotasjon det òg',
+      rad.rot === '', 'rotate=' + JSON.stringify(rad.rot));
     log('1 flerkolonne: ingen JS-feil', errs.length === 0, errs.join(' | '));
     await p.close();
   }

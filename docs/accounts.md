@@ -307,6 +307,14 @@ samme nested `state` som før; synken går slik (`cloudCycle`):
    på en notatbok som FINNES, vinner notatbokens bokhylle — den samme regelen
    serveren håndhever (`notes_fix_parent`), så de to kan ikke bli uenige.
 
+   **Unntaket er notatbøker og notater som er DELT DIREKTE med meg**
+   ([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14): for dem er
+   «forelderen finnes ikke i mitt doc» normaltilstanden, ikke en hengende peker.
+   De vises i den virtuelle «Delt med meg»-bokhyllen, bærer den kanoniske
+   plasseringen i `_canonProject`/`_canonFolder`, og `pruneNoteParents` lar dem
+   stå — en prune ville tatt dem ut av mitt doc, hvorpå fletteren leste dem som
+   «slettet lokalt» og pushet DELETE på EIERENS rader.
+
    **Rekkefølge innen en tabell**: `items.cat_id`/`groups.cat_id` er
    fremmednøkler til SIN EGEN tabell, så `pushOps` sorterer kategorier FØR
    medlemmene sine (i tillegg til foreldre-før-barn på radtype). Kategorier

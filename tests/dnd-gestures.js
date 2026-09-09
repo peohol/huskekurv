@@ -144,7 +144,31 @@ const liftedCount = (p) => p.evaluate(
  * avbryter holdet — skal derfor bruke primitivene (`touchStart`, `p.mouse`)
  * direkte og påstå fraværet selv.
  */
-const TRIES = 4;
+const TRIES = 6;
+
+/*
+ * ET MISLYKKET FORSØK SKAL VERKEN ETTERLATE ET KLIKK ELLER MASE.
+ *
+ * To ting gjør en naiv retry verre enn ingen retry, og begge er MÅLT i
+ * `dnd-drop-colour`, som drar det samme kortet åtte ganger etter hverandre:
+ *
+ *   • SLIPP PÅ STEDET BLIR ET KLIKK. Trykk ned og opp på samme element er
+ *     nettopp det appen tolker som «åpne». I notatfanen åpnet det editoren,
+ *     som la seg over brettet — og da var de tre neste forsøkene dømt.
+ *     Vi flytter derfor pekeren vekk først: `click` fyrer på den nærmeste
+ *     FELLES forfaren, og der sitter ingen slik lytter.
+ *
+ *   • Å PRØVE IGJEN MED EN GANG HJELPER IKKE. Etter et slipp kan brettet
+ *     bruke tid på å bli løftbart igjen, og fire raske forsøk (~1,2 s til
+ *     sammen) feilet alle, mens ETT forsøk etter en pause lyktes. Ventetiden
+ *     vokser derfor for hvert forsøk, og budsjettet er romslig nok til å dekke
+ *     det verste MÅLTE tilfellet: et skjermbilde tatt MIDT I et drag (som
+ *     `dnd-drop-colour` må ta for å lese ekte piksler) kan låse pekerkøen i
+ *     ~4,5 s etterpå. Det er en artefakt av fjernstyringen, ikke noe en bruker
+ *     kan treffe — men testen må tåle den. Til sammen ~7,6 s før vi gir opp.
+ */
+const AWAY = { x: 3, y: 3 };
+const BACKOFF = (i) => 120 + i * 700;
 
 /** Løft med MUS: trykk ned, og flytt forbi terskelen. */
 async function liftMouse(p, at) {
@@ -154,8 +178,9 @@ async function liftMouse(p, at) {
     await p.mouse.move(at.x, at.y + NUDGE, { steps: 3 });
     await p.waitForTimeout(60);
     if (await liftedCount(p)) return { x: at.x, y: at.y + NUDGE };
+    await p.mouse.move(AWAY.x, AWAY.y, { steps: 2 });
     await p.mouse.up();
-    await p.waitForTimeout(120);
+    await p.waitForTimeout(BACKOFF(i));
   }
   throw new Error('musen løftet aldri objektet på ' + JSON.stringify(at));
 }
@@ -171,8 +196,9 @@ async function liftTouch(p, at) {
     await touchStart(p, at.x, at.y);
     await p.waitForTimeout(HOLD_WAIT);
     if (await liftedCount(p)) return { x: at.x, y: at.y };
+    // `touchCancel` gir ingen `click`, så bare ventetiden trengs her.
     await touchCancel(p);
-    await p.waitForTimeout(120);
+    await p.waitForTimeout(BACKOFF(i));
   }
   throw new Error('holdet løftet aldri objektet på ' + JSON.stringify(at));
 }

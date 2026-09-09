@@ -283,7 +283,7 @@ async function run(label, viewport, mobile) {
     return r.error ? r.error.message : null;
   }, ids.LA);
   log(label + ' 7: serveren avviser en liste-invitasjon også via rå RPC',
-    !!listShare && /kun områder og mapper/i.test(listShare), String(listShare));
+    !!listShare && /lister kan ikke deles/i.test(listShare), String(listShare));
 
   /* ---------- 8) Tap av tilgang navigerer ut ---------- */
   await loadAs(p, db, ids.uD, 'd@x.no', viewport);

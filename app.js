@@ -1202,9 +1202,14 @@
   // Skriv en ny posisjon med NØYAKTIG den regelen dra-motoren bruker ved slipp:
   // et objekt med `_canon` (områder og frie mapper) har PERSONLIG rekkefølge
   // og skrives til min egen medlemskapsrad; alt annet stemples i synk-doc'et.
+  // Kolonnen den personlige posisjonen ligger i på medlemskapsraden.
+  const PERSONAL_POS_COL = {
+    universe: 'universe_id', group: 'group_id',
+    noteProject: 'note_project_id', noteFolder: 'note_folder_id', note: 'note_id',
+  };
   function commitPos(obj, kind, np) {
     obj.pos = np;
-    if (obj._canon) cloudPersonalPos(kind === 'universe' ? 'universe' : 'group', obj.id, np);
+    if (obj._canon) cloudPersonalPos(PERSONAL_POS_COL[kind] ? kind : 'group', obj.id, np);
     else stampPos(obj);
   }
 
@@ -1226,8 +1231,14 @@
   // `data-dnd-ignore` setter på dra-sonen på hvert nivå — klientens gating er
   // kun UX og skal feile LUKKET, så en manglende capability betyr «nei».
   function canReorderObj(kind, obj, cont) {
-    // Notatene er mine alene — det finnes ingen lås å spørre om.
-    if (kind === 'note' || kind === 'noteFolder' || kind === 'noteProject') return true;
+    // Bokhyllenes rekkefølge er PERSONLIG (som områdenes) — alltid min egen.
+    if (kind === 'noteProject') return true;
+    // Notatbøker og notater: serverens capability er autoritativ. En rad som
+    // står i den VIRTUELLE «delt med meg»-bokhyllen har personlig rekkefølge.
+    if (kind === 'noteFolder' || kind === 'note') {
+      if (obj && obj._canon) return true;
+      return cap(obj, 'reorderInParent', !frozen(obj));
+    }
     if (kind === 'item') return !frozen(cont) && !obj.done;
     if (kind === 'category') return !frozen(cont);
     if (kind === 'card') return !frozen(obj) && canAddList(activeGroupObj());
@@ -2617,16 +2628,19 @@
 
   // Forlat et område eller en mappe: fjerner KUN min egen tilgang, aldri
   // innholdet. Optimistisk — objektet forsvinner straks, RPC-en ligger i køen.
-  async function leaveObject(type, obj) {
-    const word = tr(type === 'universe' ? 'kindDef.universe' : 'kindDef.group');
+  async function leaveObject(kind, obj) {
+    const word = tr('kindDef.' + kind);
     if (!await askConfirm({
       title: tr('leave.title', { kind: word }),
-      message: tr('leave.message', { name: quoted(obj.name || tr('common.theObject')) }),
+      message: tr('leave.message', { name: quoted(nameOfAny(obj) || tr('common.theObject')) }),
       okLabel: tr('leave.ok'),
     })) return;
     removeSharedLocally(obj.id);
-    cloudLeave(type, obj.id);
+    // Serveren snakker `p_type`; UI-et snakker kind. Oversettelsen ett sted.
+    cloudLeave(NOTE_SHARE_TYPE[kind] || kind, obj.id);
     render();
+    renderNotesNav();
+    renderNotes();
     save();
   }
 
@@ -4562,8 +4576,8 @@
      Låsen spør det SAMME regnestykket som layouten fordeler kortene etter
      (`boardColumnCount`), så den kan ikke komme i utakt med det man ser — og
      den avgjøres ÉN gang per drag, i `beforedragstart`, før dnd-kit har malt en
-     eneste frame. `drag.oneAxis` leses derfra av både modifikatoren og
-     rotasjonen. DELT av alle fem nivåene.
+     eneste frame. `drag.oneAxis` leses derfra av modifikatoren. DELT av alle
+     fem nivåene.
 
      UNNTAKET ER SCOPENE MED TO SLIPPMÅL VED SIDEN AV HVERANDRE (`sideTargets`):
      notatene har både et arkiv og en søppelkasse, og de står side om side —
@@ -4687,6 +4701,17 @@
     b.manager.registry.plugins.unregister(Smett.Cursor);
     b.manager.registry.plugins.unregister(Smett.PreventSelection);
     b.manager.modifiers = dndModifiers();
+    /* Sorteringsdetektoren og hysterese-hukommelsen, ett sted for alle
+       board-ene: `dragmove` fordi Smett kan synke midt i gesten og da legger
+       sin egen detektor tilbake, `dragover` fordi det er DER målet skifter —
+       akkurat signalet Smetts egen plugin husker på. */
+    const m = b.manager.monitor;
+    m.addEventListener('dragstart', () => {
+      dndActiveBoard = b; dndSwapForget(); dndTuneSortCollisions(b);
+    });
+    m.addEventListener('dragmove', () => dndTuneSortCollisions(b));
+    m.addEventListener('dragover', () => dndSwapRemember(b.manager.dragOperation));
+    m.addEventListener('dragend', () => { dndSwapForget(); dndActiveBoard = null; });
   }
 
   // Layout-boks uten evt. pågående FLIP-transform, så treffdeteksjon er stabil
@@ -4776,27 +4801,25 @@
     };
   }
 
-  // Dra-elementets logiske boks ut fra pekerposisjon (urørt av rotasjon/skala).
+  /* DRA-FLAGGET PÅ BODY — og ingen tekstmarkering mens draget står på.
+     CSS-en hindrer at NY markering oppstår (`body.is-dragging` i styles.css),
+     men en markering som alt lå der ville blitt stående blå gjennom hele
+     draget. Den ryddes derfor i det samme åndedraget. Står markøren i et felt
+     som redigeres, er markeringen brukerens egen og røres ikke — et drag
+     starter uansett ikke der. DELT av alle fem nivåene. */
+  function beginDragBody() {
+    document.body.classList.add('is-dragging');
+    const sel = window.getSelection && window.getSelection();
+    const a = document.activeElement;
+    const iFelt = !!a && (a.isContentEditable || /^(INPUT|TEXTAREA)$/.test(a.tagName || ''));
+    if (sel && !sel.isCollapsed && !iFelt) sel.removeAllRanges();
+  }
+
+  // Dra-elementets logiske boks ut fra pekerposisjon (urørt av skalaen).
   function draggedRect() {
     const left = drag.lastX - drag.grabX;
     const top = drag.lastY - drag.grabY;
     return { left, top, right: left + drag.width, bottom: top + drag.height, width: drag.width, height: drag.height };
-  }
-
-  // Dynamisk rotasjon av dra-kortet ut fra horisontal posisjon på siden:
-  // −5° når kortet ligger inntil venstre ytterkant, 0° midtstilt, +5° inntil
-  // høyre ytterkant. Vi normaliserer mot det oppnåelige senter-området
-  // (halve kortbredden inn fra hver kant) så ytterpunktene faktisk nås.
-  const MAX_ROT = 5;
-  function cardRotation() {
-    const r = draggedRect();
-    const vw = window.innerWidth || document.documentElement.clientWidth || 1;
-    const half = r.width / 2;
-    const min = half, max = vw - half;   // senter når kortet er inntil venstre/høyre kant
-    const cx = r.left + half;
-    let t = max > min ? ((cx - min) / (max - min)) * 2 - 1 : 0; // −1 venstre, +1 høyre
-    t = Math.max(-1, Math.min(1, t));
-    return t * MAX_ROT;
   }
 
   /* ------- FLIP-animasjon ------- */
@@ -5329,11 +5352,20 @@
     const S = dragScope();
     const id = drag.el && drag.el.dataset.id;
     if (!id) return false;
-    // Notatene er kontoens egne: det finnes ingen lås og ingen delt myndighet
-    // å spørre om (docs/notater-plan.md). Kassen armes så snart objektet finnes.
-    if (S === notesScope) return !!findNoteById(id);
+    /* Notatene deles nå på alle tre nivåene, så kassen spør om den SAMME
+       capabilityen som objektmenyens «Slett»-rad — og feiler lukket. Den
+       virtuelle «Delt med meg»-bokhyllen kan aldri slettes. */
+    if (S === notesScope) {
+      const n = findNoteById(id);
+      return !!n && cap(n, 'delete', !frozen(n));
+    }
     if (S === notesNavScope) {
-      return drag.kind === 'card' ? !!findNoteProject(id) : !!findNoteFolder(id);
+      if (drag.kind === 'card') {
+        const p2 = findNoteProject(id);
+        return !!p2 && !p2._virtual && cap(p2, 'delete', !frozen(p2));
+      }
+      const f = findNoteFolder(id);
+      return !!f && cap(f, 'delete', !frozen(f));
     }
     if (drag.kind === 'card') {
       if (S === navScope) {
@@ -5384,9 +5416,32 @@
      slippet betyr. Listesiden har ikke noe arkiv; der svarer
      `dragArchiveBtn()` null, og ingenting armes.
 
-     Retten er den samme som slettingens (`draggedCanBeTrashed`): arkivering er
-     en svakere handling enn sletting, så den som ikke får slette, får heller
-     ikke arkivere ved å dra. */
+     RETTEN ER EN ANNEN ENN SLETTINGENS. Å arkivere er å legge bort: det er
+     reversibelt INNHOLD, og krever redigeringsrett. Å slette er destruktivt og
+     tar objektet fra alle andre med tilgang, og krever sletterett
+     (`docs/rettigheter-og-deling.md` del 14). Nå som notatene kan deles, er de
+     to ikke lenger det samme spørsmålet: et medlem som lovlig kan redigere et
+     delt notat, men ikke slette det for alle, skal få arkivmålet og ikke
+     søppelkassen. Kassene spør derfor hver sin capability, nøyaktig som
+     objektmenyens «Arkiver»- og «Slett»-rader. */
+  function draggedCanBeArchived() {
+    const S = dragScope();
+    const id = drag.el && drag.el.dataset.id;
+    if (!id) return false;
+    // Bare notatsiden har et arkiv. Den virtuelle «Delt med meg»-bokhyllen
+    // finnes ikke i databasen og kan verken arkiveres eller slettes.
+    if (S === notesScope) {
+      const n = findNoteById(id);
+      return !!n && canEditNoteObj(n);
+    }
+    if (S !== notesNavScope) return false;
+    if (drag.kind === 'card') {
+      const p2 = findNoteProject(id);
+      return !!p2 && !p2._virtual && canEditNoteObj(p2);
+    }
+    const f = findNoteFolder(id);
+    return !!f && canEditNoteObj(f);
+  }
   function dragArchiveBtn() {
     if (!drag.active) return null;
     const S = dragScope();
@@ -5399,7 +5454,7 @@
   function armDragArchive() {
     drag.overArchive = false;
     drag.archiveArmed = false;
-    if (!draggedCanBeTrashed()) return;
+    if (!draggedCanBeArchived()) return;
     const btn = dragArchiveBtn();
     if (!btn) return;
     drag.archiveArmed = true;
@@ -5414,13 +5469,24 @@
     const btn = dragArchiveBtn();
     if (btn) btn.classList.toggle('drop-target', on);
     if (drag.el) drag.el.classList.toggle('to-archive', on);
-    setDropLabel(on ? tr('notes.archive') : '');
+    refreshDropLabel();
   }
   /* HVA SLIPPET BETYR, i ord, på det som dras. Fargen alene sier det bare til
      den som kjenner den fra før; etiketten sier det til alle. Den males av
      `[data-drop-label]` i styles.css — på OBJEKTET, som ligger i top layer og
      derfor ikke kan dekkes av noe, i motsetning til kassen, som ligger under
      både fingeren og det man drar. */
+  /* ETIKETTEN ER ÉN TILSTAND FOR HELE DRAGET, ikke én per kasse. De to
+     siktesetterne kalles etter hverandre i samme runde, og begge skrev
+     etiketten direkte: den som kjørte SIST vant. Trash → arkiv virket
+     (arkivet ble satt sist), arkiv → trash gjorde det ikke — `setDragArchive-
+     Target(false)` tømte «Slett» i samme åndedrag som den ble satt. Etiketten
+     utledes derfor av begge flaggene, ETTER at begge er oppdatert, og da er de
+     to retningene den samme koden. */
+  function refreshDropLabel() {
+    setDropLabel(drag.overTrash ? tr('menu.delete')
+      : drag.overArchive ? tr('notes.archive') : '');
+  }
   function setDropLabel(text) {
     const el = drag.el;
     if (!el) return;
@@ -5609,7 +5675,7 @@
     const btn = dragTrashBtn();
     if (btn) btn.classList.toggle('drop-target', on);
     if (drag.el) drag.el.classList.toggle('to-trash', on);
-    setDropLabel(on ? tr('menu.delete') : '');
+    refreshDropLabel();
   }
   // Selve slettingen et slipp i kassen betyr. Kalles ETTER at draget er rullet
   // tilbake, så animasjonen og angre-toasten kjører på et board i normal flyt.
@@ -6433,10 +6499,10 @@
        klonen opp, og containeren krymper med raden og gapet.
 
        Men beløpet kan ikke SKRIVES på klonen. Klonen er en kopi av raden som
-       dras, og dnd-kit bygger den om fra originalens `style`-attributt — der vi
-       selv maler rotasjonen hver frame (`dndPaintRotation`). MÅLT: attributtet
-       ble skrevet i sin helhet, «rotate: …deg; margin-bottom: -56px» ble til
-       «rotate: …deg», og lista sto med en åpen rad igjen til neste runde.
+       dras, og dnd-kit bygger den om fra originalens `style`-attributt hver
+       frame. MÅLT: attributtet ble skrevet i sin helhet, og en «margin-bottom:
+       -56px» lagt der forsvant med den neste — lista sto med en åpen rad igjen
+       til neste runde.
        Verdien legges derfor på CONTAINEREN, som er VÅR node, og klonen arver den
        (`--hole-shrink` i styles.css). */
     const boks = ph ? ph.getBoundingClientRect() : null;
@@ -7079,8 +7145,168 @@
      `hysteresisCollision` melder seg selv inn hos `Hysteresis`-pluginen, så
      reverseringslåsen fortsatt teller byttene. Aksen er loddrett i begge scopene
      (`axis: 'vertical'`). */
-  const dndRowHysteresis = (typeof Smett !== 'undefined' && Smett.hysteresisCollision)
-    ? Smett.hysteresisCollision(() => 'y') : null;
+  /* ---------- SORTERINGEN SKAL IKKE AVHENGE AV HVOR LITEN VI MALTE DRAGET ----------
+     Smetts egen terskel måler overlappet langs sorteringsaksen mot MÅLETS
+     utstrekning (`overlapRatio`: `overlapp / mål.height`). Det holder så lenge
+     det som dras og det man drar over er omtrent like store. Det er de ikke
+     lenger: `dndCompactLift` krymper det løftede objektet til hodet sitt, mens
+     målet står i full høyde. Da er det HØYESTE oppnåelige forholdet
+     `kompaktHøyde / målHøyde` — MÅLT på to notatkort: 53/226 = 0,23. Det er
+     over `swapRatio` (0,2), men under `reverseRatio` (0,5), så et bytte gikk
+     den ene veien og var UMULIG tilbake i det samme draget. Hvilken vei som
+     virket avhang av hvor høyt det andre kortet var, altså av tittel- og
+     utdragslengde — en sorteringsregel ingen kan se.
+
+     FEILEN ER RENT AT `reverseRatio` LIGGER OVER TAKET, og bare det rettes:
+     ligger taket under terskelen, senkes terskelen ned innenfor rekkevidde
+     (`dndHyst`) — ellers står Smetts egen 0,5 urørt. Formelen,
+     fremover-terskelen og tidslåsen er URØRT i alle tilfeller: 0,2 / 0,5 /
+     300 ms er Smetts, og hentes fra `DEFAULT_HYSTERESIS` så de ikke kan komme
+     i utakt.
+
+     TO NÆRLIGGENDE RETTELSER ER PRØVD OG FORKASTET, begge fordi de flyttet
+     FREMOVER-terskelen og dermed presisjonen det kompakte løftet vant: å dele
+     på den minste av de to utstrekningene, og å måle med boksen draget hadde
+     før krympingen. Begge gjorde sorteringen mer ivrig — målt: en kompakt
+     kategori byttet plass med en nabo den så vidt streifet
+     (`dnd-extract-thresholds` F2, `dnd-separators-preview` 1).
+
+     HYSTERESEN FØLGER MED. Smetts egen plugin husker bare bytter der målets
+     detektor ER Smetts (`isHysteresisDetector`), så en erstatning ville stille
+     mistet reverseringslåsen og gjort alt til `swapRatio`. Vi fører derfor den
+     samme hukommelsen selv, av det samme signalet (`dragover`, målet som ikke
+     er kilden), og bruker Smetts `admitsSwap` til å avgjøre.
+     `dnd-sort-reversible.test.js` er nettet. */
+  const DND_HYST = (typeof Smett !== 'undefined' && Smett.DEFAULT_HYSTERESIS)
+    ? Smett.DEFAULT_HYSTERESIS : { swapRatio: 0.2, reverseRatio: 0.5, reverseLockMs: 300, crossAxisRatio: 0.5 };
+  let dndSwapMemo = null;                 // { targetId, at } — vår egen hysterese-hukommelse
+  function dndSwapForget() { dndSwapMemo = null; }
+  function dndSwapRemember(op) {
+    const t = op && op.target;
+    const kilde = op && op.source;
+    /* BARE SORTERBARE MÅL, som Smetts egen plugin (`isHysteresisDetector`).
+       Kolonnene og kassene er også mål, og de skifter fritt under et drag — en
+       hukommelse som talte dem ville blitt overskrevet i det samme øyeblikket
+       byttet skjedde, og reverseringslåsen var da borte. MÅLT: retur etter 104
+       ms byttet tilbake, altså midt i de 300 ms som skulle holdt igjen. */
+    if (!t || t.collisionDetector !== dndSortCollision) return;
+    if (kilde && t.id === kilde.id) return;
+    dndSwapMemo = { targetId: t.id, at: performance.now() };
+  }
+  // Overlapp langs én akse, delt på MÅLETS utstrekning — Smetts egen formel.
+  function dndOverlapRatio(a, o, akse) {
+    const fra = akse === 'y' ? Math.max(a.top, o.top) : Math.max(a.left, o.left);
+    const til = akse === 'y' ? Math.min(a.bottom, o.bottom) : Math.min(a.right, o.right);
+    const spenn = akse === 'y' ? o.height : o.width;
+    return spenn > 0 ? Math.max(0, til - fra) / spenn : 0;
+  }
+  /* Alle sju board-ene er `axis: 'vertical'`, så hovedaksen er alltid y og
+     tverraksen x. Formen på svaret er Smetts egen: nærmest senter vinner. */
+  function dndSortTilstand(droppable, op) {
+    const form = droppable && droppable.shape;
+    if (!op || !form) return null;
+    const rect = Smett.intentRectangle(op);
+    if (!rect) return null;
+    const a = rect.boundingRectangle || rect;
+    const o = form.boundingRectangle;
+    if (!o) return null;
+    /* DET HØYESTE OPPNÅELIGE FORHOLDET for akkurat dette paret. Smetts
+       terskler forutsetter at det som dras kan dekke naboen helt (maks = 1).
+       Etter `dndCompactLift` kan det ikke: et notatkort på 53 px dras over et
+       mål på 226, og da er 53/226 = 0,23 taket. `reverseRatio` (0,5) ligger
+       over taket, og bytte TILBAKE i samme drag blir umulig uansett hvor man
+       drar — MÅLT: 0,197 ned, 0,232 opp. */
+    const maks = o.height > 0 ? Math.min(a.height, o.height) / o.height : 1;
+    return {
+      ratio: dndOverlapRatio(a, o, 'y'),
+      maks,
+      // Tverraksen er Smetts egen: den minste av de to, som før.
+      crossRatio: o.width > 0
+        ? Math.max(0, Math.min(a.right, o.right) - Math.max(a.left, o.left))
+          / Math.min(a.width, o.width)
+        : 0,
+      reversing: !!dndSwapMemo && dndSwapMemo.targetId === droppable.id,
+      sinceSwapMs: dndSwapMemo ? performance.now() - dndSwapMemo.at : Number.POSITIVE_INFINITY,
+      senter: { dx: (o.left + o.width / 2) - (a.left + a.width / 2),
+        dy: (o.top + o.height / 2) - (a.top + a.height / 2) },
+    };
+  }
+  /* Bare RETUR-terskelen røres, og bare når den ellers er UOPPNÅELIG. Ligger
+     taket over terskelen, står Smetts egen 0,5 urørt — det er det normale, og
+     der virker hysteresen som den skal. Ligger taket under, senkes terskelen
+     akkurat nok til å komme innenfor (med litt margin, så returen ikke krever
+     en perfekt piksel), men aldri under fremover-terskelen: da ville det vært
+     lettere å angre et bytte enn å gjøre det, og hysteresen sto på hodet.
+
+     Å SKALERE ALLTID var galt, og målt: en kompakt kategori som ikke trengte
+     hjelp fikk retur-terskelen senket fra 0,5 til 0,34, byttet forbi naboen og
+     sprang rett tilbake igjen (`dnd-extract-thresholds` F2). Hjelpen skal
+     treffe bare det tilfellet som faktisk er ute av rekkevidde.
+
+     Fremover-terskelen og tidslåsen er urørt i alle tilfeller. */
+  const DND_REACH = 0.9;          // margin under taket, så returen er nåbar
+  function dndHyst(tilstand) {
+    const tak = tilstand.maks;
+    if (!(tak < DND_HYST.reverseRatio)) return DND_HYST;
+    return Object.assign({}, DND_HYST, {
+      reverseRatio: Math.max(DND_HYST.swapRatio, tak * DND_REACH),
+    });
+  }
+  /* AVGJØRELSEN, ETT STED. Både sorteringen, proben og testen kaller denne
+     ene funksjonen, så det som måles ER det som kjøres. Ren: den leser bare
+     tilstanden den får, og har ingen bivirkning — derfor kan en test mate den
+     en tilstand med valgt klokke og kreve nøyaktig svar. */
+  function dndSortAdmits(tilstand) {
+    return !!tilstand && Smett.admitsSwap(tilstand, dndHyst(tilstand));
+  }
+  function dndSortCollision(input) {
+    const tilstand = dndSortTilstand(input.droppable, input.dragOperation);
+    if (!dndSortAdmits(tilstand)) return null;
+    const d = Math.hypot(tilstand.senter.dx, tilstand.senter.dy);
+    return {
+      id: input.droppable.id,
+      value: d === 0 ? 1 : 1 / d,
+      type: Smett.CollisionType.Collision,
+      priority: Smett.CollisionPriority.Normal,
+    };
+  }
+  /* HYSTERESEN ER VÅR EGEN NÅ, og da må den kunne måles direkte. Låsen kan
+     ikke leses av DOM-en — mens den holder igjen godtas ingen mål, og
+     forhåndsvisningen faller da tilbake til utgangspunktet, som er nøyaktig
+     den samme rekkefølgen et fullført bytte tilbake ville gitt. Testen leser
+     derfor tilstanden selv (`dnd-sort-reversible`). Ren avlesning: ingen
+     bivirkning, og ingenting i appen kaller den. */
+  let dndActiveBoard = null;
+  function dndSortProbe(id) {
+    const b = dndActiveBoard;
+    if (!b) return null;
+    for (const droppable of b.manager.registry.droppables) {
+      if (droppable.id !== id) continue;
+      const t = dndSortTilstand(droppable, b.manager.dragOperation);
+      if (!t) return null;
+      const h = dndHyst(t);
+      return { ratio: t.ratio, crossRatio: t.crossRatio, reversing: t.reversing,
+        sinceSwapMs: t.sinceSwapMs, admits: dndSortAdmits(t),
+        maks: t.maks, lockMs: h.reverseLockMs, reverseRatio: h.reverseRatio,
+        swapRatio: h.swapRatio };
+    }
+    return null;
+  }
+  /* Smett tildeler sin egen detektor til hvert sorterbart objekt, også på nytt
+     ved `sync()` midt i en gest. Vi bytter derfor VÅR inn igjen hver runde —
+     og bare der Smetts egen står, så ingen Huskis-detektor røres. */
+  function dndTuneSortCollisions(b) {
+    if (!b || typeof Smett === 'undefined' || !Smett.isHysteresisDetector) return;
+    for (const droppable of b.manager.registry.droppables) {
+      if (Smett.isHysteresisDetector(droppable.collisionDetector)) {
+        droppable.collisionDetector = dndSortCollision;
+      }
+    }
+  }
+  // Kategori-raden låner den samme sorteringen (den er selv et sorterbart
+  // objekt som i tillegg holder en container).
+  const dndRowHysteresis = (typeof Smett !== 'undefined' && Smett.intentRectangle)
+    ? dndSortCollision : null;
   function dndCategoryRowCollision(input) {
     const el = input.droppable.element;
     if (!el || !el.classList) return null;
@@ -7435,7 +7661,7 @@
     dndPeekPending = null;
     dndPolicyX = dndPolicyY = null;
     navSourceCardId = drag.trashHost ? drag.trashHost.dataset.id : null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     // Nettleserens scroll-anchoring ville ellers rykket modalen brått når
     // kortene kollapser. `finishDrag` slipper den igjen.
     document.documentElement.style.overflowAnchor = 'none';
@@ -7460,7 +7686,6 @@
   function navDragStart(board) {
     dndSyncIntent(board.manager.dragOperation);
     anchorBegin();              // layouten skal fra nå av flytte seg bort fra siktet
-    dndPaintRotation();
     if (drag.kind === 'card') return;
     dndRowTargetCont = dndPickRowContainer(dragOverCard());
     applyDragSeparators();
@@ -7469,7 +7694,7 @@
   /* Det løftede objektets LAYOUT-boks, målt ved løft.
      Smetts `intentRectangle` er uklemt, men den er målt på elementet slik det
      MALES — og vi skalerer det (1,02/1,03) mens det er løftet. Kontrakten til
-     `draggedRect()` er den logiske boksen, «urørt av rotasjon/skala»:
+     `draggedRect()` er den logiske boksen, «urørt av skalaen»:
      1/3-tersklene måler mot listenes egne kanter, og to piksler der er
      forskjellen på å være i lista og å falle ut av den (målt: en peek som ikke
      rakk å åpne fordi den nedre 1/3 lå 0,3 px for lavt). `offsetWidth`/
@@ -7576,22 +7801,10 @@
     drag.grabY = at.y - (box.top + box.height / 2 - h / 2);
   }
 
-  // Rotasjonen er dynamisk (±5° etter horisontal posisjon) og må derfor settes
-  // fra JS. Som EGEN egenskap (`rotate`), aldri `transform`: den skriver dnd-kit
-  // selv, med `!important`. Skalaen ligger i CSS av samme grunn. DELT.
-  //
-  // Den hører til FLERKOLONNEVISNINGEN. Er draget låst loddrett (`dndLockAxis`),
-  // står objektet stille i x mens intensjonen (`draggedRect`) fortsatt glir
-  // sidelengs — vinkelen ville da svingt uten at noe beveget seg.
-  function dndPaintRotation() {
-    if (!drag.el || drag.oneAxis) return;
-    drag.el.style.rotate = cardRotation().toFixed(2) + 'deg';
-  }
 
   function navDragMove(board) {
     if (drag.kind === 'card') {
       dndSyncIntent(board.manager.dragOperation);
-      dndPaintRotation();
       return;
     }
     dndRowPolicy(board, navUpdateExtractMode);
@@ -7612,7 +7825,6 @@
     // `drag` fortsatt beskrev draget. Her rydder vi — med mindre en av dem
     // allerede har gjort det (ekstrahering og kryss-område-flytting rydder før
     // `render()`, som de alltid har gjort).
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;    // klikket som ellers ville fulgt slippet
     navExtract = false;
     dndRowTargetCont = null;
@@ -8197,7 +8409,7 @@
     drag.trashHost = null;
     drag.crumbTarget = false;
     boardTargetCol = null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     // Nettleserens scroll-anchoring ville ellers rykket siden brått når listene
     // kollapser. `finishDrag` slipper den igjen.
     document.documentElement.style.overflowAnchor = 'none';
@@ -8212,13 +8424,11 @@
 
   function boardDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     boardTargetCol = boardPickColumn();
   }
 
   function boardDragMove(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     boardTargetCol = boardPickColumn();
   }
 
@@ -8227,7 +8437,6 @@
     // sluttplasseringen er satt, og `onCommit`/`onZoneDrop` har gjort sitt mens
     // `drag` fortsatt beskrev draget. Her rydder vi — restore/release er
     // idempotente, så veien gjennom en sone (som rydder selv) koster ingenting.
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;    // klikket som ellers ville fulgt slippet
     setCardCrumbTarget(false);
     boardTargetCol = null;
@@ -8394,7 +8603,7 @@
      `navRowBoard` er malen, og alt som er FELLES for de to radnivåene står i
      «NAV-SCOPET PÅ dnd-kit»: `dndRowSibling`, `dndPickRowContainer`, de to
      kollisjonsdetektorene, `dndKeepCatAddLast`, `dndCollapseCategory`/
-     `dndSettleCategory`, `dndSyncIntent`, `dndPaintRotation` og klikk-vakten.
+     `dndSettleCategory`, `dndSyncIntent` og klikk-vakten.
 
      ETT BOARD, ETT NIVÅ — men TO CONTAINERNIVÅER. Kortenes `.items-container`
      (nivå 1: listepunkter og kategorier om hverandre) og kategorienes
@@ -8581,7 +8790,7 @@
     dndPeekPending = null;
     dndPolicyX = dndPolicyY = null;
     boardRowSourceCardId = drag.trashHost ? drag.trashHost.dataset.id : null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     // Nettleserens scroll-anchoring ville ellers rykket siden brått når
     // kategorien folder seg sammen. `finishDrag` slipper den igjen.
     document.documentElement.style.overflowAnchor = 'none';
@@ -8596,7 +8805,6 @@
   function boardRowDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
     anchorBegin();              // layouten skal fra nå av flytte seg bort fra siktet
-    dndPaintRotation();
     dndRowTargetCont = dndPickRowContainer(dragOverCard());
     applyDragSeparators();
   }
@@ -8635,7 +8843,6 @@
       // kollisjonsrunden som kommer; ved løft alene ville de ikke overlevd.
       dndTuneRowCollisions(b);
       dndSyncIntent(b.manager.dragOperation);
-      dndPaintRotation();
       /* Sikter man på KASSEN, står plasseringen i ro: slippet SLETTER, det
          flytter ikke. Regelen er tilbake fra den gamle motoren, der den lå i
          `onItemMove`, og den forsvant i overgangen til dnd-kit.
@@ -8723,7 +8930,6 @@
     // `drag` fortsatt beskrev draget. Her rydder vi — med mindre en av dem
     // allerede har gjort det (ekstrahering og kryss-liste-flytting rydder før
     // `render()`, som de alltid har gjort).
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;    // klikket som ellers ville fulgt slippet
     boardExtract = false;
     dndRowTargetCont = null;
@@ -9945,7 +10151,10 @@
        navnetreff (se `searchCmp`), så tittelen alltid vinner. */
     noteProjects().forEach((p) => {
       if (!noteVisible(p)) return;
-      add('noteProject', p, p.name, []);
+      // Den virtuelle «Delt med meg»-bokhyllen er en SEKSJON, ikke et objekt:
+      // den kan ikke åpnes som en bokhylle og skal derfor ikke søkes fram
+      // (som «Delte mapper» på listesiden). Innholdet i den er med som vanlig.
+      if (!p._virtual) add('noteProject', p, p.name, []);
       (p.folders || []).forEach((f) => {
         if (!noteVisible(f)) return;
         add('noteFolder', f, f.name, [p.name]);
@@ -10317,6 +10526,108 @@
      `100% / --seg-n` bred og står `--seg-i * 100%` inn, så en tredje fane ville
      virket uten en eneste ny utregning. Semantikken (`aria-selected` + rullende
      `tabIndex`) settes her, ett sted for begge bryterne. */
+  /* ---------------- BRYTERE KAN DRAS ----------------
+     Begge bryterformene er den SAMME kontrollen sett to ganger: én akse med n
+     gyldige stopp og én flate som står på et av dem. Den segmenterte (`.seg`)
+     har n segmenter, av/på-bryteren (`.toggle-switch`) har to. Gesten er
+     dermed også den samme — ta tak, følg fingeren langs aksen, slipp, snap til
+     nærmeste stopp — og den ligger ETT sted: en delegert pekerlytter på
+     dokumentet. Da gjelder den også brytere som bygges av JS (varseltypene,
+     varselkanalen) uten at hvert byggested må vite om den.
+
+     KLIKK OG TASTATUR ER URØRT. En gest som ikke passerer terskelen gjør
+     ingenting, og det vanlige klikket kommer som før. Passerer den, utfører
+     draget valget ved å KLIKKE det segmentet man landet på — altså gjennom de
+     samme lytterne som et ekte klikk — og det etterfølgende ekte klikket
+     svelges, så et drag aldri teller to ganger. `aria-checked`/`aria-selected`
+     settes fortsatt bare av de vanlige veiene, ved slipp; midt i en gest har
+     bryteren ingen ny tilstand å melde. */
+  const TOG_THRESHOLD = 3;        // px før en gest regnes som et drag
+  let togDrag = null;             // { el, seg, stops, pitch, origin, moved }
+  let togEatClick = false;        // svelg det ekte klikket etter et drag
+  let togSelfClick = false;       // … men ikke vårt eget
+
+  // Aksens geometri: hvor stopp 0 ligger, og hvor langt det er mellom stoppene.
+  function togGeometry(el) {
+    const r = el.getBoundingClientRect();
+    const pad = parseFloat(getComputedStyle(el).paddingLeft) || 0;
+    if (el.classList.contains('seg')) {
+      const stops = el.querySelectorAll('.seg-btn').length;
+      const pitch = stops ? (r.width - pad * 2) / stops : 0;
+      return { stops, pitch, origin: r.left + pad + pitch / 2 };
+    }
+    const knob = el.querySelector('.toggle-knob');
+    const kw = knob ? knob.offsetWidth : 0;
+    return { stops: 2, pitch: r.width - pad * 2 - kw, origin: r.left + pad + kw / 2 };
+  }
+  // Hvor bryteren står NÅ, som stoppnummer.
+  function togCurrent(el, seg) {
+    if (!seg) return el.getAttribute('aria-checked') === 'true' ? 1 : 0;
+    const btns = [...el.querySelectorAll('.seg-btn')];
+    const i = btns.findIndex((b) => b.classList.contains('is-active'));
+    return i < 0 ? 0 : i;
+  }
+  function togPaint(d, f) {
+    d.el.style.setProperty(d.seg ? '--seg-drag' : '--knob-drag', f.toFixed(4));
+  }
+  function togRelease(d) {
+    d.el.classList.remove('is-tog-drag');
+    d.el.style.removeProperty(d.seg ? '--seg-drag' : '--knob-drag');
+  }
+  // Utfør valget gjennom den vanlige klikkveien, så all eksisterende logikk
+  // (og alle eksisterende lyttere) er den samme enten man klikker eller drar.
+  function togCommit(d, stop) {
+    const mål = d.seg ? d.el.querySelectorAll('.seg-btn')[stop] : d.el;
+    if (!mål) return;
+    if (stop === togCurrent(d.el, d.seg)) return;    // landet der den sto
+    togSelfClick = true;
+    try { mål.click(); } finally { togSelfClick = false; }
+  }
+  document.addEventListener('pointerdown', (ev) => {
+    togEatClick = false;
+    if (ev.button != null && ev.button !== 0) return;
+    const el = ev.target.closest && ev.target.closest('.seg, .toggle-switch');
+    if (!el || el.disabled || el.closest('[disabled]')) return;
+    const seg = el.classList.contains('seg');
+    const g = togGeometry(el);
+    if (!(g.pitch > 0) || g.stops < 2) return;
+    togDrag = { el, seg, moved: false, x0: ev.clientX, stops: g.stops, pitch: g.pitch, origin: g.origin };
+  }, true);
+  document.addEventListener('pointermove', (ev) => {
+    const d = togDrag;
+    if (!d) return;
+    if (!d.moved) {
+      if (Math.abs(ev.clientX - d.x0) < TOG_THRESHOLD) return;
+      d.moved = true;
+      d.el.classList.add('is-tog-drag');
+      d.el.setPointerCapture && d.el.setPointerCapture(ev.pointerId);
+    }
+    const f = Math.max(0, Math.min(d.stops - 1, (ev.clientX - d.origin) / d.pitch));
+    togPaint(d, f);
+    ev.preventDefault();
+  });
+  function togEnd(ev, avbrutt) {
+    const d = togDrag;
+    togDrag = null;
+    if (!d) return;
+    if (!d.moved) return;                            // en ren klikk-gest
+    togRelease(d);
+    togEatClick = true;                              // det ekte klikket er dragets
+    if (avbrutt) return;
+    const f = Math.max(0, Math.min(d.stops - 1, (ev.clientX - d.origin) / d.pitch));
+    togCommit(d, Math.round(f));
+  }
+  document.addEventListener('pointerup', (ev) => togEnd(ev, false));
+  document.addEventListener('pointercancel', (ev) => togEnd(ev, true));
+  // Klikket som følger et drag er dragets eget ekko, ikke et nytt valg.
+  document.addEventListener('click', (ev) => {
+    if (togSelfClick || !togEatClick) return;
+    togEatClick = false;
+    if (!ev.target.closest || !ev.target.closest('.seg, .toggle-switch')) return;
+    ev.stopPropagation();
+    ev.preventDefault();
+  }, true);
+
   function paintSeg(el, sel, erAktiv) {
     if (!el) return;
     const btns = [...el.querySelectorAll(sel)];
@@ -14029,7 +14340,10 @@
     const obj = objMenuLive(kind, spec.id);
     if (!obj) { closeObjMenu(); return; }
     const cont = objMenuCont(kind, obj);
-    const shareType = kind === 'universe' ? 'universe' : 'group';
+    // Serverens `p_type` for det objektet menyen står på. Notatsidens tre
+    // nivåer er delbare på lik linje med område og mappe.
+    const shareType = NOTE_SHARE_TYPE[kind] || (kind === 'universe' ? 'universe' : 'group');
+    const shareable = kind === 'universe' || kind === 'group' || !!NOTE_KIND_SET[kind];
     objMenuCtx = { spec, sub: openSub || null };
     objMenuPanel.innerHTML = '';
 
@@ -14129,7 +14443,7 @@
     /* 6) Lås (delte områder/mapper). Nærmeste eksplisitte tilstand vinner: en
           EGEN lås går foran en arvet, ellers tilbys unntaket. Samme skriving som
           del-modalens knapp (toggleObjLock) — de kan ikke gli fra hverandre. */
-    if ((kind === 'universe' || kind === 'group') && obj._shared) {
+    if (shareable && obj._shared) {
       const anc = obj._locked ? null : inheritedLockInfo(shareType, obj);
       const exception = !!anc;
       const allowed = exception ? cap(obj, 'lockException', false) : cap(obj, 'manageLock', false);
@@ -14150,7 +14464,7 @@
     }
 
     /* 7) Forlat (delte områder/mapper) — gir fra seg MIN tilgang, aldri innholdet. */
-    if ((kind === 'universe' || kind === 'group') && cap(obj, 'leave', false)) {
+    if (shareable && cap(obj, 'leave', false)) {
       list.appendChild(objMenuRow(ICONS.logout, tr('leave.title', { kind: objMenuWord(kind) }),
         () => closeObjMenuThen(() => {
           const live = objMenuLive(kind, spec.id);
@@ -14867,7 +15181,7 @@
      Det TREDJE scopet, og det enkleste: ÉN container, ingen ekstrahering,
      ingen låser, ingen kryss-beholder-flytting, ingen sletting. Det eneste et
      slipp kan bety er ny plass i rekka, inn i eller ut av en kategori. Alt
-     annet (skillelinjer, peek av en kollapset kategori, rotasjon under løft) er
+     annet (skillelinjer, peek av en kollapset kategori, skala under løft) er
      den DELTE politikken over, som leser `drag.scope`.
 
      DRAGET GÅR BARE OPP OG NED. Lista er én smal kolonne, så en vannrett
@@ -14971,7 +15285,7 @@
     dndRowTargetCont = null;
     dndPeekPending = null;
     dndPolicyX = dndPolicyY = null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     document.documentElement.style.overflowAnchor = 'none';
     if (kind === 'category') dndCollapseCategory(el);
     dndTuneRowCollisions(ideaRowBoard);
@@ -14982,7 +15296,6 @@
 
   function ideaRowDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     dndRowTargetCont = dndPickRowContainer(ideasCardEl);
     applyDragSeparators();
   }
@@ -14999,7 +15312,6 @@
     applyDragSeparatorsSoon();
   }
   function ideaRowDragEnd(event) {
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;
     dndRowTargetCont = null;
     dndPeekPending = null;
@@ -15442,6 +15754,22 @@
   const noteCountInProject = (projectId) =>
     allNotes().filter((n) => noteVisible(n) && n.project === projectId).length;
 
+  /* Å OPPRETTE spør FORELDEREN, ikke objektet selv (docs/rettigheter-og-deling.md
+     del 3). En notatbok krever opprettelsesrett i bokhyllen; et notat i
+     notatboken sin — eller i bokhyllen, for et fritt notat. Den virtuelle
+     «delt med meg»-bokhyllen er en SEKSJON, ikke en bokhylle: der kan man ikke
+     lage noe. Serverens capability er autoritativ; mangler den, følger anslaget
+     låsen. */
+  function canAddNoteFolder(p) {
+    return !!p && !p._virtual && cap(p, 'createChild', !frozen(p));
+  }
+  function canAddNote(p, f) {
+    if (f) return cap(f, 'createChild', !frozen(f));
+    return !!p && !p._virtual && cap(p, 'createChild', !frozen(p));
+  }
+  // Kan jeg redigere navnet/innholdet på dette notatobjektet?
+  function canEditNoteObj(o) { return cap(o, 'editContent', !frozen(o)); }
+
   function setActiveProject(id) {
     state.activeProject = id || null;
     // Per-prosjekt-minnet: kom vi tilbake til et prosjekt vi har vært i før,
@@ -15493,6 +15821,7 @@
     paintCardColor(el, note.color || colorForIndex(0));
     el.querySelector('.note-card-icon').innerHTML = ICONS.note;
     el.querySelector('.note-card-title').textContent = noteDisplayTitle(note);
+    applyShareBadge(el, note);
     const ex = el.querySelector('.note-card-excerpt');
     const text = noteExcerpt(note);
     // Utdraget står i anførselstegn: det er et SITAT fra notatet, ikke en
@@ -15512,6 +15841,12 @@
       row.appendChild(chip);
       el.querySelector('.note-card-body').appendChild(row);
     }
+    /* EN TOM KROPP SKAL IKKE STÅ IGJEN SOM EN STRIPE. Å skjule utdraget alene
+       holdt ikke: kroppen rundt beholdt polstringen sin, og et notat uten tekst
+       fikk en lav, tom flate under hodet. Kroppen har to mulige innhold —
+       utdraget og koblingschipen — så den skjules når ingen av dem finnes, og
+       kortet stopper etter hodet. */
+    el.querySelector('.note-card-body').hidden = !text && !chip;
     // Menyknappen: den SAMME objektmenyen som resten av appen — arkiver,
     // koblinger, slett (docs/menus.md).
     const noteMenu = el.querySelector('.obj-menu-btn');
@@ -15619,7 +15954,7 @@
     crumbNoteFolderName.textContent = f ? f.name : tr('notes.freeNotes');
   }
   function updateNotesToolbar() {
-    if (addNoteBtn) addNoteBtn.disabled = !activeProjectObj();
+    if (addNoteBtn) addNoteBtn.disabled = !canAddNote(activeProjectObj(), activeNoteFolderObj());
   }
 
   /* ------------------------------------------------------------
@@ -15627,7 +15962,10 @@
      ------------------------------------------------------------ */
   function addNoteProject() {
     const p = makeNoteProject(tr('notes.newProject'));
-    p.pos = maxPos(noteProjects()) + 1;
+    // Den virtuelle «delt med meg»-bokhyllen har `pos: Infinity` og er ingen
+    // nabo: tas den med, blir den nye posisjonen Infinity — en verdi som ikke
+    // overlever JSON.
+    p.pos = maxPos(noteProjects().filter((x) => !x._virtual)) + 1;
     stampContent(p);
     stampPos(p);
     noteProjects().push(p);
@@ -15651,7 +15989,7 @@
   }
   function addNoteFolder(projectId) {
     const p = findNoteProject(projectId);
-    if (!p) return null;
+    if (!canAddNoteFolder(p)) return null;
     const f = makeNoteFolder(tr('notes.newFolder'), p.id);
     f.pos = maxPos(p.folders) + 1;
     stampContent(f);
@@ -15676,7 +16014,8 @@
      som må gjøres først. */
   function addNote() {
     const p = activeProjectObj();
-    if (!p) return null;
+    const f = activeNoteFolderObj();
+    if (!canAddNote(p, f)) return null;
     const n = makeNote(p.id, state.activeFolder || null);
     n.pos = maxPos(activeNotes()) + 1;
     stampContent(n);
@@ -15720,18 +16059,23 @@
     el.querySelector('.title-line').appendChild(noteRowCount(noteCountIn(f.project, f.id)));
     const fChip = linkChip('noteFolder', f.id);
     if (fChip) el.querySelector('.title-line').appendChild(fChip);
-    const rename = () => editText(txt, f.name, (val) => {
-      const o = findNoteFolder(f.id);
-      if (!o) return;
-      o.name = val || tr('notes.newFolder');
-      stampContent(o);
-      txt.textContent = o.name;
-      updateNotesCrumbs();
-      save();
-    });
+    applyShareBadge(el, f);
+    const canEditF = canEditNoteObj(f);
+    const rename = () => {
+      if (!canEditF) return;
+      editText(txt, f.name, (val) => {
+        const o = findNoteFolder(f.id);
+        if (!o) return;
+        o.name = val || tr('notes.newFolder');
+        stampContent(o);
+        txt.textContent = o.name;
+        updateNotesCrumbs();
+        save();
+      });
+    };
     // Tittel-klikk omdøper, klikk ellers på raden navigerer — samme deling som
     // mapperadene i listenes nav-modal (docs/menus.md).
-    txt.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
+    if (canEditF) txt.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
     el.addEventListener('click', () => {
       setActiveProject(f.project);
       setActiveNoteFolder(f.id);
@@ -15741,7 +16085,7 @@
     const fMenu = el.querySelector('.obj-menu-btn');
     attachObjMenu(fMenu, noteObjMenuSpec('noteFolder', f.id, rename));
     labelBtn(fMenu, tr(NOTE_MENU_LABEL.noteFolder, { name: quoted(f.name) }));
-    attachKeyHandle(el, 'noteFolder', () => f.id, { rename });
+    attachKeyHandle(el, 'noteFolder', () => f.id, { rename: canEditF ? rename : null });
     return el;
   }
 
@@ -15779,25 +16123,37 @@
   function buildNoteProjectCard(p) {
     const el = fromTemplate(noteProjectTpl);
     el.dataset.id = p.id;
-    paintCardColor(el, p.color || colorForIndex(0));
-    el.querySelector('.uni-icon').innerHTML = ICONS.noteProject;
+    // Den virtuelle «Notater delt med meg»-bokhyllen er en SEKSJON, ikke en
+    // bokhylle: ingen posisjonsfarge, ingen meny, ingen ＋-knapp, ingen kasser
+    // — nøyaktig som «Mapper delt med meg» i listenes nav-modal.
+    const isShared = !!p._virtual;
+    if (!isShared) paintCardColor(el, p.color || colorForIndex(0));
+    el.classList.toggle('free-groups-card', isShared);
+    const canEdit = !isShared && canEditNoteObj(p);
+    el.querySelector('.uni-icon').innerHTML = isShared ? ICONS.people : ICONS.noteProject;
     const title = el.querySelector('.card-title');
     title.textContent = p.name;
     // Pillen på bokhyllen teller HELE bokhyllen — de frie notatene har sin egen
     // rad med sitt eget tall, og to like tall ved siden av hverandre forvirrer.
     el.querySelector('.title-line').appendChild(noteRowCount(noteCountInProject(p.id)));
-    const pChip = linkChip('noteProject', p.id);
-    if (pChip) el.querySelector('.card-title-wrap').appendChild(pChip);
-    const rename = () => editText(title, p.name, (val) => {
-      const o = findNoteProject(p.id);
-      if (!o) return;
-      o.name = val || tr('notes.newProject');
-      stampContent(o);
-      title.textContent = o.name;
-      updateNotesCrumbs();
-      save();
-    });
-    title.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
+    if (!isShared) {
+      applyShareBadge(el, p);
+      const pChip = linkChip('noteProject', p.id);
+      if (pChip) el.querySelector('.card-title-wrap').appendChild(pChip);
+    }
+    const rename = () => {
+      if (!canEdit) return;
+      editText(title, p.name, (val) => {
+        const o = findNoteProject(p.id);
+        if (!o) return;
+        o.name = val || tr('notes.newProject');
+        stampContent(o);
+        title.textContent = o.name;
+        updateNotesCrumbs();
+        save();
+      });
+    };
+    if (canEdit) title.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
     /* Korthodet er et TREKKSPILL — nøyaktig som områdekortets: det åpner og
        lukker bokhyllen, og lukker ALDRI modalen. Veien til bokhyllens frie
        notater er raden «Frie notater» inne i den. */
@@ -15813,23 +16169,28 @@
       ev.preventDefault();
       toggleCardCollapsed(el, p, notesNavScope);
     });
-    attachKeyHandle(head, 'noteProject', () => p.id, { rename });
+    if (isShared) head.dataset.dndIgnore = '';
+    else attachKeyHandle(head, 'noteProject', () => p.id, { rename: canEdit ? rename : null });
     const list = el.querySelector('.items-container');
     list.dataset.dndContainer = p.id;
     list.appendChild(buildNoteFreeRow(p));
     liveFolders(p).forEach((f) => list.appendChild(buildNoteFolderRow(f)));
     const addBtn = el.querySelector('.add-item-btn');
     addBtn.querySelector('.add-kind-icon').innerHTML = ICONS.noteFolder;
+    addBtn.hidden = !canAddNoteFolder(p);
     addBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       addNoteFolder(p.id);
     });
     const pMenu = el.querySelector('.obj-menu-btn');
-    attachObjMenu(pMenu, noteObjMenuSpec('noteProject', p.id, rename));
-    labelBtn(pMenu, tr(NOTE_MENU_LABEL.noteProject, { name: quoted(p.name) }));
-    // Notatbok-kassen og -arkivet ligger i BOKHYLLEN sin, akkurat som
-    // mappe-kassen ligger i områdekortet (docs/trash.md).
-    buildNoteProjectCans(p, el.querySelector('.card-body'));
+    if (isShared) pMenu.hidden = true;
+    else {
+      attachObjMenu(pMenu, noteObjMenuSpec('noteProject', p.id, rename));
+      labelBtn(pMenu, tr(NOTE_MENU_LABEL.noteProject, { name: quoted(p.name) }));
+      // Notatbok-kassen og -arkivet ligger i BOKHYLLEN sin, akkurat som
+      // mappe-kassen ligger i områdekortet (docs/trash.md).
+      buildNoteProjectCans(p, el.querySelector('.card-body'));
+    }
     if (p.collapsed) {
       collapseCardBody(el);
       setCollapseCount(head, leafCount((p.folders || []).filter(noteVisible)), true, ICONS.noteFolder);
@@ -15858,8 +16219,9 @@
     notesNavBoard.innerHTML = '';
     if (notesNavModal.hidden) return;
     const vis = visibleNoteProjects();
-    // Samme posisjonsbaserte farge som områdekortene.
-    vis.forEach((p, i) => { p.color = colorForIndex(i); });
+    // Samme posisjonsbaserte farge som områdekortene. Den virtuelle
+    // «delt med meg»-bokhyllen er en seksjon og får ingen palettfarge.
+    vis.filter((p) => !p._virtual).forEach((p, i) => { p.color = colorForIndex(i); });
     notesNavBoard.classList.toggle('empty', !vis.length);
     const col = document.createElement('div');
     col.className = 'board-col';
@@ -16232,21 +16594,36 @@
      — radene er de samme, bare ordene og oppslaget skiller dem. */
   function noteObjMenuSpec(kind, id, renameFn) {
     const cfg = NOTE_KINDS[kind];
+    const obj = cfg.find(id);
+    /* Klientens gating er kun UX og skal feile LUKKET: mangler serverens
+       capabilities, følger anslaget den lokale låsen/rollen — aldri «alt er
+       lov» (docs/rettigheter-og-deling.md del 3). Serveren avviser uansett. */
+    const canEdit = cap(obj, 'editContent', !frozen(obj));
+    const canDel = cap(obj, 'delete', !frozen(obj));
     return {
       kind, id,
       scope: kind === 'note' ? notesScope : notesNavScope,
-      rename: true,
+      rename: canEdit,
       renameFn: renameFn || null,
+      // Deling ligger i den VANLIGE objektmenyen, på alle tre notatnivåene, og
+      // åpner den samme `#share-modal` som områder og mapper bruker.
+      share: () => {
+        const live = cfg.find(id);
+        if (!live) return;
+        if (kind === 'note') { openShare(NOTE_SHARE_TYPE[kind], id, live, null); return; }
+        closeNotesNav();
+        openShare(NOTE_SHARE_TYPE[kind], id, live, openNotesNav);
+      },
       extraRows: [
         linksMenuRow(kind, id),
-        {
+        canEdit ? {
           icon: ICONS.archive,
-          label: tr(cfg.find(id) && cfg.find(id).archived ? 'notes.unarchive' : 'notes.archive'),
+          label: tr(obj && obj.archived ? 'notes.unarchive' : 'notes.archive'),
           hint: tr('notes.archiveHint'),
           fn: () => setNoteArchived(kind, id, !(cfg.find(id) || {}).archived),
-        },
+        } : null,
       ],
-      remove: () => deleteNoteObject(kind, id),
+      remove: canDel ? () => deleteNoteObject(kind, id) : null,
       removeLabel: tr(NOTE_DELETE_LABEL[kind]),
     };
   }
@@ -16749,15 +17126,29 @@
     render: () => renderNotesNav(),
     afterDrop: () => { updateNotesCrumbs(); renderNotes(); },
     reindexColors: () => {
-      visibleNoteProjects().forEach((p, i) => {
+      visibleNoteProjects().filter((p) => !p._virtual).forEach((p, i) => {
         p.color = colorForIndex(i);
         const el = notesNavBoard.querySelector('.card[data-id="' + p.id + '"]');
         if (el) paintCardColor(el, p.color);
       });
     },
-    lockedTargetMsg: '',
-    refusesRow: () => false,
+    lockedTargetMsg: tr('dnd.shelfLocked'),
+    refusesRow: (targetCardId) => !!notesNavRejectTarget(targetCardId, notesNavSourceProjectId),
   };
+
+  /* Kan en notatbok slippes i DENNE bokhyllen? Samme svar som knappene og
+     serveren gir: opprettelsesrett i målet, og aldri inn i den virtuelle
+     «Delt med meg»-bokhyllen — den finnes ikke i databasen.
+     (`navRejectTarget` er motstykket på listesiden.) */
+  function notesNavRejectTarget(targetCardId, sourceCardId) {
+    if (!targetCardId || targetCardId === sourceCardId) return null;
+    const tc = notesNavScope.findContainer(targetCardId);
+    if (!tc) return null;
+    if (tc._virtual) return tr('dnd.notebookNeedsShelf');
+    if (frozen(tc)) return notesNavScope.lockedTargetMsg;
+    if (!canAddNoteFolder(tc)) return tr('dnd.cannotCreateNotebookHere');
+    return null;
+  }
 
   /* ---- Board 1: notatkortene på hovedflaten ---- */
   let notesCardBoard = null;
@@ -16859,7 +17250,7 @@
     drag.trashHost = null;
     drag.crumbTarget = false;
     notesTargetCol = null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     document.documentElement.style.overflowAnchor = 'none';
     dndNoteLiveColumns(notesBoard);  // kolonnene som faktisk finnes å lande i
     notesTuneColumnCollisions();
@@ -16902,16 +17293,13 @@
   function notesZoneDrop(result) { notesCanDrop(notesScope, result); }
   function notesDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     notesTargetCol = notesPickColumn();
   }
   function notesDragMove(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     notesTargetCol = notesPickColumn();
   }
   function notesDragEnd(event) {
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;         // klikket som ellers ville åpnet editoren
     notesTargetCol = null;
     if (!drag.active) { notesDroppedId = null; return; }
@@ -16933,8 +17321,10 @@
         ? (findNoteById(prev.dataset.id) || {}).pos : null;
       const pNext = next && next.classList.contains('note-card')
         ? (findNoteById(next.dataset.id) || {}).pos : null;
-      n.pos = between(pPrev == null ? null : pPrev, pNext == null ? null : pNext);
-      stampPos(n);
+      // `commitPos` velger selv: et notat som er delt DIREKTE med meg står i
+      // den virtuelle bokhyllen og har PERSONLIG rekkefølge; alle andre
+      // stemples i synk-doc-et som før.
+      commitPos(n, 'note', between(pPrev == null ? null : pPrev, pNext == null ? null : pNext));
     }
     save();
     relayoutBoardNow(notesScope);
@@ -17046,7 +17436,7 @@
     dndPeekPending = null;
     dndPolicyX = dndPolicyY = null;
     notesNavSourceProjectId = drag.overCard ? drag.overCard.dataset.id : null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     document.documentElement.style.overflowAnchor = 'none';
     if (kind === 'item') dndTuneRowCollisions(notesNavRowBoard);
     dndCompactLift(el, b);         // krymp det løftede objektet i begge retninger
@@ -17059,7 +17449,6 @@
   function notesNavZoneDrop(result) { notesCanDrop(notesNavScope, result); }
   function notesNavDragStart(b, kind) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     if (kind === 'card') return;
     anchorBegin();              // layouten skal fra nå av flytte seg bort fra siktet
     dndRowTargetCont = dndPickRowContainer(dragOverCard());
@@ -17069,7 +17458,7 @@
     dndSetRowTarget(dndPickRowContainer(dragOverCard()));
   }
   function notesNavDragMove(b, kind) {
-    if (kind === 'card') { dndSyncIntent(b.manager.dragOperation); dndPaintRotation(); return; }
+    if (kind === 'card') { dndSyncIntent(b.manager.dragOperation); return; }
     dndRowPolicy(b, notesNavUpdateTargetCont);
   }
   function notesNavDragOver(b, kind) {
@@ -17078,7 +17467,6 @@
     applyDragSeparatorsSoon();
   }
   function notesNavDragEnd(event) {
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;
     dndRowTargetCont = null;
     dndPeekPending = null;
@@ -17096,8 +17484,10 @@
       const next = dndRowSibling(el, 1);
       const pPrev = prev && prev.classList.contains('card') ? (findNoteProject(prev.dataset.id) || {}).pos : null;
       const pNext = next && next.classList.contains('card') ? (findNoteProject(next.dataset.id) || {}).pos : null;
-      p.pos = between(pPrev == null ? null : pPrev, pNext == null ? null : pNext);
-      stampPos(p);
+      const np = between(pPrev == null ? null : pPrev, pNext == null ? null : pNext);
+      // Bokhyllenes rekkefølge er PERSONLIG, som områdenes: den ligger på min
+      // egen medlemskapsrad og endrer aldri hva andre ser (commitPos).
+      commitPos(p, 'noteProject', np);
     }
     notesNavScope.reindexColors();
     save();
@@ -17114,6 +17504,11 @@
     if (!targetCardEl) return;
     const targetId = targetCardEl.dataset.id;
     const sourceId = notesNavSourceProjectId;
+    // Samme svar som `refusesRow` ga under draget: et slipp serveren ville
+    // avvist skal ikke skje. Vi sier fra og kaster — Smett ruller da
+    // rekkefølgen tilbake til der draget startet (som på listesiden).
+    const reason = notesNavRejectTarget(targetId, sourceId);
+    if (reason) { showToast(reason); throw new Error(reason); }
     clearAllDragSeparators();
     const prev = dndRowSibling(el, -1);
     const next = dndRowSibling(el, 1);
@@ -17122,10 +17517,27 @@
     if (targetId !== sourceId) reconcileRows(S, targetId, pool);
     const moved = S.findRow(el.dataset.id);
     if (moved) {
-      moved.project = targetId;
-      moved.pos = between(rowPos(prev), rowPos(next));
-      stampPos(moved);
-      noteFolderMoved(moved);
+      const np = between(rowPos(prev), rowPos(next));
+      if (targetId === sourceId && moved._canon) {
+        // En notatbok som er delt DIREKTE med meg står i den virtuelle
+        // bokhyllen: rekkefølgen der er min egen, og den kanoniske
+        // plasseringen røres ikke.
+        commitPos(moved, 'noteFolder', np);
+      } else {
+        /* En EKTE flytting: BEGGE overstyringene faller bort. `_canonProject`
+           pekte på en bokhylle jeg ikke ser, og `_canon` holdt den kanoniske
+           posisjonen mens `.pos` var min personlige rekkefølge i «Delt med
+           meg». Etter flyttingen er plasseringen en helt vanlig, delt
+           plassering i mål-bokhyllen — blir `_canon` liggende, skriver
+           `withCanonPos` den GAMLE kanoniske posisjonen tilbake i stedet for
+           den nye. */
+        delete moved._canonProject;
+        delete moved._canon;
+        moved.project = targetId;
+        moved.pos = np;
+        stampPos(moved);
+        noteFolderMoved(moved);
+      }
     }
     save();
     S.afterDrop();
@@ -17135,6 +17547,9 @@
     allNotes().forEach((n) => {
       if (n.folder !== folder.id || n.project === folder.project) return;
       n.project = folder.project;
+      // Notatet sto i den virtuelle bokhyllen fordi NOTATBOKEN gjorde det. Nå
+      // har det en ekte bokhylle, og overstyringen gjelder ikke lenger.
+      delete n._canonProject;
       stampPos(n);
     });
   }
@@ -17253,6 +17668,7 @@
     try { document.execCommand('styleWithCSS', false, false); } catch (e) { /* ignore */ }
     try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (e) { /* ignore */ }
     noteEditorBody.scrollTop = 0;
+    applyNoteEditorAccess();
     if (opts.focusTitle) noteTitleInput.focus();
     else noteDocEl.focus();
     refreshNoteTools();
@@ -17295,10 +17711,39 @@
     clearTimeout(noteSaveTimer);
     writeNoteNow();
   }
+  /* Er notatet redigerbart for MEG akkurat nå? Serverens capability er
+     autoritativ; mangler den, følger anslaget den lokale låsen — aldri «alt er
+     lov» (docs/rettigheter-og-deling.md del 3). */
+  function noteEditable(n) { return !!n && cap(n, 'editContent', !frozen(n)); }
+  // Editorens skrivetilstand males på nytt: ved åpning, og hver gang synken har
+  // bygget state om (en lås eller en rolle kan ha endret seg under føttene).
+  function applyNoteEditorAccess() {
+    if (!noteEditorOpen()) return;
+    const n = noteOpenId ? findNoteById(noteOpenId) : null;
+    const on = noteEditable(n);
+    if (noteDocEl) noteDocEl.contentEditable = on ? 'true' : 'false';
+    if (noteTitleInput) noteTitleInput.readOnly = !on;
+    if (noteEditorEl) noteEditorEl.classList.toggle('is-readonly', !on);
+    if (noteToolsEl) noteToolsEl.hidden = !on;
+    if (!on) setNoteStatus('notes.readOnly');
+  }
+  /* Notatet kan forsvinne under editoren: slettet for alle, eller tilgangen
+     trukket tilbake. En gammel lokal kopi skal aldri bli stående redigerbar,
+     så bildet lukkes — og autosaven nulles FØR lukkingen, slik at den ikke
+     rekker å skrive en rad som ikke lenger er min. */
+  function closeNoteEditorIfGone() {
+    if (!noteEditorOpen()) return;
+    if (noteOpenId && findNoteById(noteOpenId)) { applyNoteEditorAccess(); return; }
+    clearTimeout(noteSaveTimer);
+    noteSaveTimer = null;
+    noteOpenId = null;
+    closeNoteEditor();
+  }
   function writeNoteNow() {
     noteSaveTimer = null;
     const n = noteOpenId ? findNoteById(noteOpenId) : null;
     if (!n) return;
+    if (!noteEditable(n)) return;   // låst for meg: serveren ville rullet den tilbake
     const title = noteTitleInput.value.trim();
     const doc = noteDocFromEl(noteDocEl);
     // Ingen endring → ingen skriving. Ellers ville hvert tastetrykk som ikke
@@ -18121,7 +18566,10 @@
        notatene er flate med to forelder-pekere. */
     const noteProjectRows = [], noteFolderRows = [];
     (s.noteProjects || []).forEach((p) => {
-      noteProjectRows.push(rowFn(p, 'note_project', null));
+      // «Delt med meg» på notatsiden er en VIRTUELL bokhylle — den finnes ikke
+      // i databasen og skal aldri pushes. Notatbøkene i den skrives som vanlig
+      // (canonRow beholder deres kanoniske bokhylle).
+      if (!p._virtual) noteProjectRows.push(rowFn(p, 'note_project', null));
       (p.folders || []).forEach((f) => noteFolderRows.push(rowFn(f, 'note_folder', p)));
     });
     const noteRows = (s.notes || []).map((n) => rowFn(n, 'note', null));
@@ -19364,6 +19812,12 @@
   // DIREKTE rolle i, men ingen rolle i det kanoniske området. Den er ikke et
   // ekte område — den pushes aldri, og har ingen delings-/opprettelseskontroller.
   const FREE_UNI_ID = '__free__';
+  /* Notatsidens motstykke: den VIRTUELLE bokhyllen for notatbøker og notater
+     som er delt DIREKTE med meg, uten at jeg ser bokhyllen de egentlig står i.
+     Den finnes ikke i databasen, pushes aldri, og har verken delings- eller
+     opprettelseskontroller — nøyaktig som «Mapper delt med meg»
+     (docs/rettigheter-og-deling.md del 14). */
+  const SHARED_NOTES_ID = '__shared_notes__';
   // Hvilken av de tre seksjonene et toppnivå-objekt hører til.
   const SECTION_OWNED = 0, SECTION_SHARED = 1, SECTION_FREE = 2;
   const sectionRank = (u) => (u._virtual ? SECTION_FREE
@@ -19371,6 +19825,7 @@
   // Brukervendte tekster som gjenbrukes i flere visninger.
   const S_TEXT = {
     get freeSection() { return tr('section.freeGroups'); },
+    get sharedNotesShelf() { return tr('section.sharedNotes'); },
     get sections() {
       return [tr('section.mine'), tr('section.sharedUniverses'), tr('section.sharedGroups')];
     },
@@ -19388,9 +19843,36 @@
   // mappeeier (eksplisitt ELLER områdeeier) for mappe/liste/listepunkt.
   // Privilegerte påvirkes aldri av en lås for egen redigering. Lokalt anslag —
   // serverens `_caps` er autoritative.
+  /* Notatsidens forfedre, nærmeste først: notatboken (hvis notatet ligger i
+     én) og så bokhyllen. Notatene ligger FLATT i state — `_parent` peker rett
+     på bokhyllen — så kjeden må slås opp, ikke gås. */
+  function noteAncestors(kind, obj) {
+    const out = [];
+    if (!obj) return out;
+    if (kind === 'note') {
+      const f = obj.folder ? findNoteFolder(obj.folder) : null;
+      if (f) out.push({ type: 'noteFolder', id: f.id, obj: f });
+    }
+    if (kind === 'note' || kind === 'noteFolder') {
+      const p = findNoteProject(obj.project);
+      if (p && !p._virtual) out.push({ type: 'noteProject', id: p.id, obj: p });
+    }
+    return out;
+  }
+  const NOTE_KIND_SET = { noteProject: 1, noteFolder: 1, note: 1 };
+  /* Klientens KIND ↔ serverens `p_type`. De to skrivemåtene er databasens
+     kontrakt (`note_project`/`note_folder`/`note`) og UI-ets (camelCase);
+     oversettelsen skjer ett sted i stedet for i hvert kall. */
+  const NOTE_SHARE_TYPE = { noteProject: 'note_project', noteFolder: 'note_folder', note: 'note' };
+  const NOTE_KIND_OF_TYPE = { note_project: 'noteProject', note_folder: 'noteFolder', note: 'note' };
   function privilegedLocal(o) {
     if (!o) return false;
     if (o._type === 'universe') return o._role === 'owner';
+    // Notatsiden: eier på NIVÅET selv, eller arvet fra notatboken/bokhyllen.
+    if (NOTE_KIND_SET[o._type]) {
+      if (o._role === 'owner') return true;
+      return noteAncestors(o._type, o).some((a) => a.obj._role === 'owner');
+    }
     const g = nodeOfType(o, 'group');
     if (g && g._role === 'owner') return true;
     const u = nodeOfType(o, 'universe');
@@ -19401,6 +19883,14 @@
   // den. Eiere på nivået omgår låsen helt.
   function frozen(o) {
     if (privilegedLocal(o)) return false;
+    if (o && NOTE_KIND_SET[o._type]) {
+      const chain = [{ obj: o }].concat(noteAncestors(o._type, o));
+      for (const a of chain) {
+        if (a.obj._unlocked) return false;
+        if (a.obj._locked) return true;
+      }
+      return false;
+    }
     let n = o;
     while (n && !n._virtual) {
       if (n._unlocked) return false;
@@ -19436,7 +19926,8 @@
   // Forelderen (m/ type) hvis lås faktisk gjelder for objektet — dvs. arvet
   // låsing. Et unntak (_unlocked) på veien opp bryter arven.
   function inheritedLockInfo(type, obj) {
-    const chain = ancestorChain(type, obj);
+    const kind = NOTE_KIND_OF_TYPE[type] || type;
+    const chain = NOTE_KIND_SET[kind] ? noteAncestors(kind, obj) : ancestorChain(type, obj);
     for (const a of chain) { if (a.obj._unlocked) return null; if (a.obj._locked) return a; }
     return null;
   }
@@ -19454,10 +19945,22 @@
     (my.universes || []).forEach((u) => { if (suppressedRows.has(u.id)) supU.add(u.id); });
     (my.groups || []).forEach((g) => { if (suppressedRows.has(g.id) || supU.has(g.uni)) supG.add(g.id); });
     (my.cards || []).forEach((c) => { if (suppressedRows.has(c.id) || supG.has(c.group)) supC.add(c.id); });
-    return { supU, supG, supC };
+    // Notatsiden har den samme forlatelsen, og dermed det samme behovet: en
+    // bokhylle/notatbok/et notat man nettopp har forlatt skal ikke komme
+    // tilbake fra en pull som var i lufta — og undertreet skal heller ikke få
+    // fletteren til å pushe delete på EIERENS rader.
+    const supNP = new Set(), supNF = new Set(), supN = new Set();
+    (my.noteProjects || []).forEach((p) => { if (suppressedRows.has(p.id)) supNP.add(p.id); });
+    (my.noteFolders || []).forEach((f) => {
+      if (suppressedRows.has(f.id) || supNP.has(f.project)) supNF.add(f.id);
+    });
+    (my.notes || []).forEach((n) => {
+      if (suppressedRows.has(n.id) || supNP.has(n.project) || (n.folder && supNF.has(n.folder))) supN.add(n.id);
+    });
+    return { supU, supG, supC, supNP, supNF, supN };
   }
   function contentDocFromMy(my) {
-    const { supU, supG, supC } = suppressedSetsFor(my);
+    const { supU, supG, supC, supNP, supNF, supN } = suppressedSetsFor(my);
     let maxTs = 0;
     const bump = (r) => { maxTs = Math.max(maxTs, r.ts || 0, r.posTs || 0, r.labTs || 0); };
     const universes = (my.universes || []).filter((u) => !supU.has(u.id)).map((u) => { const r = cleanUniverse(u); bump(r); return r; });
@@ -19466,10 +19969,14 @@
     const items = (my.items || []).filter((it) => !supC.has(it.home)).map((it) => { const r = cleanItem(it, it.home); bump(r); return r; });
     // Idéene deles aldri, så ingen forlatt-deling kan undertrykke dem.
     const ideas = (my.ideas || []).map((d) => { const r = cleanIdea(d); bump(r); return r; });
-    // Notatene heller ikke (docs/notater-plan.md).
-    const noteProjects = (my.noteProjects || []).map((p) => { const r = cleanNoteProject(p); bump(r); return r; });
-    const noteFolders = (my.noteFolders || []).map((f) => { const r = cleanNoteFolder(f); bump(r); return r; });
-    const notes = (my.notes || []).map((n) => { const r = cleanNote(n); bump(r); return r; });
+    // Notatene DELES nå (docs/rettigheter-og-deling.md del 14), så de har den
+    // samme undertrykkingen som områdene og mappene.
+    const noteProjects = (my.noteProjects || []).filter((p) => !supNP.has(p.id))
+      .map((p) => { const r = cleanNoteProject(p); bump(r); return r; });
+    const noteFolders = (my.noteFolders || []).filter((f) => !supNF.has(f.id))
+      .map((f) => { const r = cleanNoteFolder(f); bump(r); return r; });
+    const notes = (my.notes || []).filter((n) => !supN.has(n.id))
+      .map((n) => { const r = cleanNote(n); bump(r); return r; });
     // Koblingene: eierens egne rader, uten register å bumpe utover `ts`.
     const links = (my.links || []).map((l) => { const r = cleanLink(l); bump(r); return r; })
       .filter(linkUsable);
@@ -19492,6 +19999,11 @@
     add(my.cards, 'card');
     add(my.items, 'item');
     add(my.ideas, 'idea');
+    // Notatsidens tre nivåer bærer nå de samme metadataene som områder og
+    // mapper: rolle, capabilities, lås, delingsstatus og personlig posisjon.
+    add(my.noteProjects, 'noteProject');
+    add(my.noteFolders, 'noteFolder');
+    add(my.notes, 'note');
     return meta;
   }
 
@@ -19500,6 +20012,88 @@
      medlemskapsraden, ikke på objektet — `.pos` i state er da den personlige
      verdien, og den KANONISKE står i `_canon`. Den kanoniske skrives tilbake
      uendret, så en personlig omrokkering aldri kan endre hva andre ser. */
+  /* EN ENDRING VI IKKE HAR LOV TIL Å SKRIVE SKAL IKKE BLI STÅENDE.
+     Vaktene (`*_before_update`) reverterer stille et innholdsregister man
+     mangler rett til å endre. Blir den lokale verdien liggende, finner
+     fletteren den samme divergensen hver runde og pusher den samme skrivingen
+     i det uendelige — en varm løkke uten et eneste signal — mens kopien på
+     skjermen ser lagret ut uten å være det.
+
+     Løsningen er å rulle raden tilbake til SERVERENS siste kjente verdi før
+     flettingen. Da er lokal og fjern like, ingen op oppstår, og skjermen viser
+     den eneste verdien som finnes. Rettighetene er serverens; dette er bare
+     klienten som slutter å banke på en dør som er låst.
+
+     Gjelder notatsiden, som er den delen denne runden ga låser og roller. */
+  const NOTE_SERVER_KEY = { note_project: 'noteProjects', note_folder: 'noteFolders', note: 'notes' };
+  const NOTE_CONTENT_FIELDS = {
+    note_project: ['name', 'collapsed', 'trashed', 'archived'],
+    note_folder: ['name', 'trashed', 'archived'],
+    note: ['title', 'doc', 'trashed', 'archived'],
+  };
+  /* Det gjelder BEGGE registrene. Innholdet er det ene; POSISJONEN er det
+     andre, og forelder-pekerne rir på det (som `card_id`/`cat_id` på et
+     listepunkt). En omrokkering gjort rett før forelderen ble låst kan aldri
+     lande heller — og et barn med LÅSUNNTAK er det tydeligste tilfellet:
+     `editContent` er sann samtidig som `reorderInParent` er usann, så en
+     rollback som bare så på innholdet kjørte ikke i det hele tatt. */
+  const NOTE_PARENT_FIELDS = { note_project: [], note_folder: ['project'], note: ['project', 'folder'] };
+  const NOTE_POS_FIELDS = ['pos', 'posTs', 'posOrg'];
+  const NOTE_CLEAN = { note_project: cleanNoteProject, note_folder: cleanNoteFolder, note: cleanNote };
+  /* Et forelder-felt med en VISNINGS-overstyring er ikke en lokal endring i
+     det hele tatt: `canonRow` skriver den kanoniske verdien uansett hva
+     visningen sier. Predikatene er nøyaktig `canonRow` sine. */
+  const noteParentIsLocal = (o, f) => (f === 'project'
+    ? !(o._canonProject && o.project === SHARED_NOTES_ID)
+    : !(o._canonFolder !== undefined && !o.folder));
+  function revertUnwritableNoteEdits(my) {
+    if (!my) return false;
+    let changed = false;
+    const put = (o, f, v) => {
+      if (JSON.stringify(o[f]) === JSON.stringify(v)) return;
+      o[f] = v;
+      changed = true;
+    };
+    const each = (type, rows) => {
+      const srvRows = new Map((my[NOTE_SERVER_KEY[type]] || []).map((r) => [r.id, r]));
+      rows.forEach((o) => {
+        // Serverens capability, direkte: kjøres hver synk-runde over hver rad,
+        // så det lokale låse-anslaget (`frozen`) skal ikke regnes ut her.
+        // Mangler `_caps` er raden ny og ikke på serveren ennå.
+        if (!o._caps) return;
+        const raw = srvRows.get(o.id);
+        if (!raw) return;                           // ikke på serveren (ennå)
+        const srv = NOTE_CLEAN[type](raw);
+        if (o._caps.editContent === false) {
+          NOTE_CONTENT_FIELDS[type].concat(['ts', 'org']).forEach((f) => put(o, f, srv[f]));
+        }
+        /* PERSONLIG rekkefølge (`_canon`): `.pos` går til min egen
+           medlemskapsrad, ikke til det delte registeret — det ligger urørt i
+           `_canon`. Å rulle `.pos` tilbake her ville ødelagt nettopp den
+           rekkefølgen «Delt med meg» er sortert etter. */
+        if (o._canon) return;
+        const parents = NOTE_PARENT_FIELDS[type].filter((f) => noteParentIsLocal(o, f));
+        // Er forelderen en annen enn serverens, er dette en FLYTTING, og da er
+        // det `move` serveren spør om — ikke rekkefølgen blant søsken.
+        const moved = parents.some((f) => (o[f] || null) !== (srv[f] || null));
+        if (o._caps[moved ? 'move' : 'reorderInParent'] !== false) return;
+        parents.concat(NOTE_POS_FIELDS).forEach((f) => put(o, f, srv[f]));
+      });
+    };
+    each('note_project', state.noteProjects || []);
+    (state.noteProjects || []).forEach((p) => each('note_folder', p.folders || []));
+    each('note', state.notes || []);
+    return changed;
+  }
+
+  // Den KANONISKE posisjonen tilbake på raden, når `.pos` er den personlige.
+  function withCanonPos(row, o) {
+    if (!o._canon) return row;
+    row.pos = o._canon.pos || 0;
+    row.posTs = o._canon.posTs || 0;
+    row.posOrg = o._canon.posOrg || '';
+    return row;
+  }
   function canonRow(o, type) {
     if (o._canon) {
       const c = o._canon;
@@ -19526,11 +20120,27 @@
     }
     if (type === 'card') return cleanCard(o);
     if (type === 'idea') return cleanIdea(o);
-    // Notatradene har ingen personlig rekkefølge og ingen RPC-eid plassering —
-    // de skrives nøyaktig som de står.
-    if (type === 'note_project') return cleanNoteProject(o);
-    if (type === 'note_folder') return cleanNoteFolder(o);
-    if (type === 'note') return cleanNote(o);
+    /* Notatradene: bokhyllene har PERSONLIG rekkefølge (som områdene), og en
+       notatbok/et notat som vises i den virtuelle «delt med meg»-bokhyllen har
+       sin kanoniske plassering i en bokhylle jeg ikke ser. Begge deler skrives
+       tilbake UENDRET — en personlig omrokkering skal aldri endre hva andre
+       ser, og en visning skal aldri kunne flytte noe i en annens bokhylle. */
+    if (type === 'note_project') return withCanonPos(cleanNoteProject(o), o);
+    /* Overstyringene gjelder KUN så lenge raden faktisk vises i den virtuelle
+       bokhyllen (eller uten notatbok). Drar man den ut i en ekte bokhylle, er
+       det en reell flytting — og da skal den nye plasseringen skrives, ikke
+       den gamle kanoniske. */
+    if (type === 'note_folder') {
+      const r = withCanonPos(cleanNoteFolder(o), o);
+      if (o._canonProject && o.project === SHARED_NOTES_ID) r.project = o._canonProject;
+      return r;
+    }
+    if (type === 'note') {
+      const r = withCanonPos(cleanNote(o), o);
+      if (o._canonProject && o.project === SHARED_NOTES_ID) r.project = o._canonProject;
+      if (o._canonFolder !== undefined && !o.folder) r.folder = o._canonFolder || null;
+      return r;
+    }
     if (type === 'object_link') return cleanLink(o);
     return cleanItem(o, o.home);
   }
@@ -19539,7 +20149,8 @@
     // element-grenen gir cleanItem(it, it.home) som før.
     // pruneDanglingCats: en `cat` som ikke treffer en kategori er uskrivbar
     // (FK) og ville låst synken — se kommentaren der.
-    return pruneNoteParents(pruneDanglingCats(flattenNested(state, canonRow)));
+    return pruneNoteParents(pruneDanglingCats(flattenNested(state, canonRow)),
+                            foreignParentNoteIds());
   }
   // Rader den cachede staten sier er opprettet av NOEN ANDRE (`_createdByMe ===
   // false`). Forsvinner en slik rad fra serveren, er tilgangen opphørt eller
@@ -19558,6 +20169,14 @@
         (g.cards || []).forEach((c) => { if (c._createdByMe === false) s.add(c.id); });
       });
     });
+    // Notatsiden deles nå på alle tre nivåene, og den samme regelen gjelder:
+    // en rad andre har opprettet skal aldri settes inn på nytt av oss.
+    (state.noteProjects || []).forEach((p) => {
+      if (p._virtual) return;
+      if (p._createdByMe === false) s.add(p.id);
+      (p.folders || []).forEach((f) => { if (f._createdByMe === false) s.add(f.id); });
+    });
+    (state.notes || []).forEach((n) => { if (n._createdByMe === false) s.add(n.id); });
     return s;
   }
 
@@ -19663,7 +20282,9 @@
         obj._type = type;
         obj._creator = m ? m.creator : (authUser && authUser.id);
         obj._createdByMe = m ? m.createdByMe !== false : true;
-        obj._role = m ? (m.role || null) : (type === 'universe' || type === 'group' ? 'owner' : null);
+        obj._role = m ? (m.role || null)
+          : (type === 'universe' || type === 'group'
+             || type === 'noteProject' || type === 'noteFolder' || type === 'note' ? 'owner' : null);
         // Optimistiske overlays: en køet set_locked/-policy-skriving skal ikke
         // visuelt «hoppe tilbake» hvis en pull rekker å kjøre før den lander.
         obj._locked = lockOverrides.has(id) ? !!lockOverrides.get(id) : (m ? m.locked : false);
@@ -19675,10 +20296,14 @@
         obj._ownerKey = m ? m.ownerKey : null;
         obj._caps = m && m.caps ? m.caps : null;
         obj._free = !!(m && m.free);
-        // Personlig posisjon (områder + frie mapper): den kanoniske tas vare
-        // på i _canon, og `.pos` blir brukerens egen.
+        /* PERSONLIG posisjon: toppnivåene (område, bokhylle) og alt som vises i
+           en VIRTUELL beholder (frie mapper, direkte delte notatbøker og
+           notater). Den kanoniske plasseringen tas vare på i `_canon` og
+           skrives tilbake uendret, så min egen omrokkering aldri endrer hva
+           andre ser. */
         const personal = m && m.personalPos != null &&
-          (type === 'universe' || (type === 'group' && m.free));
+          (type === 'universe' || type === 'noteProject'
+           || ((type === 'group' || type === 'noteFolder' || type === 'note') && m.free));
         if (personal) {
           obj._canon = { parent: canonParent, cat: canonCat, pos: obj.pos, posTs: obj.posTs, posOrg: obj.posOrg };
           obj.pos = posOverrides.has(id) ? posOverrides.get(id) : (m.personalPos || 0);
@@ -19758,29 +20383,58 @@
          prosjektet sitt, nøyaktig som visningen tegner det. */
       const noteProjectList = (doc.noteProjects || []).map((raw) => {
         const p = Object.assign(cleanNoteProject(raw), { folders: [] });
-        p._type = 'noteProject';
-        p._createdByMe = true;
+        attachMeta(p, p.id, 'noteProject', null, null);
         return p;
       });
       const projById = new Map(noteProjectList.map((p) => [p.id, p]));
-      const folderProject = new Map();
+
+      /* «Delt med meg» på notatsiden: en notatbok eller et notat kan være delt
+         DIREKTE, uten at bokhyllen over er lesbar (`free` fra serveren). Da
+         finnes det ingen forelder å tegne dem i — og bokhyllens navn skal
+         aldri lekke. De samles derfor i én virtuell bokhylle, nøyaktig som
+         «Mapper delt med meg» samler frie mapper. Den pushes aldri. */
+      let sharedShelf = null;
+      const ensureSharedShelf = () => {
+        if (sharedShelf) return sharedShelf;
+        sharedShelf = {
+          id: SHARED_NOTES_ID, name: S_TEXT.sharedNotesShelf, folders: [], pos: Infinity,
+          _virtual: true, _type: 'noteProject', _role: null, _caps: {},
+          _shared: false, _locked: false, _unlocked: false, _createdByMe: false,
+        };
+        noteProjectList.push(sharedShelf);
+        projById.set(SHARED_NOTES_ID, sharedShelf);
+        return sharedShelf;
+      };
+
+      const folderContainer = new Map();   // notatbok-id → bokhyllen den VISES i
       (doc.noteFolders || []).forEach((raw) => {
         const f = cleanNoteFolder(raw);
-        const parent = projById.get(f.project);
-        if (!parent) return;
-        f._type = 'noteFolder';
-        f._createdByMe = true;
-        folderProject.set(f.id, f.project);
+        attachMeta(f, f.id, 'noteFolder', f.project, null);
+        const parent = f._free ? ensureSharedShelf() : projById.get(f.project);
+        if (!parent) return;               // foreldreløs (bokhyllen er ikke lesbar)
+        // Vises i den virtuelle bokhyllen — men den KANONISKE bokhyllen (som
+        // jeg ikke ser) må skrives tilbake uendret, ellers ville synken pushet
+        // en peker til et objekt som ikke finnes i databasen.
+        if (parent.id !== f.project) { f._canonProject = f.project; f.project = parent.id; }
+        f._parent = parent;
+        folderContainer.set(f.id, parent.id);
         parent.folders.push(f);
       });
       const noteList = [];
       (doc.notes || []).forEach((raw) => {
         const n = cleanNote(raw);
-        if (n.folder && !folderProject.has(n.folder)) n.folder = null;
-        else if (n.folder) n.project = folderProject.get(n.folder);
-        if (!projById.has(n.project)) return;
-        n._type = 'note';
-        n._createdByMe = true;
+        attachMeta(n, n.id, 'note', n.project, n.folder);
+        /* En notatbok jeg ikke ser er ingen forelder: notatet leses som et
+           FRITT notat, akkurat som når notatboken er slettet på en annen enhet.
+           Pekeren nulles bare i VISNINGEN — den kanoniske verdien tas vare på
+           og skrives tilbake uendret. Å nulle den i doc-et ville tatt notatet
+           ut av en notatbok andre ser det i. */
+        if (n.folder && !folderContainer.has(n.folder)) { n._canonFolder = n.folder; n.folder = null; }
+        const parent = n.folder ? projById.get(folderContainer.get(n.folder))
+          : (n._free ? ensureSharedShelf() : projById.get(n.project));
+        if (!parent) return;
+        if (parent.id !== n.project) { n._canonProject = n.project; n.project = parent.id; }
+        n._parent = parent;
         noteList.push(n);
       });
       noteProjectList.sort(posCmp);
@@ -19813,6 +20467,9 @@
       // stående redigerbar.
       const hadGroup = state.activeGroup && !!findGroupAnywhere(state.activeGroup);
       const hadUni = state.activeUniverse && !!findUniverse(state.activeUniverse);
+      const hadFolder = state.activeFolder && !!findNoteFolder(state.activeFolder);
+      const hadProject = state.activeProject && !!findNoteProject(state.activeProject);
+      const hadOpenNote = noteOpenId && findNoteById(noteOpenId) ? noteOpenId : null;
       state.universes = universes;
       state.ideas = ideas;
       state.noteProjects = noteProjectList;
@@ -19822,12 +20479,25 @@
       observeTs(doc.hlc);
       const lostGroup = hadGroup && state.activeGroup && !findGroupAnywhere(state.activeGroup);
       const lostUni = hadUni && state.activeUniverse && !findUniverse(state.activeUniverse);
+      /* Notatsiden kan miste tilgang på nøyaktig samme måte nå: bokhyllen ble
+         slettet for alle, notatboken flyttet ut av rekkevidde, eller rollen
+         min trukket tilbake. En gammel lokal kopi skal ALDRI bli stående
+         redigerbar — editoren lukkes og vi lander på nærmeste gyldige sted. */
+      const lostFolder = hadFolder && state.activeFolder && !findNoteFolder(state.activeFolder);
+      const lostProject = hadProject && state.activeProject && !findNoteProject(state.activeProject);
+      const lostOpenNote = hadOpenNote && !findNoteById(hadOpenNote);
       validateActive(state);
       validateActiveNotes(state);
       if (lostGroup || lostUni) noteAccessLoss(lostGroup ? 'group' : 'universe');
+      if (lostOpenNote || lostFolder || lostProject) {
+        noteAccessLoss(lostOpenNote ? 'note' : lostFolder ? 'noteFolder' : 'noteProject');
+      }
       // Første pull etter innlogging: land på posisjonen kontoen husker.
       if (!navRestored) { navRestored = true; restoreNavPref(); }
       reapplyPendingDeletes(); // hold buffer-slettede skjult etter rebuild
+      // Editoren holder ETT notat åpent i fullskjerm: er det borte, eller er
+      // låsen endret under føttene, må bildet følge etter.
+      closeNoteEditorIfGone();
       render();
     } finally {
       applyingRemote = false;
@@ -19839,11 +20509,20 @@
      flyttet til et annet eierskapsdomene, eller man ble kastet ut / degradert.
      Da lukkes visningen (og enhver åpen modal som peker på det), vi lander på
      nærmeste gyldige fallback (validateActive), og sier nøkternt fra. */
+  const ACCESS_LOSS_KEY = {
+    group: 'access.lostGroup', universe: 'access.lostUniverse',
+    note: 'access.lostNote', noteFolder: 'access.lostNoteFolder',
+    noteProject: 'access.lostNoteProject',
+  };
   function noteAccessLoss(kind) {
     if (!shareModal.hidden) closeShare();
     closeObjMenu();
     closeResponsible();
-    showToast(tr(kind === 'group' ? 'access.lostGroup' : 'access.lostUniverse'));
+    // Editoren er den ene visningen som holder ETT objekt åpent i fullskjerm.
+    // Er notatet borte, må den lukkes — ellers står en kopi uten rettigheter
+    // igjen på skjermen, redigerbar.
+    if (kind === 'note' || kind === 'noteFolder' || kind === 'noteProject') closeNoteEditorIfGone();
+    showToast(tr(ACCESS_LOSS_KEY[kind] || 'access.lostUniverse'));
   }
 
   /* ---------------- Push: rad-CRUD mot tabellene ---------------- */
@@ -20028,11 +20707,18 @@
      tegner), mens en rad uten PROSJEKT er foreldreløs: prosjektet er `not
      null` i databasen, så raden kan ikke finnes uten det, og den tas ut av
      doc-en i stedet for å bli hengende i en usynlig retry-løkke. */
-  function pruneNoteParents(doc) {
+  /* `keep` er id-ene som er DELT DIREKTE med meg: bokhyllen (og for et notat
+     kanskje notatboken) står i doc-et til en annen bruker, ikke i mitt. For dem
+     er «forelderen finnes ikke her» normaltilstanden, ikke en hengende peker —
+     og en prune ville tatt raden ut av MITT doc, hvorpå fletteren leste den som
+     «slettet lokalt» og pushet DELETE på eierens rad. */
+  function pruneNoteParents(doc, keep) {
+    const free = keep || new Set();
     const projects = new Set((doc.noteProjects || []).map((p) => p.id));
-    doc.noteFolders = (doc.noteFolders || []).filter((f) => projects.has(f.project));
+    doc.noteFolders = (doc.noteFolders || []).filter((f) => free.has(f.id) || projects.has(f.project));
     const folders = new Map((doc.noteFolders || []).map((f) => [f.id, f.project]));
     doc.notes = (doc.notes || []).filter((n) => {
+      if (free.has(n.id)) return true;
       if (!projects.has(n.project)) return false;
       // En mappe som er flyttet til et annet prosjekt drar notatene med seg;
       // står de igjen med det gamle prosjektet, rettes de her.
@@ -20041,6 +20727,16 @@
       return true;
     });
     return doc;
+  }
+  // Notatrader hvis KANONISKE forelder ligger utenfor mitt eget doc (delt
+  // direkte med meg). De skal aldri prunes bort — se pruneNoteParents.
+  function foreignParentNoteIds() {
+    const s = new Set();
+    (state.noteProjects || []).forEach((p) => {
+      (p.folders || []).forEach((f) => { if (f._canonProject) s.add(f.id); });
+    });
+    (state.notes || []).forEach((n) => { if (n._canonProject) s.add(n.id); });
+    return s;
   }
   function pruneDanglingCats(doc) {
     ['items', 'groups', 'ideas'].forEach((key) => {
@@ -20510,7 +21206,8 @@
   function rowKnownToServer(id) {
     if (!lastMy) return false;
     const has = (list) => (list || []).some((r) => r.id === id);
-    return has(lastMy.universes) || has(lastMy.groups) || has(lastMy.cards);
+    return has(lastMy.universes) || has(lastMy.groups) || has(lastMy.cards)
+        || has(lastMy.noteProjects) || has(lastMy.noteFolders) || has(lastMy.notes);
   }
 
   /* ---------------- Personlig rekkefølge (medlemskapsraden) ----------------
@@ -20520,7 +21217,7 @@
   function cloudPersonalPos(type, id, pos) {
     posOverrides.set(id, pos);
     const key = 'pos:' + id;
-    const col = type === 'universe' ? 'universe_id' : 'group_id';
+    const col = PERSONAL_POS_COL[type] || 'group_id';
     const op = {
       key,
       pos,
@@ -20573,11 +21270,22 @@
     if (!f) return;
     const arr = f.kind === 'universe' ? state.universes
       : f.kind === 'group' ? (f.obj._parent ? f.obj._parent.groups : null)
-      : f.obj._parent ? f.obj._parent.cards : null;
+      : f.kind === 'noteProject' ? state.noteProjects
+        : f.kind === 'noteFolder' ? (f.obj._parent ? f.obj._parent.folders : null)
+          : f.kind === 'note' ? state.notes
+            : f.obj._parent ? f.obj._parent.cards : null;
     if (!arr) return;
     const i = arr.indexOf(f.obj);
     if (i > -1) arr.splice(i, 1);
+    // En bokhylle tar innholdet sitt ut av visningen med seg — radene finnes
+    // fortsatt hos eieren, men de er ikke mine å vise lenger.
+    if (f.kind === 'noteProject') {
+      state.notes = (state.notes || []).filter((n) => n.project !== id);
+    } else if (f.kind === 'noteFolder') {
+      state.notes = (state.notes || []).filter((n) => n.folder !== id);
+    }
     validateActive(state); // objektet kan ha vært aktivt område/mappe
+    validateActiveNotes(state);
   }
 
   /* ---------------- Synk-syklus v2 ---------------- */
@@ -20722,6 +21430,13 @@
          den som allerede var i gang. Runden tas igjen når demoen er ferdig. */
       if (demoActive) return;
       lastMy = my;
+      /* Rader vi IKKE har rett til å skrive: en lokal endring på dem kan aldri
+         lande, og skal derfor ikke bli stående. Uten dette ville fletteren
+         funnet den samme divergensen hver runde og pushet den samme skrivingen
+         i det uendelige (vakten reverterer stille), mens kopien på skjermen så
+         lagret ut. `lastViewSig` nullstilles så gjentegningen faktisk skjer —
+         staten er endret her, ikke i fletteresultatet. */
+      if (revertUnwritableNoteEdits(my)) { lastViewSig = null; saveLocal(); }
       const remote = contentDocFromMy(my);
       const meta = metaFromMy(my);
       // `unknownHistory` er ikke-tom når cachen ble lest uten en gyldig base (kald
@@ -21724,9 +22439,15 @@
     if (back) back();
   });
 
-  const SHARE_TYPE_ICON = { universe: 'globe', group: 'folder' };
+  const SHARE_TYPE_ICON = {
+    universe: 'globe', group: 'folder',
+    note_project: 'noteProject', note_folder: 'noteFolder', note: 'note',
+  };
   // Objekttypen i bestemt form, slik den leses inne i en setning.
-  const typeWord = (type) => tr(type === 'universe' ? 'kindDef.universe' : 'kindDef.group');
+  const typeWord = (type) => tr('kindDef.' + (NOTE_KIND_OF_TYPE[type] || type));
+  // Er den delte tingen et TOPPNIVÅ (område/bokhylle)? Bare de har
+  // siste-eier-invarianten og «du er eneste eier»-forklaringen.
+  const shareIsTop = (type) => type === 'universe' || type === 'note_project';
   function openShare(type, id, obj, backTo) {
     shareCtx = { type, id, obj };
     shareBackTo = backTo || null;
@@ -21735,7 +22456,7 @@
     const objSpan = document.createElement('span');
     objSpan.className = 'share-title-obj';
     objSpan.innerHTML = ICONS[SHARE_TYPE_ICON[type]] || '';
-    objSpan.appendChild(document.createTextNode(obj.name || obj.title || ''));
+    objSpan.appendChild(document.createTextNode(nameOfAny(obj) || tr('common.noName')));
     shareTitle.appendChild(objSpan);
     shareTitle.appendChild(document.createTextNode(tr('share.settingsSuffix')));
     shareModal.hidden = false;
@@ -21754,12 +22475,20 @@
   }
   // Meg selv, fra kontoens egne data — så medlemslisten kan tegnes UMIDDELBART
   // (uten å vente på get_members); resten fylles inn når hentingen lander.
+  // Kategorien betrakteren står i før serversvaret lander: den DIREKTE rollen
+  // på nivået man ser på.
+  const SELF_CATEGORY = {
+    universe: ['universeOwner', 'universeMember'],
+    group: ['groupOwner', 'groupMember'],
+    note_project: ['noteProjectOwner', 'noteProjectMember'],
+    note_folder: ['noteFolderOwner', 'noteFolderMember'],
+    note: ['noteOwner', 'noteMember'],
+  };
   function mySelfInfo(type, id, obj) {
     const prof = (lastMy && lastMy.user) || {};
     const role = obj._role || 'member';
-    const cat = type === 'universe'
-      ? (role === 'owner' ? 'universeOwner' : 'universeMember')
-      : (role === 'owner' ? 'groupOwner' : 'groupMember');
+    const pair = SELF_CATEGORY[type] || SELF_CATEGORY.group;
+    const cat = role === 'owner' ? pair[0] : pair[1];
     return {
       type,
       ownerCount: obj._ownerCount || 1,
@@ -21780,20 +22509,41 @@
   // flere — samme backend-rolle, bare et annet visningsnavn.
   function memberCategoryTitle(type, category, count) {
     const many = count > 1;
-    if (type === 'universe') {
-      return category === 'universeOwner' ? tr(many ? 'share.coOwners' : 'share.owner') : tr('share.members');
+    // På TOPPNIVÅET trengs ingen presisering — det finnes bare ett nivå å ha
+    // en rolle på, og «Eier»/«Medlemmer» leser seg selv.
+    if (shareIsTop(type)) {
+      return category.endsWith('Owner') ? tr(many ? 'share.coOwners' : 'share.owner') : tr('share.members');
     }
     if (category === 'universeOwner') return tr(many ? 'share.coOwnersUniverse' : 'share.ownerUniverse');
     if (category === 'groupOwner') return tr(many ? 'share.coOwnersGroup' : 'share.ownerGroup');
     if (category === 'universeMember') return tr('share.membersUniverse');
+    if (category === 'noteProjectOwner') return tr(many ? 'share.coOwnersShelf' : 'share.ownerShelf');
+    if (category === 'noteFolderOwner') return tr(many ? 'share.coOwnersNotebook' : 'share.ownerNotebook');
+    if (category === 'noteOwner') return tr(many ? 'share.coOwnersNote' : 'share.ownerNote');
+    if (category === 'noteProjectMember') return tr('share.membersShelf');
+    if (category === 'noteFolderMember') return tr('share.membersNotebook');
+    if (category === 'noteMember') return tr('share.membersNote');
     return tr('share.membersGroup');
   }
-  const MEMBER_CATEGORY_ORDER = ['universeOwner', 'groupOwner', 'universeMember', 'groupMember'];
+  const MEMBER_CATEGORY_ORDER = [
+    'universeOwner', 'groupOwner', 'universeMember', 'groupMember',
+    'noteProjectOwner', 'noteFolderOwner', 'noteOwner',
+    'noteProjectMember', 'noteFolderMember', 'noteMember',
+  ];
   // Hvorfor et medlem ikke kan fjernes HER. Serveren sender koden, klienten
   // teksten — se `get_members` i supabase/users-and-sharing.sql.
   const REMOVE_HINT_KEY = {
     inherited: 'share.removeHintInherited',
     lastOwner: 'share.removeHintLastOwner',
+  };
+  /* «Har tilgang via …» skal peke på det NIVÅET tilgangen faktisk kommer fra,
+     ikke alltid på «området». Kategorien serveren sender sier hvilket det er,
+     så den ene koden `inherited` holder — teksten velges her. */
+  const INHERITED_HINT_BY_CATEGORY = {
+    noteProjectOwner: 'share.removeHintInheritedShelf',
+    noteProjectMember: 'share.removeHintInheritedShelf',
+    noteFolderOwner: 'share.removeHintInheritedNotebook',
+    noteFolderMember: 'share.removeHintInheritedNotebook',
   };
 
   function renderShareModal(type, id, obj, body, closeFn) {
@@ -21822,7 +22572,7 @@
     roleSel.className = 'field share-role-select';
     roleSel.setAttribute('aria-label', tr('share.roleAria'));
     [['member', tr('share.asMember')],
-      ['owner', tr(type === 'universe' ? 'share.asCoOwner' : 'share.asCoOwnerGroup')]]
+      ['owner', tr(shareIsTop(type) ? 'share.asCoOwner' : 'share.asCoOwnerGroup')]]
       .forEach(([v, label]) => {
         const o = document.createElement('option');
         o.value = v; o.textContent = label;
@@ -21967,8 +22717,10 @@
         // Serveren sender en språknøytral kode (`removeHintCode`) som vi
         // oversetter selv; `removeHint` er den gamle, norske teksten og brukes
         // kun hvis koden mangler (en server som ennå ikke er migrert).
-        hint.textContent = REMOVE_HINT_KEY[mbr.removeHintCode]
-          ? tr(REMOVE_HINT_KEY[mbr.removeHintCode]) : mbr.removeHint;
+        const hintKey = mbr.removeHintCode === 'inherited'
+          ? (INHERITED_HINT_BY_CATEGORY[mbr.category] || REMOVE_HINT_KEY.inherited)
+          : REMOVE_HINT_KEY[mbr.removeHintCode];
+        hint.textContent = hintKey ? tr(hintKey) : mbr.removeHint;
         box.appendChild(hint);
       }
       row.classList.toggle('is-inherited', mbr.direct === false);
@@ -22150,13 +22902,14 @@
           if (closeFn) closeFn();
           const live = findAnyById(id);
           if (!live) return;
-          if (type === 'universe') deleteUniverse(live.obj);
+          if (NOTE_KIND_OF_TYPE[type]) deleteNoteObject(NOTE_KIND_OF_TYPE[type], id);
+          else if (type === 'universe') deleteUniverse(live.obj);
           else deleteGroup(live.obj);
         });
         actionsWrap.appendChild(del);
       }
       // Én forklarende linje når man verken kan forlate eller slette.
-      if (!caps.leave && !caps.delete && obj._role === 'owner' && type === 'universe') {
+      if (!caps.leave && !caps.delete && obj._role === 'owner' && shareIsTop(type)) {
         const note = document.createElement('p');
         note.className = 'share-policy-note';
         note.textContent = tr('share.onlyOwnerNote');
@@ -24239,6 +24992,12 @@
     get notesCardBoard() { return notesCardBoard; },
     get notesNavCardBoard() { return notesNavCardBoard; },
     get notesNavRowBoard() { return notesNavRowBoard; },
+    // Sorteringens hysterese-tilstand for ETT mål, lest direkte. Se
+    // `dndSortProbe`: låsen kan ikke observeres av DOM-en. `dndSortAdmits` er
+    // selve avgjørelsen sorteringen bruker, ren og med klokken i tilstanden,
+    // så tidslåsen kan kreves nøyaktig uten å måle ekte pekertiming.
+    dndSortProbe,
+    dndSortAdmits,
     openAccount, closeAccount,
     canonical, reconcile, emptyDoc, docFromMyState, contentDocFromMy, applyMyDoc, cloudCycle,
     isSchemaMismatch, isTombstoneReject, isNetworkError, tombIds,
@@ -24303,7 +25062,7 @@
       };
     },
     /* Den LOGISKE dra-boksen, slik plasseringsreglene faktisk leser den
-       (`draggedRect`: pekeren minus grepet, uklemt og uten rotasjon/skala).
+       (`draggedRect`: pekeren minus grepet, uklemt og uten skala).
        Testene rekonstruerte den før fra dnd-kits `intentRectangle`, og den
        ligger inntil én frame bak — et sveip i 3 px steg målte da terskelen opp
        til to steg feil. `band` er kortets egen kant, altså den andre siden av

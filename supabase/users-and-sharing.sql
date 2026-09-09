@@ -446,6 +446,40 @@ alter table public.note_projects add column if not exists archived boolean not n
 alter table public.note_folders  add column if not exists archived boolean not null default false;
 alter table public.notes         add column if not exists archived boolean not null default false;
 
+-- DELING (docs/rettigheter-og-deling.md del 14). Notatene har fra og med denne
+-- runden den SAMME rettighetsmodellen som områder og mapper: roller i
+-- `memberships`, invitasjoner i `share_invites`, capabilities beregnet på
+-- serveren — og de to kolonnene låsemodellen hviler på. `locked`/`unlocked`
+-- er gjensidig utelukkende per rad (tretilstand: låst / unntak / arv), og
+-- `invite_policy` styrer om vanlige medlemmer kan invitere flere.
+--
+-- LÅSEN ER DET SOM GJØR EN REN LESER MULIG. Notatsiden har ingen egen
+-- «viewer»-rolle ved siden av `owner`/`member` — et medlem av et LÅST objekt
+-- er nettopp en leser, akkurat som i listefanen. Én mekanisme, ett sett med
+-- ord i UI-et, og ingen tredje rolle å holde i synk med den første.
+-- Additivt og idempotent, som resten av fila.
+alter table public.note_projects add column if not exists locked   boolean not null default false;
+alter table public.note_projects add column if not exists unlocked boolean not null default false;
+alter table public.note_folders  add column if not exists locked   boolean not null default false;
+alter table public.note_folders  add column if not exists unlocked boolean not null default false;
+alter table public.notes         add column if not exists locked   boolean not null default false;
+alter table public.notes         add column if not exists unlocked boolean not null default false;
+alter table public.note_projects add column if not exists invite_policy text not null default 'inherit';
+alter table public.note_folders  add column if not exists invite_policy text not null default 'inherit';
+alter table public.notes         add column if not exists invite_policy text not null default 'inherit';
+do $$ begin
+  alter table public.note_projects add constraint note_projects_policy_chk
+    check (invite_policy in ('inherit','allow','deny'));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.note_folders add constraint note_folders_policy_chk
+    check (invite_policy in ('inherit','allow','deny'));
+exception when duplicate_object then null; end $$;
+do $$ begin
+  alter table public.notes add constraint notes_policy_chk
+    check (invite_policy in ('inherit','allow','deny'));
+exception when duplicate_object then null; end $$;
+
 -- ------------------------------------------------------------
 -- 2c. KOBLINGER MELLOM NOTATER OG LISTER — public.object_links
 --
@@ -552,13 +586,34 @@ do $$ begin
   alter table public.memberships add constraint memberships_role_chk check (role in ('owner','member'));
 exception when duplicate_object then null; end $$;
 
+-- NOTATSIDENS tre nivåer deler den SAMME rolletabellen (docs/notater-plan.md).
+-- Det er dét som gjør at deling er ÉN modell og ikke to: `get_members`,
+-- invitasjonene, «forlat», siste-eier-invarianten og den personlige
+-- rekkefølgen er de samme radene og den samme koden. Nøyaktig én av de fem
+-- id-kolonnene er satt (CHECK-en i del 11); `card_id` er fortsatt pensjonert.
+alter table public.memberships add column if not exists note_project_id uuid
+  references public.note_projects (id) on delete cascade;
+alter table public.memberships add column if not exists note_folder_id uuid
+  references public.note_folders (id) on delete cascade;
+alter table public.memberships add column if not exists note_id uuid
+  references public.notes (id) on delete cascade;
+
 create unique index if not exists memberships_universe_user_key
   on public.memberships (universe_id, user_id) where universe_id is not null;
 create unique index if not exists memberships_group_user_key
   on public.memberships (group_id, user_id) where group_id is not null;
+create unique index if not exists memberships_note_project_user_key
+  on public.memberships (note_project_id, user_id) where note_project_id is not null;
+create unique index if not exists memberships_note_folder_user_key
+  on public.memberships (note_folder_id, user_id) where note_folder_id is not null;
+create unique index if not exists memberships_note_user_key
+  on public.memberships (note_id, user_id) where note_id is not null;
 create index if not exists memberships_user_idx on public.memberships (user_id);
 create index if not exists memberships_universe_role_idx on public.memberships (universe_id, role);
 create index if not exists memberships_group_role_idx on public.memberships (group_id, role);
+create index if not exists memberships_note_project_role_idx on public.memberships (note_project_id, role);
+create index if not exists memberships_note_folder_role_idx on public.memberships (note_folder_id, role);
+create index if not exists memberships_note_role_idx on public.memberships (note_id, role);
 
 alter table public.memberships enable row level security;
 
@@ -585,12 +640,30 @@ do $$ begin
   alter table public.share_invites add constraint share_invites_role_chk check (role in ('owner','member'));
 exception when duplicate_object then null; end $$;
 
+-- Invitasjoner til notatsidens tre nivåer, i den samme tabellen og med den
+-- samme flyten (opprett → aksepter/avslå → rolle).
+alter table public.share_invites add column if not exists note_project_id uuid
+  references public.note_projects (id) on delete cascade;
+alter table public.share_invites add column if not exists note_folder_id uuid
+  references public.note_folders (id) on delete cascade;
+alter table public.share_invites add column if not exists note_id uuid
+  references public.notes (id) on delete cascade;
+
 create unique index if not exists share_invites_universe_pending_key
   on public.share_invites (universe_id, lower(invitee_email))
   where status = 'pending' and universe_id is not null;
 create unique index if not exists share_invites_group_pending_key
   on public.share_invites (group_id, lower(invitee_email))
   where status = 'pending' and group_id is not null;
+create unique index if not exists share_invites_note_project_pending_key
+  on public.share_invites (note_project_id, lower(invitee_email))
+  where status = 'pending' and note_project_id is not null;
+create unique index if not exists share_invites_note_folder_pending_key
+  on public.share_invites (note_folder_id, lower(invitee_email))
+  where status = 'pending' and note_folder_id is not null;
+create unique index if not exists share_invites_note_pending_key
+  on public.share_invites (note_id, lower(invitee_email))
+  where status = 'pending' and note_id is not null;
 create index if not exists share_invites_invitee_idx
   on public.share_invites (lower(invitee_email)) where status = 'pending';
 
@@ -1266,6 +1339,151 @@ returns uuid[] language sql stable security definer set search_path = public as 
    where m.universe_id = p_universe and m.role = 'owner';
 $$;
 
+-- ---- Notatsidens roller (docs/rettigheter-og-deling.md del 14) ----
+-- Bokhylle > Notatbok > Notat har den SAMME rollemodellen som Område > Mappe,
+-- i den samme tabellen: `owner` og `member`, ingen tredje rolle. Forskjellen
+-- er at notatsiden kan deles på ALLE TRE nivåene — et notat ER dokumentet,
+-- mens en liste bare er en del av mappens struktur.
+--
+-- ARVEN GÅR ÉN VEI, NEDOVER: en rolle på bokhyllen gjelder notatbøkene og
+-- notatene i den; en rolle på notatboken gjelder notatene i den. Motsatt vei
+-- gir en rolle INGENTING: den som har fått ett notat delt med seg ser verken
+-- notatboken, bokhyllen, navnene deres eller medlemslistene — nøyaktig som en
+-- direkte mappemottaker aldri ser området mappen står i.
+
+create or replace function public.note_folder_project(p_id uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select project_id from public.note_folders where id = p_id;
+$$;
+
+create or replace function public.note_project_of(p_id uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select project_id from public.notes where id = p_id;
+$$;
+
+create or replace function public.note_folder_of(p_id uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select folder_id from public.notes where id = p_id;
+$$;
+
+-- Notatets VIRKELIGE forelder-notatbok: `folder_id` bare når raden faktisk
+-- finnes. En peker kan bli hengende etter at notatboken er slettet for godt
+-- (`on delete set null` treffer ikke en skriving vakten har rullet tilbake),
+-- og et notat med en hengende peker leses som et FRITT notat — nøyaktig som
+-- klienten tegner det, og som `items.cat_id` fungerer. Uten dette leddet ville
+-- notatet blitt uredigerbart og umulig å reparere: alle spørsmål om forelderen
+-- ville gått til en notatbok som ikke finnes, og svart nei.
+create or replace function public.note_parent_folder(p_id uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select f.id from public.note_folders f
+   where f.id = (select folder_id from public.notes where id = p_id);
+$$;
+
+-- DIREKTE rolle på nivået (arvede roller telles ikke med her).
+create or replace function public.note_project_role(p_id uuid, p_uid uuid)
+returns text language sql stable security definer set search_path = public as $$
+  select m.role from public.memberships m
+   where m.note_project_id = p_id and m.user_id = p_uid;
+$$;
+
+create or replace function public.note_folder_role(p_id uuid, p_uid uuid)
+returns text language sql stable security definer set search_path = public as $$
+  select m.role from public.memberships m
+   where m.note_folder_id = p_id and m.user_id = p_uid;
+$$;
+
+create or replace function public.note_role(p_id uuid, p_uid uuid)
+returns text language sql stable security definer set search_path = public as $$
+  select m.role from public.memberships m
+   where m.note_id = p_id and m.user_id = p_uid;
+$$;
+
+-- `exists`, ikke `role = 'owner'`: en manglende rad gir NULL av en
+-- sammenligning, og NULL brer seg gjennom hele capability-kjeden («kan ikke
+-- redigere» blir «vet ikke»). Formen er den samme som `is_universe_owner`.
+create or replace function public.is_note_project_owner(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.memberships m
+                  where m.note_project_id = p_id and m.user_id = p_uid and m.role = 'owner');
+$$;
+
+create or replace function public.is_note_project_member(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.memberships m
+                  where m.note_project_id = p_id and m.user_id = p_uid);
+$$;
+
+-- EFFEKTIV notatbokeier: eksplisitt rolle på notatboken ELLER eier av
+-- bokhyllen (dynamisk supereier — trenger ingen egen rad).
+create or replace function public.is_note_folder_owner(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.memberships m
+                  where m.note_folder_id = p_id and m.user_id = p_uid and m.role = 'owner')
+      or public.is_note_project_owner(public.note_folder_project(p_id), p_uid);
+$$;
+
+create or replace function public.is_note_folder_member(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.memberships m
+                  where m.note_folder_id = p_id and m.user_id = p_uid)
+      or public.is_note_project_member(public.note_folder_project(p_id), p_uid);
+$$;
+
+-- Et notats FORELDER er notatboken hvis det ligger i én, ellers bokhyllen
+-- (et FRITT notat). De to pekerne kan ikke motsi hverandre — `notes_fix_parent`
+-- utleder bokhyllen av notatboken — så det holder å spørre den nærmeste.
+create or replace function public.is_note_owner(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.memberships m
+                  where m.note_id = p_id and m.user_id = p_uid and m.role = 'owner')
+      or public.is_note_folder_owner(public.note_parent_folder(p_id), p_uid)
+      or public.is_note_project_owner(public.note_project_of(p_id), p_uid);
+$$;
+
+create or replace function public.is_note_member(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.memberships m
+                  where m.note_id = p_id and m.user_id = p_uid)
+      or public.is_note_folder_member(public.note_parent_folder(p_id), p_uid)
+      or public.is_note_project_member(public.note_project_of(p_id), p_uid);
+$$;
+
+-- ARVET medlemskap = tilgang som kommer OVENFRA (bokhyllen, eller notatboken
+-- for et notat i én). Skillet er hele grunnlaget for at et rent DIREKTE medlem
+-- av objektet selv aldri kan slette det for alle — samme regel som at et rent
+-- direkte mappemedlem ikke kan slette mappen.
+create or replace function public.note_folder_inherited_member(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.is_note_project_member(public.note_folder_project(p_id), p_uid);
+$$;
+
+create or replace function public.note_inherited_member(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select case when public.note_parent_folder(p_id) is not null
+              then public.is_note_folder_member(public.note_parent_folder(p_id), p_uid)
+              else public.is_note_project_member(public.note_project_of(p_id), p_uid) end;
+$$;
+
+-- Bokhyllen et notatobjekt hører til (grunnlaget for «bokhylleeieren styrer
+-- alltid»). En bokhylle er sin egen.
+create or replace function public.resource_note_project(p_type text, p_id uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select case p_type
+    when 'note_project' then p_id
+    when 'note_folder'  then public.note_folder_project(p_id)
+    when 'note'         then public.note_project_of(p_id)
+  end;
+$$;
+
+-- Siste-eier-invarianten gjelder BOKHYLLEN, som for et område: en notatbok
+-- eller et notat kan stå uten eksplisitt eier fordi bokhylleeierne er
+-- dynamiske supereiere.
+create or replace function public.note_project_owner_count(p_id uuid)
+returns integer language sql stable security definer set search_path = public as $$
+  select count(*)::int from public.memberships m
+   where m.note_project_id = p_id and m.role = 'owner';
+$$;
+
 -- ---- Lesetilgang ----
 -- Området leses KUN av områdemedlemmer: en direkte mappemottaker uten
 -- områderolle skal aldri se områdets navn eller medlemsliste.
@@ -1286,6 +1504,28 @@ returns boolean language sql stable security definer set search_path = public as
   select public.can_read_group((select group_id from public.cards where id = p_id), p_uid);
 $$;
 
+-- Notatsiden: raden må FINNES, og man må ha effektivt medlemskap på den.
+-- Eksistenssjekken er ikke overflødig — uten den ville et oppslag på en id
+-- som er slettet svart «nei» via en null-rolle i stedet for entydig usant, og
+-- capability-funksjonene over bygger videre på svaret.
+create or replace function public.can_read_note_project(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.note_projects p where p.id = p_id)
+     and public.is_note_project_member(p_id, p_uid);
+$$;
+
+create or replace function public.can_read_note_folder(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.note_folders f where f.id = p_id)
+     and public.is_note_folder_member(p_id, p_uid);
+$$;
+
+create or replace function public.can_read_note(p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.notes n where n.id = p_id)
+     and public.is_note_member(p_id, p_uid);
+$$;
+
 create or replace function public.can_read(p_type text, p_id uuid, p_uid uuid)
 returns boolean language sql stable security definer set search_path = public as $$
   select coalesce(case p_type
@@ -1293,6 +1533,9 @@ returns boolean language sql stable security definer set search_path = public as
     when 'group'    then public.can_read_group(p_id, p_uid)
     when 'card'     then public.can_read_card(p_id, p_uid)
     when 'item'     then public.can_read_card((select card_id from public.items where id = p_id), p_uid)
+    when 'note_project' then public.can_read_note_project(p_id, p_uid)
+    when 'note_folder'  then public.can_read_note_folder(p_id, p_uid)
+    when 'note'         then public.can_read_note(p_id, p_uid)
   end, false);
 $$;
 
@@ -1328,6 +1571,12 @@ create or replace function public.is_privileged(p_type text, p_id uuid, p_uid uu
 returns boolean language sql stable security definer set search_path = public as $$
   select case p_type
     when 'universe' then public.is_universe_owner(p_id, p_uid)
+    -- Notatsiden: eier på NIVÅET selv (eksplisitt eller arvet ovenfra), ikke
+    -- på et fast «styrende» nivå som for listene. Det er dét som gjør at et
+    -- delt enkeltnotat kan ha sin egen eier.
+    when 'note_project' then public.is_note_project_owner(p_id, p_uid)
+    when 'note_folder'  then public.is_note_folder_owner(p_id, p_uid)
+    when 'note'         then public.is_note_owner(p_id, p_uid)
     else coalesce(public.is_group_owner(public.resource_group(p_type, p_id), p_uid), false)
   end;
 $$;
@@ -1341,23 +1590,43 @@ returns table(src_type text, src_id uuid, is_locked boolean)
 language plpgsql stable security definer set search_path = public as $$
 declare
   v_card uuid; v_group uuid; v_universe uuid;
+  v_note uuid; v_nfolder uuid; v_nproject uuid;
   r record; vlocked boolean; vunlocked boolean;
 begin
   if p_type = 'item' then select card_id into v_card from public.items where id = p_id;
   elsif p_type = 'card' then v_card := p_id;
   elsif p_type = 'group' then v_group := p_id;
   elsif p_type = 'universe' then v_universe := p_id;
+  -- Notatsidens kjede er den samme formen: notat → notatbok → bokhylle. Et
+  -- FRITT notat hopper over notatboken og arver rett fra bokhyllen.
+  elsif p_type = 'note' then v_note := p_id;
+  elsif p_type = 'note_folder' then v_nfolder := p_id;
+  elsif p_type = 'note_project' then v_nproject := p_id;
   end if;
   if v_card is not null then select group_id into v_group from public.cards where id = v_card; end if;
   if v_group is not null then select universe_id into v_universe from public.groups where id = v_group; end if;
+  -- `note_parent_folder`, ikke `folder_id`: en hengende peker til en slettet
+  -- notatbok skal ikke skjule bokhyllens lås. Bokhyllen leses derfor rett fra
+  -- notatet (invarianten holder den lik notatbokens).
+  if v_note is not null then
+    select project_id into v_nproject from public.notes where id = v_note;
+    v_nfolder := public.note_parent_folder(v_note);
+  elsif v_nfolder is not null then
+    select project_id into v_nproject from public.note_folders where id = v_nfolder;
+  end if;
 
   for r in
-    select * from (values (1, 'card', v_card), (2, 'group', v_group), (3, 'universe', v_universe))
+    select * from (values (1, 'card', v_card), (2, 'group', v_group), (3, 'universe', v_universe),
+                          (1, 'note', v_note), (2, 'note_folder', v_nfolder),
+                          (3, 'note_project', v_nproject))
       as ch(depth, t, id)
     where ch.id is not null order by ch.depth
   loop
     if r.t = 'card' then select locked, unlocked into vlocked, vunlocked from public.cards where id = r.id;
     elsif r.t = 'group' then select locked, unlocked into vlocked, vunlocked from public.groups where id = r.id;
+    elsif r.t = 'note' then select locked, unlocked into vlocked, vunlocked from public.notes where id = r.id;
+    elsif r.t = 'note_folder' then select locked, unlocked into vlocked, vunlocked from public.note_folders where id = r.id;
+    elsif r.t = 'note_project' then select locked, unlocked into vlocked, vunlocked from public.note_projects where id = r.id;
     else select locked, unlocked into vlocked, vunlocked from public.universes where id = r.id;
     end if;
     if vlocked or vunlocked then
@@ -1384,7 +1653,17 @@ begin
   if p_type = 'card' then v_pt := 'group'; select group_id into v_pid from public.cards where id = p_id;
   elsif p_type = 'group' then v_pt := 'universe'; select universe_id into v_pid from public.groups where id = p_id;
   elsif p_type = 'item' then v_pt := 'card'; select card_id into v_pid from public.items where id = p_id;
+  elsif p_type = 'note_folder' then
+    v_pt := 'note_project'; select project_id into v_pid from public.note_folders where id = p_id;
+  elsif p_type = 'note' then
+    -- Nærmeste FORELDER: notatboken hvis notatet ligger i én som FINNES,
+    -- ellers bokhyllen (et fritt notat, eller en hengende peker).
+    v_pid := public.note_parent_folder(p_id);
+    if v_pid is not null then v_pt := 'note_folder';
+    else v_pt := 'note_project'; select project_id into v_pid from public.notes where id = p_id;
+    end if;
   else return; end if;
+  if v_pid is null then return; end if;
   return query select * from public.effective_lock_source(v_pt, v_pid);
 end;
 $$;
@@ -1399,13 +1678,27 @@ $$;
 -- f.eks. etter at låsen over er fjernet.
 create or replace function public.can_manage_lock_exception(p_type text, p_id uuid, p_uid uuid)
 returns boolean language sql stable security definer set search_path = public as $$
-  select public.is_universe_owner(public.resource_universe(p_type, p_id), p_uid)
+  select case when p_type in ('note_project', 'note_folder', 'note') then
+      -- Notatsiden, samme regel med bokhyllen i områdets rolle: bokhylleeiere
+      -- alltid, og — når den arvede låsen er satt på en NOTATBOK — også en
+      -- eksplisitt notatbokeier der. En notatbokeier kan altså ikke åpne en
+      -- gren i strid med en bokhyllelås.
+      public.is_note_project_owner(public.resource_note_project(p_type, p_id), p_uid)
+      or exists (
+        select 1 from public.inherited_lock_source(p_type, p_id) s
+        join public.memberships m on m.note_folder_id = s.src_id and m.user_id = p_uid and m.role = 'owner'
+        where s.is_locked and s.src_type = 'note_folder')
+      or (not exists (select 1 from public.inherited_lock_source(p_type, p_id) s where s.is_locked)
+          and public.is_privileged(p_type, p_id, p_uid))
+    else
+      public.is_universe_owner(public.resource_universe(p_type, p_id), p_uid)
       or exists (
         select 1 from public.inherited_lock_source(p_type, p_id) s
         join public.memberships m on m.group_id = s.src_id and m.user_id = p_uid and m.role = 'owner'
         where s.is_locked and s.src_type = 'group')
       or (not exists (select 1 from public.inherited_lock_source(p_type, p_id) s where s.is_locked)
-          and public.is_privileged(p_type, p_id, p_uid));
+          and public.is_privileged(p_type, p_id, p_uid))
+    end;
 $$;
 
 -- ---- Invitasjonspolicy (kun områder og mapper) ----
@@ -1414,19 +1707,35 @@ create or replace function public.effective_invite_source(p_type text, p_id uuid
 returns table(src_type text, src_id uuid, pol text)
 language plpgsql stable security definer set search_path = public as $$
 declare
-  v_group uuid; v_universe uuid; r record; vpol text;
+  v_group uuid; v_universe uuid;
+  v_note uuid; v_nfolder uuid; v_nproject uuid;
+  r record; vpol text;
 begin
   if p_type = 'group' then v_group := p_id;
   elsif p_type = 'universe' then v_universe := p_id;
+  elsif p_type = 'note' then v_note := p_id;
+  elsif p_type = 'note_folder' then v_nfolder := p_id;
+  elsif p_type = 'note_project' then v_nproject := p_id;
   else return; end if;
   if v_group is not null then select universe_id into v_universe from public.groups where id = v_group; end if;
+  if v_note is not null then
+    select project_id into v_nproject from public.notes where id = v_note;
+    v_nfolder := public.note_parent_folder(v_note);
+  elsif v_nfolder is not null then
+    select project_id into v_nproject from public.note_folders where id = v_nfolder;
+  end if;
 
   for r in
-    select * from (values (1, 'group', v_group), (2, 'universe', v_universe))
+    select * from (values (1, 'group', v_group), (2, 'universe', v_universe),
+                          (1, 'note', v_note), (2, 'note_folder', v_nfolder),
+                          (3, 'note_project', v_nproject))
       as ch(depth, t, id)
     where ch.id is not null order by ch.depth
   loop
     if r.t = 'group' then select invite_policy into vpol from public.groups where id = r.id;
+    elsif r.t = 'note' then select invite_policy into vpol from public.notes where id = r.id;
+    elsif r.t = 'note_folder' then select invite_policy into vpol from public.note_folders where id = r.id;
+    elsif r.t = 'note_project' then select invite_policy into vpol from public.note_projects where id = r.id;
     else select invite_policy into vpol from public.universes where id = r.id;
     end if;
     if vpol in ('allow', 'deny') then
@@ -1445,11 +1754,22 @@ $$;
 create or replace function public.inherited_invite_source(p_type text, p_id uuid)
 returns table(src_type text, src_id uuid, pol text)
 language plpgsql stable security definer set search_path = public as $$
-declare v_pid uuid;
+declare v_pid uuid; v_pt text;
 begin
-  if p_type <> 'group' then return; end if;
-  select universe_id into v_pid from public.groups where id = p_id;
-  return query select * from public.effective_invite_source('universe', v_pid);
+  if p_type = 'group' then
+    select universe_id into v_pid from public.groups where id = p_id;
+    v_pt := 'universe';
+  elsif p_type = 'note_folder' then
+    select project_id into v_pid from public.note_folders where id = p_id;
+    v_pt := 'note_project';
+  elsif p_type = 'note' then
+    v_pid := public.note_parent_folder(p_id);
+    if v_pid is not null then v_pt := 'note_folder';
+    else v_pt := 'note_project'; select project_id into v_pid from public.notes where id = p_id;
+    end if;
+  else return; end if;
+  if v_pid is null then return; end if;
+  return query select * from public.effective_invite_source(v_pt, v_pid);
 end;
 $$;
 
@@ -1471,6 +1791,22 @@ returns boolean language sql stable security definer set search_path = public as
   select public.can_edit_content(p_type, p_id, p_uid);
 $$;
 
+-- Å opprette et NOTAT spør forelderen: notatboken hvis det skal ligge i én,
+-- ellers bokhyllen (et fritt notat). Ett spørsmål, ett svar — samme regel
+-- klienten gater knappene på.
+create or replace function public.can_create_note(p_project uuid, p_folder uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select case when p_folder is not null
+                and exists (select 1 from public.note_folders f where f.id = p_folder)
+              then public.can_create_child('note_folder', p_folder, p_uid)
+              -- Notatboken finnes ikke (ennå eller ikke lenger): spørsmålet
+              -- går til bokhyllen. Fremmednøkkelen er `deferrable`, så en
+              -- notatbok som kommer senere i samme transaksjon fanges der —
+              -- og en hengende peker etter en permanent sletting skal ikke
+              -- gjøre notatet uredigerbart.
+              else public.can_create_child('note_project', p_project, p_uid) end;
+$$;
+
 -- Endre objektets POSISJON blant søsken. Posisjonen tilhører FORELDERENS
 -- organisering, så den styres av retten til å redigere forelderens innhold —
 -- ikke av objektets egen lås. Områdets toppnivåposisjon er PERSONLIG
@@ -1482,6 +1818,13 @@ returns boolean language sql stable security definer set search_path = public as
     when 'group'    then public.can_edit_content('universe', (select universe_id from public.groups where id = p_id), p_uid)
     when 'card'     then public.can_edit_content('group',    (select group_id    from public.cards  where id = p_id), p_uid)
     when 'item'     then public.can_edit_content('card',     (select card_id     from public.items  where id = p_id), p_uid)
+    -- Bokhyllens toppnivåposisjon er PERSONLIG (memberships.pos), som et
+    -- områdes: den endrer aldri hva andre ser, og krever bare medlemskap.
+    when 'note_project' then public.is_note_project_member(p_id, p_uid)
+    when 'note_folder'  then public.can_edit_content('note_project',
+                              public.note_folder_project(p_id), p_uid)
+    when 'note'         then public.can_create_note(public.note_project_of(p_id),
+                              public.note_parent_folder(p_id), p_uid)
   end, false);
 $$;
 
@@ -1498,6 +1841,23 @@ returns boolean language sql stable security definer set search_path = public as
     when 'group' then public.is_group_owner(p_id, p_uid)
       or (public.is_universe_member(public.group_universe(p_id), p_uid)
           and not public.is_effectively_locked('group', p_id))
+    /* Notatsiden, samme trapp:
+         * bokhylle:  kun bokhylleeiere
+         * notatbok:  notatbokeiere, ELLER et bokhyllemedlem når notatboken er
+                      effektivt åpen
+         * notat:     notateiere, ELLER et medlem ARVET ovenfra (bokhyllen,
+                      eller notatboken det ligger i) når notatet er åpent
+       Et rent DIREKTE medlem av objektet selv kan aldri slette det for alle —
+       det er den samme grensen som holder et direkte mappemedlem fra å slette
+       mappen. Deler man et notat med noen, deler man lesing og redigering,
+       ikke retten til å ta det fra alle andre. */
+    when 'note_project' then public.is_note_project_owner(p_id, p_uid)
+    when 'note_folder' then public.is_note_folder_owner(p_id, p_uid)
+      or (public.note_folder_inherited_member(p_id, p_uid)
+          and not public.is_effectively_locked('note_folder', p_id))
+    when 'note' then public.is_note_owner(p_id, p_uid)
+      or (public.note_inherited_member(p_id, p_uid)
+          and not public.is_effectively_locked('note', p_id))
     else public.is_privileged(p_type, p_id, p_uid)
       or (public.can_read(p_type, p_id, p_uid)
           and not public.is_effectively_locked(p_type, p_id))
@@ -1523,6 +1883,18 @@ returns boolean language sql stable security definer set search_path = public as
       and (public.universe_role(p_id, p_uid) <> 'owner' or public.universe_owner_count(p_id) > 1)
     when 'group' then public.group_role(p_id, p_uid) is not null
       and public.universe_role(public.group_universe(p_id), p_uid) is null
+    -- Notatsiden: samme to regler. Bokhyllen har siste-eier-invarianten; en
+    -- notatbok/et notat kan forlates bare når den direkte rollen er ENESTE vei
+    -- inn — ellers ville knappen fjernet en rad uten å fjerne tilgang.
+    when 'note_project' then public.note_project_role(p_id, p_uid) is not null
+      and (public.note_project_role(p_id, p_uid) <> 'owner'
+           or public.note_project_owner_count(p_id) > 1)
+    when 'note_folder' then public.note_folder_role(p_id, p_uid) is not null
+      and public.note_project_role(public.note_folder_project(p_id), p_uid) is null
+    when 'note' then public.note_role(p_id, p_uid) is not null
+      and (public.note_parent_folder(p_id) is null
+           or public.note_folder_role(public.note_parent_folder(p_id), p_uid) is null)
+      and public.note_project_role(public.note_project_of(p_id), p_uid) is null
     else false
   end;
 $$;
@@ -1534,6 +1906,9 @@ returns boolean language sql stable security definer set search_path = public as
   select case p_type
     when 'universe' then public.is_universe_owner(p_id, p_uid)
     when 'group'    then public.is_group_owner(p_id, p_uid)
+    when 'note_project' then public.is_note_project_owner(p_id, p_uid)
+    when 'note_folder'  then public.is_note_folder_owner(p_id, p_uid)
+    when 'note'         then public.is_note_owner(p_id, p_uid)
     else false
   end;
 $$;
@@ -1544,7 +1919,7 @@ create or replace function public.can_invite_to(p_type text, p_id uuid, p_uid uu
 returns boolean language sql stable security definer set search_path = public as $$
   select public.can_manage_members(p_type, p_id, p_uid)
       or (public.can_read(p_type, p_id, p_uid)
-          and p_type in ('universe', 'group')
+          and p_type in ('universe', 'group', 'note_project', 'note_folder', 'note')
           and public.effective_invite_policy(p_type, p_id));
 $$;
 
@@ -1567,7 +1942,9 @@ create or replace function public.can_manage_invite_policy(p_type text, p_id uui
 returns boolean language sql stable security definer set search_path = public as $$
   select case
     when exists (select 1 from public.inherited_invite_source(p_type, p_id) s where s.pol = 'deny')
-      then public.is_universe_owner(public.resource_universe(p_type, p_id), p_uid)
+      then case when p_type in ('note_project', 'note_folder', 'note')
+                then public.is_note_project_owner(public.resource_note_project(p_type, p_id), p_uid)
+                else public.is_universe_owner(public.resource_universe(p_type, p_id), p_uid) end
     else public.can_manage_members(p_type, p_id, p_uid)
   end;
 $$;
@@ -1597,6 +1974,45 @@ returns integer language sql stable security definer set search_path = public as
     union
     select m.user_id from public.memberships m where m.group_id = p_group
   ) s;
+$$;
+
+-- Notatsidens tellere. En bokhylle teller sine egne roller; en notatbok og et
+-- notat teller den DEDUPLISERTE unionen av alt som gir effektiv tilgang —
+-- ellers ville et notat i en delt bokhylle sett «udelt» ut for eieren.
+create or replace function public.note_project_member_count(p_id uuid)
+returns integer language sql stable security definer set search_path = public as $$
+  select count(*)::int from public.memberships m where m.note_project_id = p_id;
+$$;
+
+create or replace function public.note_folder_member_count(p_id uuid)
+returns integer language sql stable security definer set search_path = public as $$
+  select count(*)::int from (
+    select m.user_id from public.memberships m
+     where m.note_project_id = public.note_folder_project(p_id)
+    union
+    select m.user_id from public.memberships m where m.note_folder_id = p_id
+  ) s;
+$$;
+
+create or replace function public.note_member_count(p_id uuid)
+returns integer language sql stable security definer set search_path = public as $$
+  select count(*)::int from (
+    select m.user_id from public.memberships m
+     where m.note_project_id = public.note_project_of(p_id)
+    union
+    select m.user_id from public.memberships m
+     where m.note_folder_id = public.note_folder_of(p_id)
+    union
+    select m.user_id from public.memberships m where m.note_id = p_id
+  ) s;
+$$;
+
+-- Flytte et notatobjekt til en ANNEN forelder: destruktiv myndighet i kilden,
+-- akkurat som for en mappe. Målkravet (`can_create_child`) sjekkes i tillegg
+-- av vakten som utfører flyttingen.
+create or replace function public.can_move_note_object(p_type text, p_id uuid, p_uid uuid)
+returns boolean language sql stable security definer set search_path = public as $$
+  select p_type in ('note_folder', 'note') and public.can_delete_object(p_type, p_id, p_uid);
 $$;
 
 -- ---- Capability-pakker til klienten ----
@@ -1641,6 +2057,73 @@ returns jsonb language sql stable security definer set search_path = public as $
     'lockException',     public.can_manage_lock_exception('group', p_id, p_uid),
     'managePolicy',      public.can_manage_invite_policy('group', p_id, p_uid),
     'locked',            public.is_effectively_locked('group', p_id));
+$$;
+
+/* Notatsidens tre capability-pakker. Nøklene er de samme som områdenes og
+   mappenes der handlingen er den samme (`read`, `editContent`, `delete`,
+   `leave`, `invite`, `manageLock` …), så klienten kan gate den SAMME modalen
+   og den SAMME objektmenyen på dem uten en egen notat-gren. `createChild` er
+   ett navn for «lag en notatbok her» og «lag et notat her» — hvilket av dem
+   det er avgjøres av nivået, ikke av nøkkelen. */
+create or replace function public.note_project_caps(p_id uuid, p_uid uuid)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'read',              public.can_read_note_project(p_id, p_uid),
+    'editContent',       public.can_edit_content('note_project', p_id, p_uid),
+    'createChild',       public.can_create_child('note_project', p_id, p_uid),
+    'reorderInParent',   public.can_reorder_in_parent('note_project', p_id, p_uid),
+    'manageSettings',    public.can_manage_members('note_project', p_id, p_uid),
+    'delete',            public.can_delete_object('note_project', p_id, p_uid),
+    'leave',             public.can_leave('note_project', p_id, p_uid),
+    'invite',            public.can_invite_to('note_project', p_id, p_uid),
+    'inviteOwner',       public.can_invite_owner('note_project', p_id, p_uid),
+    'manageMembers',     public.can_manage_members('note_project', p_id, p_uid),
+    'manageOwners',      public.can_manage_members('note_project', p_id, p_uid),
+    'manageLock',        public.can_manage_lock('note_project', p_id, p_uid),
+    'lockException',     public.can_manage_lock_exception('note_project', p_id, p_uid),
+    'managePolicy',      public.can_manage_invite_policy('note_project', p_id, p_uid),
+    'locked',            public.is_effectively_locked('note_project', p_id));
+$$;
+
+create or replace function public.note_folder_caps(p_id uuid, p_uid uuid)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'read',              public.can_read_note_folder(p_id, p_uid),
+    'editContent',       public.can_edit_content('note_folder', p_id, p_uid),
+    'createChild',       public.can_create_child('note_folder', p_id, p_uid),
+    'reorderInParent',   public.can_reorder_in_parent('note_folder', p_id, p_uid),
+    'manageSettings',    public.can_manage_members('note_folder', p_id, p_uid),
+    'delete',            public.can_delete_object('note_folder', p_id, p_uid),
+    'move',              public.can_move_note_object('note_folder', p_id, p_uid),
+    'leave',             public.can_leave('note_folder', p_id, p_uid),
+    'invite',            public.can_invite_to('note_folder', p_id, p_uid),
+    'inviteOwner',       public.can_invite_owner('note_folder', p_id, p_uid),
+    'manageMembers',     public.can_manage_members('note_folder', p_id, p_uid),
+    'manageOwners',      public.can_manage_members('note_folder', p_id, p_uid),
+    'manageLock',        public.can_manage_lock('note_folder', p_id, p_uid),
+    'lockException',     public.can_manage_lock_exception('note_folder', p_id, p_uid),
+    'managePolicy',      public.can_manage_invite_policy('note_folder', p_id, p_uid),
+    'locked',            public.is_effectively_locked('note_folder', p_id));
+$$;
+
+create or replace function public.note_caps(p_id uuid, p_uid uuid)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select jsonb_build_object(
+    'read',              public.can_read_note(p_id, p_uid),
+    'editContent',       public.can_edit_content('note', p_id, p_uid),
+    'reorderInParent',   public.can_reorder_in_parent('note', p_id, p_uid),
+    'manageSettings',    public.can_manage_members('note', p_id, p_uid),
+    'delete',            public.can_delete_object('note', p_id, p_uid),
+    'move',              public.can_move_note_object('note', p_id, p_uid),
+    'leave',             public.can_leave('note', p_id, p_uid),
+    'invite',            public.can_invite_to('note', p_id, p_uid),
+    'inviteOwner',       public.can_invite_owner('note', p_id, p_uid),
+    'manageMembers',     public.can_manage_members('note', p_id, p_uid),
+    'manageOwners',      public.can_manage_members('note', p_id, p_uid),
+    'manageLock',        public.can_manage_lock('note', p_id, p_uid),
+    'lockException',     public.can_manage_lock_exception('note', p_id, p_uid),
+    'managePolicy',      public.can_manage_invite_policy('note', p_id, p_uid),
+    'locked',            public.is_effectively_locked('note', p_id));
 $$;
 
 -- ------------------------------------------------------------
@@ -1696,6 +2179,56 @@ $$;
 drop trigger if exists groups_owner_seed on public.groups;
 create trigger groups_owner_seed after insert on public.groups
   for each row execute function public.groups_after_insert();
+
+-- Notatsiden, samme regel på alle tre nivåene: den som oppretter blir eier —
+-- med mindre rollen allerede er ARVET ovenfra (da ville en egen rad bare
+-- duplisert medlemslisten). For en konto som jobber alene betyr det ÉN rad per
+-- bokhylle og ingen på notatbøkene og notatene; rader oppstår først når noen
+-- lager noe i en bokhylle de bare er medlem av.
+create or replace function public.note_projects_after_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.memberships (user_id, note_project_id, role, pos)
+  values (new.owner_id, new.id, 'owner', coalesce(new.pos, 0))
+  on conflict (note_project_id, user_id) where note_project_id is not null do nothing;
+  return new;
+end;
+$$;
+
+create or replace function public.note_folders_after_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if public.is_note_project_owner(new.project_id, new.owner_id) then return new; end if;
+  insert into public.memberships (user_id, note_folder_id, role, pos)
+  values (new.owner_id, new.id, 'owner', coalesce(new.pos, 0))
+  on conflict (note_folder_id, user_id) where note_folder_id is not null do nothing;
+  return new;
+end;
+$$;
+
+create or replace function public.notes_after_insert()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.folder_id is not null and public.is_note_folder_owner(new.folder_id, new.owner_id) then
+    return new;
+  end if;
+  if public.is_note_project_owner(new.project_id, new.owner_id) then return new; end if;
+  insert into public.memberships (user_id, note_id, role, pos)
+  values (new.owner_id, new.id, 'owner', coalesce(new.pos, 0))
+  on conflict (note_id, user_id) where note_id is not null do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists note_projects_owner_seed on public.note_projects;
+create trigger note_projects_owner_seed after insert on public.note_projects
+  for each row execute function public.note_projects_after_insert();
+drop trigger if exists note_folders_owner_seed on public.note_folders;
+create trigger note_folders_owner_seed after insert on public.note_folders
+  for each row execute function public.note_folders_after_insert();
+drop trigger if exists notes_owner_seed on public.notes;
+create trigger notes_owner_seed after insert on public.notes
+  for each row execute function public.notes_after_insert();
 
 -- ---- Objekt-vakter ----
 
@@ -1932,23 +2465,58 @@ drop trigger if exists ideas_guard on public.ideas;
 create trigger ideas_guard before update on public.ideas
   for each row execute function public.ideas_before_update();
 
--- Notater: samme felt-nivå-LWW som idéene, og av samme grunn uten
--- capability-spørsmål — RLS har allerede avgjort at raden er MIN. Igjen står
--- registrene: en eldre skriving skal aldri kunne overskrive en nyere fra en
--- annen enhet. Forelder-pekerne (`project_id`/`folder_id`) rir på
--- posisjonsregisteret, som `card_id`/`cat_id` på et listepunkt.
+/* Notater: samme felt-nivå-LWW som listene, og fra og med delingsrunden også
+   de samme CAPABILITY-spørsmålene (docs/rettigheter-og-deling.md del 14).
+   Formen er `universes_before_update`/`groups_before_update` sin, og med vilje:
+
+     * `owner_id` (oppretteren) er uforanderlig;
+     * lås, unntak og invitasjonspolicy krever egen myndighet → RAISE;
+     * `trashed` (felles søppelkasse) krever SLETTERETT → RAISE;
+     * `archived` er derimot INNHOLD: å legge noe til side er reversibelt og
+       ikke-destruktivt, og krever bare redigeringsrett. Det er skillet mellom
+       «lagt bort» og «slettet», og det er verdt å holde presist — et medlem
+       som kan redigere skal kunne rydde uten å kunne ta noe fra alle andre;
+     * INNHOLD reverteres stille uten `can_edit_content` eller med eldre
+       register; POSISJON (inkludert forelder-pekerne) uten
+       `can_reorder_in_parent` eller med eldre register.
+
+   Forelder-pekerne (`project_id`/`folder_id`) rir på posisjonsregisteret, som
+   `card_id`/`cat_id` på et listepunkt. */
 create or replace function public.note_projects_before_update()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); can_content boolean := true; can_reorder boolean := true;
 begin
   if new.owner_id is distinct from old.owner_id and not public.in_privileged_op() then
     raise exception 'owner_id (oppretter) kan ikke endres';
   end if;
-  if not public.reg_newer(new.ts, new.org, old.ts, old.org) then
+  if uid is not null then
+    can_content := public.can_edit_content('note_project', old.id, uid);
+    can_reorder := public.can_reorder_in_parent('note_project', old.id, uid);
+  end if;
+  if new.locked is distinct from old.locked and uid is not null
+     and not public.can_manage_lock('note_project', old.id, uid) then
+    raise exception 'mangler myndighet til å låse/åpne';
+  end if;
+  if new.unlocked is distinct from old.unlocked and uid is not null
+     and not public.can_manage_lock_exception('note_project', old.id, uid) then
+    raise exception 'mangler myndighet til å endre unntak';
+  end if;
+  if new.invite_policy is distinct from old.invite_policy and uid is not null
+     and not public.can_manage_invite_policy('note_project', old.id, uid) then
+    raise exception 'mangler myndighet til å endre invitasjonspolicy';
+  end if;
+  if new.trashed is distinct from old.trashed and uid is not null
+     and not public.can_delete_object('note_project', old.id, uid) then
+    raise exception 'mangler myndighet til å slette bokhyllen';
+  end if;
+  if (uid is not null and not can_content and not public.in_privileged_op())
+     or not public.reg_newer(new.ts, new.org, old.ts, old.org) then
     new.name := old.name; new.trashed := old.trashed; new.collapsed := old.collapsed;
     new.archived := old.archived;
     new.ts := old.ts; new.org := old.org;
   end if;
-  if not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
+  if (uid is not null and not can_reorder and not public.in_privileged_op())
+     or not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
     new.pos := old.pos; new.pos_ts := old.pos_ts; new.pos_org := old.pos_org;
   end if;
   new.updated_at := now();
@@ -1958,15 +2526,65 @@ $$;
 
 create or replace function public.note_folders_before_update()
 returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  uid uuid := auth.uid(); can_content boolean := true; can_reorder boolean := true;
+  v_moved boolean;
 begin
   if new.owner_id is distinct from old.owner_id and not public.in_privileged_op() then
     raise exception 'owner_id (oppretter) kan ikke endres';
   end if;
-  if not public.reg_newer(new.ts, new.org, old.ts, old.org) then
+  if uid is not null then
+    can_content := public.can_edit_content('note_folder', old.id, uid);
+    can_reorder := public.can_reorder_in_parent('note_folder', old.id, uid);
+  end if;
+  if new.locked is distinct from old.locked and uid is not null
+     and not public.can_manage_lock('note_folder', old.id, uid) then
+    raise exception 'mangler myndighet til å låse/åpne';
+  end if;
+  if new.unlocked is distinct from old.unlocked and uid is not null
+     and not public.can_manage_lock_exception('note_folder', old.id, uid) then
+    raise exception 'mangler myndighet til å endre unntak';
+  end if;
+  if new.invite_policy is distinct from old.invite_policy and uid is not null
+     and not public.can_manage_invite_policy('note_folder', old.id, uid) then
+    raise exception 'mangler myndighet til å endre invitasjonspolicy';
+  end if;
+  if new.trashed is distinct from old.trashed and uid is not null
+     and not public.can_delete_object('note_folder', old.id, uid) then
+    raise exception 'mangler myndighet til å slette notatboken';
+  end if;
+  -- FLYTTING til en annen bokhylle krever rettigheter i BÅDE kilde og mål —
+  -- destruktiv myndighet der notatboken står nå, og opprettelsesrett der den
+  -- skal. Notatbøker flyttes med en vanlig skriving (ikke en egen RPC som
+  -- mapper): id-ene består, ingenting kopieres og ingenting slettes, så det
+  -- finnes ingen kryssdomene-kopiering å gjøre atomisk. Tilgangen regnes om
+  -- fra den nye forelderen — de som bare arvet fra den gamle bokhyllen mister
+  -- den, målets medlemmer får den, og DIREKTE roller på notatboken består.
+  v_moved := new.project_id is distinct from old.project_id;
+  if v_moved and uid is not null and not public.in_privileged_op() then
+    if not public.can_move_note_object('note_folder', old.id, uid) then
+      raise exception 'mangler myndighet til å flytte notatboken';
+    end if;
+    if not public.can_create_child('note_project', new.project_id, uid) then
+      raise exception 'mangler tilgang til mål-bokhyllen';
+    end if;
+  end if;
+  if (uid is not null and not can_content and not public.in_privileged_op())
+     or not public.reg_newer(new.ts, new.org, old.ts, old.org) then
     new.name := old.name; new.trashed := old.trashed; new.archived := old.archived;
     new.ts := old.ts; new.org := old.org;
   end if;
-  if not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
+  /* SØSKEN-VAKTEN SKAL IKKE OMGJØRE EN GODKJENT FLYTTING.
+     `can_reorder_in_parent` spør den GAMLE forelderen: hvem som får ordne
+     rekkefølgen der notatboken STÅR. Den som eier notatboken DIREKTE uten å se
+     bokhyllen over har med rette `false` der — og ville da fått flyttingen
+     over godkjent og stille rullet tilbake her, som om ingenting skjedde.
+     Myndigheten til å flytte er en annen og allerede avgjort: destruktiv rett
+     i kilden PLUSS opprettelsesrett i MÅLET, og det er målets rett som
+     bestemmer plasseringen i målet. Registeret gjelder fortsatt for begge
+     veier — en eldre skriving vinner aldri. */
+  if (uid is not null and not can_reorder and not v_moved and not public.in_privileged_op())
+     or not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
     new.project_id := old.project_id;
     new.pos := old.pos; new.pos_ts := old.pos_ts; new.pos_org := old.pos_org;
   end if;
@@ -2011,17 +2629,61 @@ $$;
 
 create or replace function public.notes_before_update()
 returns trigger language plpgsql security definer set search_path = public as $$
-declare v_project uuid;
+declare
+  uid uuid := auth.uid(); can_content boolean := true; can_reorder boolean := true;
+  v_project uuid; v_moved boolean;
 begin
   if new.owner_id is distinct from old.owner_id and not public.in_privileged_op() then
     raise exception 'owner_id (oppretter) kan ikke endres';
   end if;
-  if not public.reg_newer(new.ts, new.org, old.ts, old.org) then
+  if uid is not null then
+    can_content := public.can_edit_content('note', old.id, uid);
+    can_reorder := public.can_reorder_in_parent('note', old.id, uid);
+  end if;
+  if new.locked is distinct from old.locked and uid is not null
+     and not public.can_manage_lock('note', old.id, uid) then
+    raise exception 'mangler myndighet til å låse/åpne';
+  end if;
+  if new.unlocked is distinct from old.unlocked and uid is not null
+     and not public.can_manage_lock_exception('note', old.id, uid) then
+    raise exception 'mangler myndighet til å endre unntak';
+  end if;
+  if new.invite_policy is distinct from old.invite_policy and uid is not null
+     and not public.can_manage_invite_policy('note', old.id, uid) then
+    raise exception 'mangler myndighet til å endre invitasjonspolicy';
+  end if;
+  if new.trashed is distinct from old.trashed and uid is not null
+     and not public.can_delete_object('note', old.id, uid) then
+    raise exception 'mangler myndighet til å slette notatet';
+  end if;
+  /* EN FLYTTING er at NOTATBOKEN endrer seg — eller at bokhyllen gjør det for
+     et FRITT notat. At bokhyllen alene endrer seg for et notat SOM LIGGER I EN
+     NOTATBOK er derimot ikke brukerens handling, men invarianten: notatboken
+     ble flyttet, og `note_folders_cascade` drar notatene etter seg. Å kreve
+     flyttemyndighet der ville låst notater fast i en bokhylle som ikke lenger
+     finnes for dem — og bokhyllen utledes uansett på nytt nederst her. */
+  v_moved := (new.folder_id is distinct from old.folder_id)
+             or (new.folder_id is null and new.project_id is distinct from old.project_id);
+  if v_moved and uid is not null and not public.in_privileged_op() then
+    if not public.can_move_note_object('note', old.id, uid) then
+      raise exception 'mangler myndighet til å flytte notatet';
+    end if;
+    if not public.can_create_note(new.project_id, new.folder_id, uid) then
+      raise exception 'mangler tilgang til målet';
+    end if;
+  end if;
+  if (uid is not null and not can_content and not public.in_privileged_op())
+     or not public.reg_newer(new.ts, new.org, old.ts, old.org) then
     new.title := old.title; new.body := old.body; new.trashed := old.trashed;
     new.archived := old.archived;
     new.ts := old.ts; new.org := old.org;
   end if;
-  if not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
+  -- Samme unntak som for notatboken: en flytting `v_moved` allerede har
+  -- godkjent (kilde + mål) rulles ikke tilbake av søsken-vakten. KASKADEN er
+  -- ikke `v_moved`, og skal fortsatt gå gjennom den vanlige vakten — bokhyllen
+  -- utledes uansett på nytt av invarianten nederst.
+  if (uid is not null and not can_reorder and not v_moved and not public.in_privileged_op())
+     or not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
     new.project_id := old.project_id; new.folder_id := old.folder_id;
     new.pos := old.pos; new.pos_ts := old.pos_ts; new.pos_org := old.pos_org;
   end if;
@@ -2094,7 +2756,10 @@ returns trigger language plpgsql security definer set search_path = public as $$
 begin
   if new.user_id      is distinct from old.user_id
      or new.universe_id is distinct from old.universe_id
-     or new.group_id    is distinct from old.group_id then
+     or new.group_id    is distinct from old.group_id
+     or new.note_project_id is distinct from old.note_project_id
+     or new.note_folder_id  is distinct from old.note_folder_id
+     or new.note_id         is distinct from old.note_id then
     raise exception 'medlemskapets objekt/bruker kan ikke endres';
   end if;
   if new.role is distinct from old.role then
@@ -2107,6 +2772,14 @@ begin
       raise exception using
         errcode = 'PT422',
         message = 'området må ha minst én eier';
+    end if;
+    -- … og en BOKHYLLE likeså. Notatbøker og notater kan stå uten eksplisitt
+    -- eier (bokhylleeierne er dynamiske supereiere), akkurat som mapper.
+    if old.note_project_id is not null and old.role = 'owner' and new.role <> 'owner'
+       and public.note_project_owner_count(old.note_project_id) <= 1 then
+      raise exception using
+        errcode = 'PT422',
+        message = 'bokhyllen må ha minst én eier';
     end if;
   end if;
   if auth.uid() is not null and not public.in_privileged_op()
@@ -2135,6 +2808,14 @@ begin
     raise exception using
       errcode = 'PT422',
       message = 'området må ha minst én eier';
+  end if;
+  if old.note_project_id is not null and old.role = 'owner'
+     and exists (select 1 from public.note_projects p where p.id = old.note_project_id)
+     and exists (select 1 from public.profiles p where p.id = old.user_id)
+     and public.note_project_owner_count(old.note_project_id) <= 1 then
+    raise exception using
+      errcode = 'PT422',
+      message = 'bokhyllen må ha minst én eier';
   end if;
   return old;
 end;
@@ -2219,72 +2900,58 @@ create policy ideas_update on public.ideas
 create policy ideas_delete on public.ideas
   for delete using (owner_id = auth.uid());
 
--- note_projects/note_folders/notes: kontoens egne notater. Som idéene — ingen
--- deling, ingen roller, ingen låser — så eierskapet er hele autorisasjonen, og
--- det samme vilkåret gjelder alle fire operasjonene. Skrivevaktene
--- (`*_before_update`) tar LWW-en; her holder eierskapet. At forelderen er MIN
--- følger av det samme vilkåret på forelderraden: en bruker kan ikke skrive en
--- rad som peker inn i et prosjekt hen ikke eier uten selv å eie raden, og
--- forelderen er uansett usynlig for hen.
--- `(select auth.uid())`, IKKE `auth.uid()`. Bar `auth.uid()` er en volatil
--- funksjon i policy-uttrykket, og planleggeren kan da kalle den PER RAD; pakket
--- i et skalar-subselect blir den en InitPlan som kjøres ÉN gang per statement.
--- Svaret er det samme (økten er den samme gjennom hele statementet), men
--- kostnaden vokser med tabellen — det er nettopp dette Supabases
--- `auth_rls_initplan` peker på. Det gjelder også inne i `exists`-sjekkene.
+/* note_projects/note_folders/notes: notatsidens tre nivåer, med den SAMME
+   rettighetsmodellen som områder og mapper (docs/rettigheter-og-deling.md
+   del 14). Eierskapet på raden (`owner_id`) er ren historikk her også — all
+   myndighet kommer fra ROLLER i `memberships`.
+
+   Formen er identisk med listesidens policyer, og det er poenget: én modell,
+   ikke to. UPDATE tillates når brukeren kan endre INNHOLD ELLER bare
+   POSISJON; vakten (`*_before_update`) håndhever så feltnivået, så en
+   reorder-only-tilgang ikke kan snike inn låste innholdsfelt.
+
+   OPPRETTELSE spør FORELDEREN, aldri objektet selv: en notatbok krever
+   opprettelsesrett i bokhyllen, et notat i notatboken sin (eller i bokhyllen,
+   for et fritt notat). Uten det kunne et medlem av en LÅST bokhylle legge inn
+   nye rader som ingen etterpå kunne redigere.
+
+   `(select auth.uid())`, IKKE `auth.uid()`. Bar `auth.uid()` er en volatil
+   funksjon i policy-uttrykket, og planleggeren kan da kalle den PER RAD; pakket
+   i et skalar-subselect blir den en InitPlan som kjøres ÉN gang per statement.
+   Svaret er det samme (økten er den samme gjennom hele statementet), men
+   kostnaden vokser med tabellen — det er nettopp dette Supabases
+   `auth_rls_initplan` peker på. Det gjelder også inne i `exists`-sjekkene. */
 create policy note_projects_select on public.note_projects
-  for select using (owner_id = (select auth.uid()));
+  for select using (public.can_read_note_project(id, (select auth.uid())));
 create policy note_projects_insert on public.note_projects
   for insert with check (owner_id = (select auth.uid()));
 create policy note_projects_update on public.note_projects
-  for update using (owner_id = (select auth.uid())) with check (owner_id = (select auth.uid()));
+  for update using (public.can_edit_content('note_project', id, (select auth.uid()))
+                    or public.can_reorder_in_parent('note_project', id, (select auth.uid())));
 create policy note_projects_delete on public.note_projects
-  for delete using (owner_id = (select auth.uid()));
+  for delete using (public.can_delete_object('note_project', id, (select auth.uid())));
 
--- Forelderen må være MIN. Uten det kunne en rad hektes inn i et prosjekt/en
--- mappe som tilhører noen andre: raden ville vært usynlig for eieren av
--- forelderen (RLS filtrerer på `owner_id`), men fremmednøkkelen ville bundet
--- forelderen til en rad hen ikke kan se. Vilkåret gjelder både insert og
--- update, slik at en flytting heller ikke kan krysse kontogrensen.
 create policy note_folders_select on public.note_folders
-  for select using (owner_id = (select auth.uid()));
+  for select using (public.can_read_note_folder(id, (select auth.uid())));
 create policy note_folders_insert on public.note_folders
   for insert with check (owner_id = (select auth.uid())
-                         and exists (select 1 from public.note_projects p
-                                      where p.id = project_id
-                                        and p.owner_id = (select auth.uid())));
+                         and public.can_create_child('note_project', project_id, (select auth.uid())));
 create policy note_folders_update on public.note_folders
-  for update using (owner_id = (select auth.uid()))
-  with check (owner_id = (select auth.uid())
-              and exists (select 1 from public.note_projects p
-                           where p.id = project_id
-                             and p.owner_id = (select auth.uid())));
+  for update using (public.can_edit_content('note_folder', id, (select auth.uid()))
+                    or public.can_reorder_in_parent('note_folder', id, (select auth.uid())));
 create policy note_folders_delete on public.note_folders
-  for delete using (owner_id = (select auth.uid()));
+  for delete using (public.can_delete_object('note_folder', id, (select auth.uid())));
 
 create policy notes_select on public.notes
-  for select using (owner_id = (select auth.uid()));
+  for select using (public.can_read_note(id, (select auth.uid())));
 create policy notes_insert on public.notes
   for insert with check (owner_id = (select auth.uid())
-                         and exists (select 1 from public.note_projects p
-                                      where p.id = project_id
-                                        and p.owner_id = (select auth.uid()))
-                         and (folder_id is null
-                              or exists (select 1 from public.note_folders f
-                                          where f.id = folder_id
-                                            and f.owner_id = (select auth.uid()))));
+                         and public.can_create_note(project_id, folder_id, (select auth.uid())));
 create policy notes_update on public.notes
-  for update using (owner_id = (select auth.uid()))
-  with check (owner_id = (select auth.uid())
-              and exists (select 1 from public.note_projects p
-                           where p.id = project_id
-                             and p.owner_id = (select auth.uid()))
-              and (folder_id is null
-                   or exists (select 1 from public.note_folders f
-                               where f.id = folder_id
-                                 and f.owner_id = (select auth.uid()))));
+  for update using (public.can_edit_content('note', id, (select auth.uid()))
+                    or public.can_reorder_in_parent('note', id, (select auth.uid())));
 create policy notes_delete on public.notes
-  for delete using (owner_id = (select auth.uid()));
+  for delete using (public.can_delete_object('note', id, (select auth.uid())));
 
 /* object_links: koblingene mine mellom notatsiden og listesiden.
 
@@ -2293,11 +2960,20 @@ create policy notes_delete on public.notes
    to ting av innsettingen, og begge håndheves her fordi klienten kan byttes
    ut:
 
-     1. NOTATSIDEN må være min. Notatene deles ikke, så en kobling fra noen
-        andres notat ville vært en peker inn i en konto jeg ikke har noe i.
-     2. LISTESIDEN må være LESBAR for meg (`can_read`). En kobling er en
-        snarvei, og en snarvei til noe jeg ikke har tilgang til er enten
-        støy eller en lekkasje av at objektet finnes.
+     BEGGE SIDER må være LESBARE for meg (`can_read`) i det øyeblikket
+     koblingen opprettes. En kobling er en snarvei, og en snarvei til noe jeg
+     ikke har tilgang til er enten støy eller en lekkasje av at objektet
+     finnes.
+
+   KOBLINGEN ER MIN, IKKE OBJEKTETS. Nå som notatene kan deles, kan flere
+   brukere se det samme notatet — men koblingene fra det er fortsatt den
+   ENKELTE brukerens egne krysshenvisninger, og bare hen ser dem. Det er ikke
+   en forglemmelse, det er avgjørelsen: den andre siden av koblingen er ofte et
+   PRIVAT område eller en privat liste, og en delt kobling ville røpet både at
+   objektet finnes og hva det heter for alle som deler notatet. En kobling gir
+   heller ALDRI tilgang i seg selv — mister jeg tilgangen til målet, blir raden
+   stående (`on delete cascade` fjerner den bare når målet slettes for godt),
+   men den kan ikke åpnes; kommer tilgangen tilbake, virker den igjen.
 
    Det finnes ingen UPDATE-policy: en kobling har ingen mutable felter. Den
    opprettes og fjernes, og fjerningen etterlater en gravstein.
@@ -2309,15 +2985,11 @@ create policy object_links_select on public.object_links
 create policy object_links_insert on public.object_links
   for insert with check (
     owner_id = (select auth.uid())
-    and (note_project_id is null or exists (select 1 from public.note_projects p
-                                             where p.id = note_project_id
-                                               and p.owner_id = (select auth.uid())))
-    and (note_folder_id is null or exists (select 1 from public.note_folders f
-                                            where f.id = note_folder_id
-                                              and f.owner_id = (select auth.uid())))
-    and (note_id is null or exists (select 1 from public.notes n
-                                     where n.id = note_id
-                                       and n.owner_id = (select auth.uid())))
+    and (note_project_id is null
+         or public.can_read('note_project', note_project_id, (select auth.uid())))
+    and (note_folder_id is null
+         or public.can_read('note_folder', note_folder_id, (select auth.uid())))
+    and (note_id is null or public.can_read('note', note_id, (select auth.uid())))
     and (universe_id is null or public.can_read('universe', universe_id, (select auth.uid())))
     and (group_id is null or public.can_read('group', group_id, (select auth.uid())))
     and (card_id is null or public.can_read('card', card_id, (select auth.uid()))));
@@ -2332,6 +3004,9 @@ create policy memberships_select on public.memberships
     user_id = auth.uid()
     or (universe_id is not null and public.can_manage_members('universe', universe_id, auth.uid()))
     or (group_id is not null and public.can_manage_members('group', group_id, auth.uid()))
+    or (note_project_id is not null and public.can_manage_members('note_project', note_project_id, auth.uid()))
+    or (note_folder_id is not null and public.can_manage_members('note_folder', note_folder_id, auth.uid()))
+    or (note_id is not null and public.can_manage_members('note', note_id, auth.uid()))
   );
 create policy memberships_update on public.memberships
   for update using (user_id = auth.uid()) with check (user_id = auth.uid());
@@ -2340,6 +3015,9 @@ create policy memberships_delete on public.memberships
     user_id = auth.uid()
     or (universe_id is not null and public.can_manage_members('universe', universe_id, auth.uid()))
     or (group_id is not null and public.can_manage_members('group', group_id, auth.uid()))
+    or (note_project_id is not null and public.can_manage_members('note_project', note_project_id, auth.uid()))
+    or (note_folder_id is not null and public.can_manage_members('note_folder', note_folder_id, auth.uid()))
+    or (note_id is not null and public.can_manage_members('note', note_id, auth.uid()))
   );
 
 -- share_invites: avsender ser sine; mottaker ser sine (på id eller e-post).
@@ -2464,6 +3142,154 @@ begin
 end;
 $$;
 
+-- Fjerner ALL tilgang en bruker har UNDER en BOKHYLLE: bokhyllerollen, alle
+-- direkte notatbok- og notatroller i den, og ventende invitasjoner på alle tre
+-- nivåene. Samme prinsipp som for et område — ingen skjult tilgang skal bli
+-- stående igjen etter at man har forlatt eller blitt kastet ut.
+create or replace function public.purge_note_project_access(p_project uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  perform set_config('huskis.privileged_op', '1', true);
+  delete from public.memberships m
+   where m.user_id = p_user
+     and m.note_id in (select n.id from public.notes n where n.project_id = p_project);
+  delete from public.memberships m
+   where m.user_id = p_user
+     and m.note_folder_id in (select f.id from public.note_folders f where f.project_id = p_project);
+  delete from public.memberships m
+   where m.user_id = p_user and m.note_project_id = p_project;
+
+  update public.share_invites s
+     set status = 'revoked', responded_at = now()
+   where s.status = 'pending'
+     and (s.invitee_id = p_user
+          or lower(s.invitee_email) = (select lower(email) from public.profiles where id = p_user))
+     and (s.note_project_id = p_project
+          or s.note_folder_id in (select f.id from public.note_folders f where f.project_id = p_project)
+          or s.note_id in (select n.id from public.notes n where n.project_id = p_project));
+end;
+$$;
+
+-- Fjerner en DIREKTE notatbokrolle, og de direkte notatrollene i notatboken
+-- (de ville ellers blitt hengende som skjult tilgang). Bokhyllerollen røres
+-- aldri: en bokhyllearvet bruker kan ikke fjernes fra én enkelt notatbok.
+create or replace function public.purge_note_folder_access(p_folder uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  perform set_config('huskis.privileged_op', '1', true);
+  delete from public.memberships m
+   where m.user_id = p_user
+     and m.note_id in (select n.id from public.notes n where n.folder_id = p_folder);
+  delete from public.memberships m where m.user_id = p_user and m.note_folder_id = p_folder;
+
+  update public.share_invites s
+     set status = 'revoked', responded_at = now()
+   where s.status = 'pending'
+     and (s.invitee_id = p_user
+          or lower(s.invitee_email) = (select lower(email) from public.profiles where id = p_user))
+     and (s.note_folder_id = p_folder
+          or s.note_id in (select n.id from public.notes n where n.folder_id = p_folder));
+end;
+$$;
+
+create or replace function public.purge_note_access(p_note uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  perform set_config('huskis.privileged_op', '1', true);
+  delete from public.memberships m where m.user_id = p_user and m.note_id = p_note;
+  update public.share_invites s
+     set status = 'revoked', responded_at = now()
+   where s.status = 'pending' and s.note_id = p_note
+     and (s.invitee_id = p_user
+          or lower(s.invitee_email) = (select lower(email) from public.profiles where id = p_user));
+end;
+$$;
+
+-- Ett oppslag for «hvilken DIREKTE rolle har brukeren på dette objektet», for
+-- alle fem delbare typene. RPC-ene under slipper dermed hver sin `case`.
+create or replace function public.direct_role(p_type text, p_id uuid, p_uid uuid)
+returns text language sql stable security definer set search_path = public as $$
+  select case p_type
+    when 'universe'     then public.universe_role(p_id, p_uid)
+    when 'group'        then public.group_role(p_id, p_uid)
+    when 'note_project' then public.note_project_role(p_id, p_uid)
+    when 'note_folder'  then public.note_folder_role(p_id, p_uid)
+    when 'note'         then public.note_role(p_id, p_uid)
+  end;
+$$;
+
+-- Antall EIERE på et objekt med siste-eier-invariant (område og bokhylle).
+-- Null for de andre typene, som ikke har invarianten.
+create or replace function public.owner_count_of(p_type text, p_id uuid)
+returns integer language sql stable security definer set search_path = public as $$
+  select case p_type
+    when 'universe'     then public.universe_owner_count(p_id)
+    when 'note_project' then public.note_project_owner_count(p_id)
+    when 'group'        then (select count(*)::int from public.memberships m
+                               where m.group_id = p_id and m.role = 'owner')
+    when 'note_folder'  then (select count(*)::int from public.memberships m
+                               where m.note_folder_id = p_id and m.role = 'owner')
+    when 'note'         then (select count(*)::int from public.memberships m
+                               where m.note_id = p_id and m.role = 'owner')
+  end;
+$$;
+
+-- Antall brukere med EFFEKTIV tilgang («aktivt delt» når det er mer enn én).
+create or replace function public.member_count_of(p_type text, p_id uuid)
+returns integer language sql stable security definer set search_path = public as $$
+  select case p_type
+    when 'universe'     then public.universe_member_count(p_id)
+    when 'group'        then public.group_member_count(p_id)
+    when 'note_project' then public.note_project_member_count(p_id)
+    when 'note_folder'  then public.note_folder_member_count(p_id)
+    when 'note'         then public.note_member_count(p_id)
+  end;
+$$;
+
+-- Capability-pakken for et objekt av vilkårlig delbar type.
+create or replace function public.caps_of(p_type text, p_id uuid, p_uid uuid)
+returns jsonb language sql stable security definer set search_path = public as $$
+  select case p_type
+    when 'universe'     then public.universe_caps(p_id, p_uid)
+    when 'group'        then public.group_caps(p_id, p_uid)
+    when 'note_project' then public.note_project_caps(p_id, p_uid)
+    when 'note_folder'  then public.note_folder_caps(p_id, p_uid)
+    when 'note'         then public.note_caps(p_id, p_uid)
+  end;
+$$;
+
+-- Fjerner all tilgang for én bruker på ett delbart objekt, uansett type.
+create or replace function public.purge_access(p_type text, p_id uuid, p_user uuid)
+returns void language plpgsql security definer set search_path = public as $$
+begin
+  if p_type = 'universe' then perform public.purge_universe_access(p_id, p_user);
+  elsif p_type = 'group' then perform public.purge_group_access(p_id, p_user);
+  elsif p_type = 'note_project' then perform public.purge_note_project_access(p_id, p_user);
+  elsif p_type = 'note_folder' then perform public.purge_note_folder_access(p_id, p_user);
+  elsif p_type = 'note' then perform public.purge_note_access(p_id, p_user);
+  else raise exception 'ugyldig type: %', p_type;
+  end if;
+end;
+$$;
+
+-- De fem delbare typene, ett sted. En type som ikke står her kan verken
+-- inviteres til, forlates eller administreres.
+create or replace function public.shareable_types()
+returns text[] language sql immutable set search_path = public as $$
+  select array['universe', 'group', 'note_project', 'note_folder', 'note']::text[];
+$$;
+
+-- Nivået tilgangen kommer FRA, i bestemt form. Feilmeldingene skal peke på det
+-- stedet brukeren faktisk må gå til, ikke bare si «ovenfra».
+create or replace function public.parent_word(p_type text)
+returns text language sql immutable set search_path = public as $$
+  select case p_type
+    when 'group'       then 'området'
+    when 'note_folder' then 'bokhyllen'
+    when 'note'        then 'notatboken eller bokhyllen'
+    else 'nivået over' end;
+$$;
+
 -- Inviterer en e-postadresse til et OMRÅDE eller en MAPPE.
 --   * p_role = 'member' → vanlig medlemsinvitasjon: eier på nivået, ELLER et
 --     effektivt medlem når invitasjonspolicyen tillater videreinvitasjon.
@@ -2482,8 +3308,10 @@ declare
   inv    public.share_invites;
 begin
   if uid is null then raise exception 'ikke innlogget'; end if;
-  if p_type not in ('universe', 'group') then
-    raise exception 'kun områder og mapper kan deles (fikk: %)', p_type;
+  if not (p_type = any (public.shareable_types())) then
+    -- Lister, listepunkter og kategorier arver mappens tilgang og har ingen
+    -- egen medlemsliste — også fra en gammel eller modifisert klient.
+    raise exception 'lister kan ikke deles — de arver mappens tilgang (fikk: %)', p_type;
   end if;
   if p_role not in ('member', 'owner') then raise exception 'ugyldig rolle: %', p_role; end if;
   if em = '' or position('@' in em) = 0 then
@@ -2506,9 +3334,7 @@ begin
     if p_role = 'member' and public.can_read(p_type, p_id, target) then
       raise exception 'brukeren har allerede tilgang';
     end if;
-    if p_role = 'owner' and
-       ((p_type = 'universe' and public.is_universe_owner(p_id, target))
-        or (p_type = 'group' and public.is_group_owner(p_id, target))) then
+    if p_role = 'owner' and public.is_privileged(p_type, p_id, target) then
       raise exception 'brukeren er allerede eier';
     end if;
   end if;
@@ -2538,10 +3364,49 @@ begin
                       else public.share_invites.inviter_id end,
                     invitee_id = coalesce(excluded.invitee_id, public.share_invites.invitee_id)
     returning * into inv;
-  else
+  elsif p_type = 'group' then
     insert into public.share_invites (inviter_id, invitee_email, invitee_id, group_id, role)
     values (uid, em, target, p_id, p_role)
     on conflict (group_id, lower(invitee_email)) where status = 'pending' and group_id is not null
+      do update set role = case when excluded.role = 'owner' then 'owner'
+                                else public.share_invites.role end,
+                    inviter_id = case
+                      when excluded.role = 'owner' or public.share_invites.role <> 'owner'
+                        then excluded.inviter_id
+                      else public.share_invites.inviter_id end,
+                    invitee_id = coalesce(excluded.invitee_id, public.share_invites.invitee_id)
+    returning * into inv;
+  elsif p_type = 'note_project' then
+    insert into public.share_invites (inviter_id, invitee_email, invitee_id, note_project_id, role)
+    values (uid, em, target, p_id, p_role)
+    on conflict (note_project_id, lower(invitee_email))
+      where status = 'pending' and note_project_id is not null
+      do update set role = case when excluded.role = 'owner' then 'owner'
+                                else public.share_invites.role end,
+                    inviter_id = case
+                      when excluded.role = 'owner' or public.share_invites.role <> 'owner'
+                        then excluded.inviter_id
+                      else public.share_invites.inviter_id end,
+                    invitee_id = coalesce(excluded.invitee_id, public.share_invites.invitee_id)
+    returning * into inv;
+  elsif p_type = 'note_folder' then
+    insert into public.share_invites (inviter_id, invitee_email, invitee_id, note_folder_id, role)
+    values (uid, em, target, p_id, p_role)
+    on conflict (note_folder_id, lower(invitee_email))
+      where status = 'pending' and note_folder_id is not null
+      do update set role = case when excluded.role = 'owner' then 'owner'
+                                else public.share_invites.role end,
+                    inviter_id = case
+                      when excluded.role = 'owner' or public.share_invites.role <> 'owner'
+                        then excluded.inviter_id
+                      else public.share_invites.inviter_id end,
+                    invitee_id = coalesce(excluded.invitee_id, public.share_invites.invitee_id)
+    returning * into inv;
+  else
+    insert into public.share_invites (inviter_id, invitee_email, invitee_id, note_id, role)
+    values (uid, em, target, p_id, p_role)
+    on conflict (note_id, lower(invitee_email))
+      where status = 'pending' and note_id is not null
       do update set role = case when excluded.role = 'owner' then 'owner'
                                 else public.share_invites.role end,
                     inviter_id = case
@@ -2602,10 +3467,44 @@ begin
     delete from public.memberships m
      where m.user_id = uid and m.role = 'member'
        and m.group_id in (select g.id from public.groups g where g.universe_id = inv.universe_id);
-  else
+  elsif inv.group_id is not null then
     insert into public.memberships (user_id, group_id, role, pos)
     values (uid, inv.group_id, inv.role, newpos)
     on conflict (group_id, user_id) where group_id is not null
+      do update set role = case when excluded.role = 'owner' then 'owner'
+                                else public.memberships.role end
+    returning * into mem;
+  elsif inv.note_project_id is not null then
+    insert into public.memberships (user_id, note_project_id, role, pos)
+    values (uid, inv.note_project_id, inv.role, newpos)
+    on conflict (note_project_id, user_id) where note_project_id is not null
+      do update set role = case when excluded.role = 'owner' then 'owner'
+                                else public.memberships.role end
+    returning * into mem;
+    -- Bokhyllemedlemskapet gjør ORDINÆRE direkte roller på notatbøker og
+    -- notater i den redundante; eksplisitte EIER-roller beholdes (de gir
+    -- ekstra myndighet), akkurat som mappeeierroller i et område.
+    delete from public.memberships m
+     where m.user_id = uid and m.role = 'member'
+       and (m.note_folder_id in (select f.id from public.note_folders f
+                                  where f.project_id = inv.note_project_id)
+            or m.note_id in (select n.id from public.notes n
+                              where n.project_id = inv.note_project_id));
+  elsif inv.note_folder_id is not null then
+    insert into public.memberships (user_id, note_folder_id, role, pos)
+    values (uid, inv.note_folder_id, inv.role, newpos)
+    on conflict (note_folder_id, user_id) where note_folder_id is not null
+      do update set role = case when excluded.role = 'owner' then 'owner'
+                                else public.memberships.role end
+    returning * into mem;
+    delete from public.memberships m
+     where m.user_id = uid and m.role = 'member'
+       and m.note_id in (select n.id from public.notes n
+                          where n.folder_id = inv.note_folder_id);
+  else
+    insert into public.memberships (user_id, note_id, role, pos)
+    values (uid, inv.note_id, inv.role, newpos)
+    on conflict (note_id, user_id) where note_id is not null
       do update set role = case when excluded.role = 'owner' then 'owner'
                                 else public.memberships.role end
     returning * into mem;
@@ -2642,6 +3541,24 @@ begin
 end;
 $$;
 
+-- Hvilket objekt en invitasjonsrad peker på — type og id, ett sted, for alle
+-- fem delbare typene.
+create or replace function public.invite_type(p_inv public.share_invites)
+returns text language sql immutable set search_path = public as $$
+  select case
+    when p_inv.universe_id is not null then 'universe'
+    when p_inv.group_id is not null then 'group'
+    when p_inv.note_project_id is not null then 'note_project'
+    when p_inv.note_folder_id is not null then 'note_folder'
+    else 'note' end;
+$$;
+
+create or replace function public.invite_target(p_inv public.share_invites)
+returns uuid language sql immutable set search_path = public as $$
+  select coalesce(p_inv.universe_id, p_inv.group_id, p_inv.note_project_id,
+                  p_inv.note_folder_id, p_inv.note_id);
+$$;
+
 -- Trekker tilbake en ventende invitasjon: sin egen, eller (som eier på nivået)
 -- en hvilken som helst.
 create or replace function public.revoke_share_invite(p_invite uuid)
@@ -2652,9 +3569,7 @@ begin
   select * into inv from public.share_invites where id = p_invite and status = 'pending' for update;
   if inv.id is null then raise exception 'fant ingen ventende invitasjon'; end if;
   if inv.inviter_id <> uid
-     and not public.can_manage_members(
-       case when inv.universe_id is not null then 'universe' else 'group' end,
-       coalesce(inv.universe_id, inv.group_id), uid) then
+     and not public.can_manage_members(public.invite_type(inv), public.invite_target(inv), uid) then
     raise exception 'mangler myndighet til å trekke tilbake denne invitasjonen';
   end if;
   update public.share_invites set status = 'revoked', responded_at = now() where id = inv.id;
@@ -2670,27 +3585,23 @@ returns void language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid();
 begin
   if uid is null then raise exception 'ikke innlogget'; end if;
-  if p_type not in ('universe', 'group') then raise exception 'ugyldig type: %', p_type; end if;
+  if not (p_type = any (public.shareable_types())) then raise exception 'ugyldig type: %', p_type; end if;
   if not public.can_manage_members(p_type, p_id, uid) then
     raise exception 'mangler myndighet til å fjerne medlemmer';
   end if;
   perform set_config('huskis.privileged_op', '1', true);
-  if p_type = 'universe' then
-    if public.universe_role(p_id, p_user) is null then
-      raise exception 'brukeren er ikke medlem av området';
+  -- Har brukeren ingen DIREKTE rolle her, men likevel effektiv tilgang, kommer
+  -- den ovenfra — og da er det DER den må fjernes. RPC-en sier det med en
+  -- forklarende feil i stedet for å bli en stille no-op.
+  if public.direct_role(p_type, p_id, p_user) is null then
+    if public.can_read(p_type, p_id, p_user) then
+      raise exception using
+        errcode = 'PT409',
+        message = 'brukeren har tilgang via ' || public.parent_word(p_type) || ' og må fjernes der';
     end if;
-    perform public.purge_universe_access(p_id, p_user);
-  else
-    if public.group_role(p_id, p_user) is null then
-      if public.is_group_member(p_id, p_user) then
-        raise exception using
-          errcode = 'PT409',
-          message = 'brukeren har tilgang via området og må fjernes der';
-      end if;
-      raise exception 'brukeren er ikke medlem av mappen';
-    end if;
-    perform public.purge_group_access(p_id, p_user);
+    raise exception 'brukeren er ikke medlem her';
   end if;
+  perform public.purge_access(p_type, p_id, p_user);
   perform set_config('huskis.privileged_op', '', true);
 end;
 $$;
@@ -2702,13 +3613,12 @@ returns void language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid(); cur text;
 begin
   if uid is null then raise exception 'ikke innlogget'; end if;
-  if p_type not in ('universe', 'group') then raise exception 'ugyldig type: %', p_type; end if;
+  if not (p_type = any (public.shareable_types())) then raise exception 'ugyldig type: %', p_type; end if;
   if p_role not in ('member', 'owner') then raise exception 'ugyldig rolle: %', p_role; end if;
   if not public.can_manage_members(p_type, p_id, uid) then
     raise exception 'mangler myndighet til å endre roller';
   end if;
-  cur := case p_type when 'universe' then public.universe_role(p_id, p_user)
-                     else public.group_role(p_id, p_user) end;
+  cur := public.direct_role(p_type, p_id, p_user);
   if cur is null then raise exception 'brukeren har ingen rolle her'; end if;
   if p_role = 'owner' and cur <> 'owner' then
     raise exception 'eierskap gis via en eierskapsinvitasjon mottakeren må godta';
@@ -2717,13 +3627,29 @@ begin
   perform set_config('huskis.privileged_op', '1', true);
   if p_type = 'universe' then
     update public.memberships set role = p_role where universe_id = p_id and user_id = p_user;
-  else
+  elsif p_type = 'note_project' then
+    update public.memberships set role = p_role where note_project_id = p_id and user_id = p_user;
+  elsif p_type = 'group' then
     -- En degradert mappeeier som ellers ikke har tilgang, blir vanlig direkte
     -- mappemedlem; er vedkommende områdemedlem, er raden overflødig.
     if public.is_universe_member(public.group_universe(p_id), p_user) then
       delete from public.memberships where group_id = p_id and user_id = p_user;
     else
       update public.memberships set role = p_role where group_id = p_id and user_id = p_user;
+    end if;
+  elsif p_type = 'note_folder' then
+    -- Samme rydding på notatsiden: en degradert notatbokeier som allerede har
+    -- tilgang via bokhyllen trenger ingen rad.
+    if public.is_note_project_member(public.note_folder_project(p_id), p_user) then
+      delete from public.memberships where note_folder_id = p_id and user_id = p_user;
+    else
+      update public.memberships set role = p_role where note_folder_id = p_id and user_id = p_user;
+    end if;
+  else
+    if public.note_inherited_member(p_id, p_user) then
+      delete from public.memberships where note_id = p_id and user_id = p_user;
+    else
+      update public.memberships set role = p_role where note_id = p_id and user_id = p_user;
     end if;
   end if;
   perform set_config('huskis.privileged_op', '', true);
@@ -2736,34 +3662,33 @@ returns void language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid();
 begin
   if uid is null then raise exception 'ikke innlogget'; end if;
-  if p_type not in ('universe', 'group') then raise exception 'ugyldig type: %', p_type; end if;
-  if p_type = 'universe' then
-    if public.universe_role(p_id, uid) is null then
-      raise exception 'du er ikke medlem av dette området';
+  if not (p_type = any (public.shareable_types())) then raise exception 'ugyldig type: %', p_type; end if;
+  if p_type in ('universe', 'note_project') then
+    -- Toppnivåene har siste-eier-invarianten: den eneste eieren kan ikke gå.
+    if public.direct_role(p_type, p_id, uid) is null then
+      raise exception 'du har ingen rolle her';
     end if;
-    if not public.can_leave('universe', p_id, uid) then
+    if not public.can_leave(p_type, p_id, uid) then
       raise exception using
         errcode = 'PT422',
         message = 'du er siste eier — gi eierskap til noen andre først';
     end if;
-    perform set_config('huskis.privileged_op', '1', true);
-    perform public.purge_universe_access(p_id, uid);
   else
-    -- Samme svar enten mapperaden mangler eller bare er overflødig ved siden av
-    -- en områderolle: tilgangen kommer fra området, og det er der man
-    -- forlater. Å slette den overflødige raden ville sett ut som en forlatelse
-    -- uten å være det.
-    if not public.can_leave('group', p_id, uid) then
-      if public.is_group_member(p_id, uid) then
+    -- Samme svar enten raden mangler eller bare er overflødig ved siden av en
+    -- rolle lenger opp: tilgangen kommer ovenfra, og det er DER man forlater.
+    -- Å slette den overflødige raden ville sett ut som en forlatelse uten å
+    -- være det (mappen/notatet kom rett tilbake ved neste synk).
+    if not public.can_leave(p_type, p_id, uid) then
+      if public.can_read(p_type, p_id, uid) then
         raise exception using
           errcode = 'PT409',
-          message = 'du har tilgang via området — forlat området i stedet';
+          message = 'du har tilgang via ' || public.parent_word(p_type) || ' — forlat der i stedet';
       end if;
-      raise exception 'du er ikke medlem av denne mappen';
+      raise exception 'du har ingen rolle her';
     end if;
-    perform set_config('huskis.privileged_op', '1', true);
-    perform public.purge_group_access(p_id, uid);
   end if;
+  perform set_config('huskis.privileged_op', '1', true);
+  perform public.purge_access(p_type, p_id, uid);
   perform set_config('huskis.privileged_op', '', true);
 end;
 $$;
@@ -2775,12 +3700,17 @@ returns void language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid();
 begin
   if uid is null then raise exception 'ikke innlogget'; end if;
-  if p_type not in ('universe', 'group', 'card') then raise exception 'ugyldig type: %', p_type; end if;
+  if p_type not in ('universe', 'group', 'card', 'note_project', 'note_folder', 'note') then
+    raise exception 'ugyldig type: %', p_type;
+  end if;
   if not public.can_manage_lock(p_type, p_id, uid) then
     raise exception 'mangler myndighet til å låse/åpne';
   end if;
   if p_type = 'universe' then update public.universes set locked = p_locked, unlocked = (unlocked and not p_locked) where id = p_id;
   elsif p_type = 'group' then update public.groups set locked = p_locked, unlocked = (unlocked and not p_locked) where id = p_id;
+  elsif p_type = 'note_project' then update public.note_projects set locked = p_locked, unlocked = (unlocked and not p_locked) where id = p_id;
+  elsif p_type = 'note_folder' then update public.note_folders set locked = p_locked, unlocked = (unlocked and not p_locked) where id = p_id;
+  elsif p_type = 'note' then update public.notes set locked = p_locked, unlocked = (unlocked and not p_locked) where id = p_id;
   else update public.cards set locked = p_locked, unlocked = (unlocked and not p_locked) where id = p_id;
   end if;
 end;
@@ -2793,12 +3723,17 @@ returns void language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid();
 begin
   if uid is null then raise exception 'ikke innlogget'; end if;
-  if p_type not in ('universe', 'group', 'card') then raise exception 'ugyldig type: %', p_type; end if;
+  if p_type not in ('universe', 'group', 'card', 'note_project', 'note_folder', 'note') then
+    raise exception 'ugyldig type: %', p_type;
+  end if;
   if not public.can_manage_lock_exception(p_type, p_id, uid) then
     raise exception 'mangler myndighet til å endre unntak';
   end if;
   if p_type = 'universe' then update public.universes set unlocked = p_unlocked, locked = (locked and not p_unlocked) where id = p_id;
   elsif p_type = 'group' then update public.groups set unlocked = p_unlocked, locked = (locked and not p_unlocked) where id = p_id;
+  elsif p_type = 'note_project' then update public.note_projects set unlocked = p_unlocked, locked = (locked and not p_unlocked) where id = p_id;
+  elsif p_type = 'note_folder' then update public.note_folders set unlocked = p_unlocked, locked = (locked and not p_unlocked) where id = p_id;
+  elsif p_type = 'note' then update public.notes set unlocked = p_unlocked, locked = (locked and not p_unlocked) where id = p_id;
   else update public.cards set unlocked = p_unlocked, locked = (locked and not p_unlocked) where id = p_id;
   end if;
 end;
@@ -2811,12 +3746,15 @@ returns void language plpgsql security definer set search_path = public as $$
 declare uid uuid := auth.uid();
 begin
   if uid is null then raise exception 'ikke innlogget'; end if;
-  if p_type not in ('universe', 'group') then raise exception 'ugyldig type: %', p_type; end if;
+  if not (p_type = any (public.shareable_types())) then raise exception 'ugyldig type: %', p_type; end if;
   if p_policy not in ('inherit', 'allow', 'deny') then raise exception 'ugyldig policy: %', p_policy; end if;
   if not public.can_manage_invite_policy(p_type, p_id, uid) then
     raise exception 'mangler myndighet til å endre invitasjonspolicy';
   end if;
   if p_type = 'universe' then update public.universes set invite_policy = p_policy where id = p_id;
+  elsif p_type = 'note_project' then update public.note_projects set invite_policy = p_policy where id = p_id;
+  elsif p_type = 'note_folder' then update public.note_folders set invite_policy = p_policy where id = p_id;
+  elsif p_type = 'note' then update public.notes set invite_policy = p_policy where id = p_id;
   else update public.groups set invite_policy = p_policy where id = p_id;
   end if;
 end;
@@ -2994,6 +3932,11 @@ begin
   obj_name := coalesce(
     (select name from public.universes where id = new.universe_id),
     (select name from public.groups    where id = new.group_id),
+    (select name from public.note_projects where id = new.note_project_id),
+    (select name from public.note_folders  where id = new.note_folder_id),
+    -- Et notat uten tittel har ingen navn å sende; «noe» er da riktigere enn
+    -- en tom linje i emnefeltet.
+    nullif((select title from public.notes where id = new.note_id), ''),
     'noe');
   -- Brukerstyrt tekst escapes før den settes inn i HTML-kroppen (subject er ren
   -- tekst i e-post og trenger ingen escaping).
@@ -3225,6 +4168,15 @@ returns uuid language sql stable security definer set search_path = public as $$
    limit 1;
 $$;
 
+-- Samme for en BOKHYLLE: en gjenværende eier (aldri p_uid), deterministisk.
+create or replace function public.surviving_note_project_owner(p_project uuid, p_uid uuid)
+returns uuid language sql stable security definer set search_path = public as $$
+  select m.user_id from public.memberships m
+   where m.note_project_id = p_project and m.role = 'owner' and m.user_id <> p_uid
+   order by m.created_at, m.user_id
+   limit 1;
+$$;
+
 create or replace function public.delete_account()
 returns void language plpgsql security definer set search_path = public as $$
 declare
@@ -3256,6 +4208,16 @@ begin
           or exists (select 1 from public.memberships m
                       where m.universe_id = u.id and m.user_id = uid));
 
+  -- 2b. BOKHYLLER etter nøyaktig samme regel (docs/notater-plan.md): den som
+  --     står uten eier når jeg er borte, er min og følger med — med hele
+  --     undertreet og gravstein for hver rad, også for dem jeg har delt med.
+  --     En bokhylle med andre eiere står igjen; jeg fjernes bare som medlem.
+  delete from public.note_projects np
+   where public.surviving_note_project_owner(np.id, uid) is null
+     and (np.owner_id = uid
+          or exists (select 1 from public.memberships m
+                      where m.note_project_id = np.id and m.user_id = uid));
+
   -- 3. Oppretter-arv på alt som overlever (området har nå alltid en eier).
   update public.universes u
      set owner_id = public.surviving_universe_owner(u.id, uid)
@@ -3269,6 +4231,19 @@ begin
   update public.items i
      set owner_id = public.surviving_universe_owner(public.resource_universe('item', i.id), uid)
    where i.owner_id = uid;
+  -- Notatsiden arver oppretteren av en gjenværende BOKHYLLE-eier, av samme
+  -- grunn: `owner_id` gir ingen rettigheter, men FK-en er `on delete cascade`,
+  -- og uten arven ville profilslettingen revet vekk notater i en delt bokhylle
+  -- som fortsatt har en eier.
+  update public.note_projects np
+     set owner_id = public.surviving_note_project_owner(np.id, uid)
+   where np.owner_id = uid;
+  update public.note_folders nf
+     set owner_id = public.surviving_note_project_owner(nf.project_id, uid)
+   where nf.owner_id = uid;
+  update public.notes n
+     set owner_id = public.surviving_note_project_owner(n.project_id, uid)
+   where n.owner_id = uid;
 
   -- 4. Ansvarstildelinger som peker på meg, og rollene mine.
   --    Stempelet må slå radens EGET register, ikke bare klokka: vaktene
@@ -3288,14 +4263,13 @@ begin
   -- ville tatt dem uansett, men ryddingen skal være lesbar. AFTER DELETE-
   -- triggeren skriver gravstein per rad, som for alt annet innhold.
   delete from public.ideas where owner_id = uid;
-  -- Notatene er MINE ALENE på nøyaktig samme måte (docs/notater-plan.md).
-  -- Rekkefølgen er nedenfra og opp så kaskadene ikke må rydde etter oss.
-  -- Koblingene FØRST: de peker på notatradene under (og på listesiden), og
-  -- kaskaden ville tatt dem uansett — men da uten at rekkefølgen er lesbar.
+  -- KOBLINGENE er mine alene (de er min egen krysshenvisning, ikke delt
+  -- innhold), og skal bort uansett hva som skjer med objektene i hver ende.
+  -- Kaskaden fra profilraden ville tatt dem; de står her fordi ryddingen skal
+  -- være lesbar. Notatobjektene er derimot IKKE nødvendigvis mine alene lenger
+  -- — de som står uten eier etter meg er allerede slettet i steg 2b, og resten
+  -- overlever med en arvet oppretter (steg 3).
   delete from public.object_links where owner_id = uid;
-  delete from public.notes where owner_id = uid;
-  delete from public.note_folders where owner_id = uid;
-  delete from public.note_projects where owner_id = uid;
   -- Varselhistorikken og preferansene er mine alene. Kaskaden fra auth.users
   -- ville tatt dem uansett; de står her fordi ryddingen skal være lesbar.
   delete from public.notifications where user_id = uid;
@@ -4721,16 +5695,26 @@ returns jsonb language plpgsql stable security definer set search_path = public 
 declare
   uid  uuid := auth.uid();
   uni  uuid;
+  np   uuid;   -- bokhyllen objektet hører til (notatsiden)
+  nf   uuid;   -- notatboken objektet hører til / er
   rows jsonb;
+  -- Siste-eier-invarianten finnes bare på de to TOPPNIVÅENE (område og
+  -- bokhylle). En mappe, en notatbok og et notat kan stå uten eksplisitt eier,
+  -- for toppnivåets eiere er dynamiske supereiere.
+  top  boolean := p_type in ('universe', 'note_project');
 begin
   if uid is null then raise exception 'ikke innlogget'; end if;
-  if p_type not in ('universe', 'group') then
-    raise exception 'kun områder og mapper har medlemslister (fikk: %)', p_type;
+  if not (p_type = any (public.shareable_types())) then
+    raise exception 'typen har ingen medlemsliste (fikk: %)', p_type;
   end if;
   if not public.can_read(p_type, p_id, uid) then raise exception 'ingen tilgang'; end if;
   uni := public.resource_universe(p_type, p_id);
+  np  := public.resource_note_project(p_type, p_id);
+  nf  := case p_type when 'note_folder' then p_id
+                     when 'note' then public.note_parent_folder(p_id) end;
 
   with acc as (
+    -- LISTESIDEN: område over mappe.
     select m.user_id,
            case when m.role = 'owner' then 1 else 3 end as prec,
            case when m.role = 'owner' then 'universeOwner' else 'universeMember' end as category,
@@ -4738,7 +5722,7 @@ begin
            'universe'::text as source,
            (p_type = 'universe') as direct
       from public.memberships m
-     where m.universe_id = uni
+     where p_type in ('universe', 'group') and m.universe_id = uni
     union all
     select m.user_id,
            case when m.role = 'owner' then 2 else 4 end,
@@ -4746,6 +5730,30 @@ begin
            m.role, 'group'::text, true
       from public.memberships m
      where p_type = 'group' and m.group_id = p_id
+    -- NOTATSIDEN: bokhylle over notatbok over notat. Samme presedens-idé —
+    -- eierne først, ovenfra og ned, så medlemmene ovenfra og ned — så en
+    -- bruker aldri står to ganger i den samme listen.
+    union all
+    select m.user_id,
+           case when m.role = 'owner' then 1 else 4 end,
+           case when m.role = 'owner' then 'noteProjectOwner' else 'noteProjectMember' end,
+           m.role, 'note_project'::text, (p_type = 'note_project')
+      from public.memberships m
+     where p_type in ('note_project', 'note_folder', 'note') and m.note_project_id = np
+    union all
+    select m.user_id,
+           case when m.role = 'owner' then 2 else 5 end,
+           case when m.role = 'owner' then 'noteFolderOwner' else 'noteFolderMember' end,
+           m.role, 'note_folder'::text, (p_type = 'note_folder')
+      from public.memberships m
+     where p_type in ('note_folder', 'note') and nf is not null and m.note_folder_id = nf
+    union all
+    select m.user_id,
+           case when m.role = 'owner' then 3 else 6 end,
+           case when m.role = 'owner' then 'noteOwner' else 'noteMember' end,
+           m.role, 'note'::text, true
+      from public.memberships m
+     where p_type = 'note' and m.note_id = p_id
   ),
   best as (
     select distinct on (user_id) * from acc order by user_id, prec
@@ -4755,32 +5763,29 @@ begin
            'avatar', pr.avatar,
            'category', b.category, 'role', b.role, 'source', b.source,
            'direct', b.direct,
-           -- Kan denne brukeren fjernes HER? Arvede områdemedlemmer i en
-           -- mappes liste kan det aldri; siste områdeeier heller ikke.
+           -- Kan denne brukeren fjernes HER? Arvede medlemmer i en
+           -- undernivå-liste kan det aldri; siste eier på toppnivået heller ikke.
            'removable', b.direct
              and public.can_manage_members(p_type, p_id, uid)
-             and not (p_type = 'universe' and b.role = 'owner'
-                      and public.universe_owner_count(p_id) <= 1),
+             and not (top and b.role = 'owner' and public.owner_count_of(p_type, p_id) <= 1),
            -- `removeHint` er norsk tekst og blir stående av hensyn til eldre
            -- klienter; `removeHintCode` er den språknøytrale koden dagens
            -- klient oversetter selv (docs/sprak.md). Additivt, som alt annet
            -- her: en klient som ikke kjenner koden bruker teksten som før.
            'removeHint', case
              when not b.direct then 'Har tilgang via området og må fjernes der'
-             when p_type = 'universe' and b.role = 'owner'
-                  and public.universe_owner_count(p_id) <= 1
+             when top and b.role = 'owner' and public.owner_count_of(p_type, p_id) <= 1
                then 'Siste eier kan ikke fjernes'
              else null end,
            'removeHintCode', case
              when not b.direct then 'inherited'
-             when p_type = 'universe' and b.role = 'owner'
-                  and public.universe_owner_count(p_id) <= 1
+             when top and b.role = 'owner' and public.owner_count_of(p_type, p_id) <= 1
                then 'lastOwner'
              else null end,
            -- Kan degraderes fra eier til vanlig medlem?
            'demotable', b.direct and b.role = 'owner'
              and public.can_manage_members(p_type, p_id, uid)
-             and not (p_type = 'universe' and public.universe_owner_count(p_id) <= 1),
+             and not (top and public.owner_count_of(p_type, p_id) <= 1),
            -- Kan LØFTES til eier? Rolleløft settes aldri direkte — det går via
            -- en invitasjon mottakeren må godta — så flagget speiler retten til
            -- å invitere til eierskap, ikke retten til å skrive rollen.
@@ -4789,30 +5794,28 @@ begin
              and not exists (select 1 from public.share_invites s
                               where s.status = 'pending' and s.role = 'owner'
                                 and lower(s.invitee_email) = lower(pr.email)
-                                and ((p_type = 'universe' and s.universe_id = p_id)
-                                  or (p_type = 'group'    and s.group_id    = p_id)))
+                                and public.invite_target(s) = p_id
+                                and public.invite_type(s) = p_type)
          ) order by b.prec, lower(coalesce(pr.display_name, pr.email))), '[]'::jsonb)
     into rows
     from best b join public.profiles pr on pr.id = b.user_id;
 
   return jsonb_build_object(
     'type', p_type,
-    'ownerCount', case when p_type = 'universe' then public.universe_owner_count(p_id)
-                       else (select count(*)::int from public.memberships m
-                              where m.group_id = p_id and m.role = 'owner') end,
-    'memberCount', case when p_type = 'universe' then public.universe_member_count(p_id)
-                        else public.group_member_count(p_id) end,
+    'ownerCount', public.owner_count_of(p_type, p_id),
+    'memberCount', public.member_count_of(p_type, p_id),
     -- Betrakterens EFFEKTIVE rettigheter (serverautoritativt) — klienten viser
     -- invitasjonsfelt/administrative kontroller ut fra disse, ikke ut fra gjetting.
     'viewer', jsonb_build_object(
       'id', uid,
-      'role', case when p_type = 'universe' then public.universe_role(p_id, uid)
-                   else public.group_role(p_id, uid) end,
-      'caps', case when p_type = 'universe' then public.universe_caps(p_id, uid)
-                   else public.group_caps(p_id, uid) end),
-    'invitePolicy', case when p_type = 'universe'
-                         then (select invite_policy from public.universes where id = p_id)
-                         else (select invite_policy from public.groups where id = p_id) end,
+      'role', public.direct_role(p_type, p_id, uid),
+      'caps', public.caps_of(p_type, p_id, uid)),
+    'invitePolicy', case p_type
+      when 'universe' then (select invite_policy from public.universes where id = p_id)
+      when 'group' then (select invite_policy from public.groups where id = p_id)
+      when 'note_project' then (select invite_policy from public.note_projects where id = p_id)
+      when 'note_folder' then (select invite_policy from public.note_folders where id = p_id)
+      else (select invite_policy from public.notes where id = p_id) end,
     'inviteEffective', public.effective_invite_policy(p_type, p_id),
     'members', rows,
     'pendingInvites', coalesce((
@@ -4823,8 +5826,7 @@ begin
                'mine', s.inviter_id = uid) order by s.created_at)
       from public.share_invites s
       where s.status = 'pending'
-        and ((p_type = 'universe' and s.universe_id = p_id)
-          or (p_type = 'group'    and s.group_id    = p_id))
+        and public.invite_target(s) = p_id and public.invite_type(s) = p_type
     ), '[]'::jsonb)
   );
 end;
@@ -4870,15 +5872,35 @@ begin
   my_ideas as (
     select d.* from public.ideas d where d.owner_id = uid
   ),
-  -- Notatene likeså (docs/notater-plan.md): tre flate uttrekk på eierskap.
+  /* Notatene (docs/notater-plan.md): som listesiden hentes de på ROLLE, ikke
+     på eierskap. Tre nivåer, tre uttrekk:
+       * bokhyller jeg har en rolle på;
+       * notatbøker i dem, PLUSS notatbøker delt direkte med meg — også når
+         bokhyllen ikke er lesbar (`free = true`; bokhyllens navn og
+         medlemsliste lekkes aldri);
+       * notater i lesbare bokhyller/notatbøker, PLUSS notater delt direkte med
+         meg (`free = true` når verken notatboken eller bokhyllen er lesbar). */
   my_note_projects as (
-    select np.* from public.note_projects np where np.owner_id = uid
+    select np.*, m.role as my_role, m.pos as personal_pos
+    from public.note_projects np
+    join public.memberships m on m.note_project_id = np.id and m.user_id = uid
   ),
   my_note_folders as (
-    select nf.* from public.note_folders nf where nf.owner_id = uid
+    select nf.*, fm.role as direct_role, fm.pos as personal_pos,
+           (mp.id is null) as free
+    from public.note_folders nf
+    left join my_note_projects mp on mp.id = nf.project_id
+    left join public.memberships fm on fm.note_folder_id = nf.id and fm.user_id = uid
+    where mp.id is not null or fm.id is not null
   ),
   my_notes as (
-    select n.* from public.notes n where n.owner_id = uid
+    select n.*, nm.role as direct_role, nm.pos as personal_pos,
+           (mp.id is null and mf.id is null) as free
+    from public.notes n
+    left join my_note_projects mp on mp.id = n.project_id
+    left join my_note_folders mf on mf.id = n.folder_id
+    left join public.memberships nm on nm.note_id = n.id and nm.user_id = uid
+    where mp.id is not null or mf.id is not null or nm.id is not null
   ),
   -- Koblingene mine (docs/notater-plan.md). De hentes på EIERSKAP alene, også
   -- når listesiden ligger i et område jeg har mistet tilgangen til: raden
@@ -4946,24 +5968,41 @@ begin
         'ts', d.ts, 'org', d.org,
         'pos', d.pos, 'posTs', d.pos_ts, 'posOrg', d.pos_org)) from my_ideas d), '[]'::jsonb),
     'noteProjects', coalesce((select jsonb_agg(jsonb_build_object(
-        'id', np.id, 'creator', np.owner_id, 'createdByMe', true,
+        'id', np.id, 'creator', np.owner_id, 'createdByMe', np.owner_id = uid,
+        'role', np.my_role, 'personalPos', np.personal_pos,
         'name', np.name, 'collapsed', np.collapsed, 'trashed', np.trashed,
         'archived', np.archived,
+        'locked', np.locked, 'unlocked', np.unlocked, 'invitePolicy', np.invite_policy,
         'ts', np.ts, 'org', np.org,
-        'pos', np.pos, 'posTs', np.pos_ts, 'posOrg', np.pos_org)) from my_note_projects np), '[]'::jsonb),
+        'pos', np.pos, 'posTs', np.pos_ts, 'posOrg', np.pos_org,
+        'ownerCount', public.note_project_owner_count(np.id),
+        'memberCount', public.note_project_member_count(np.id),
+        'shared', public.note_project_member_count(np.id) > 1,
+        'caps', public.note_project_caps(np.id, uid))) from my_note_projects np), '[]'::jsonb),
     'noteFolders', coalesce((select jsonb_agg(jsonb_build_object(
-        'id', nf.id, 'creator', nf.owner_id, 'createdByMe', true,
-        'project', nf.project_id, 'name', nf.name, 'trashed', nf.trashed,
+        'id', nf.id, 'creator', nf.owner_id, 'createdByMe', nf.owner_id = uid,
+        'project', nf.project_id, 'free', nf.free,
+        'role', nf.direct_role, 'personalPos', nf.personal_pos,
+        'name', nf.name, 'trashed', nf.trashed,
         'archived', nf.archived,
+        'locked', nf.locked, 'unlocked', nf.unlocked, 'invitePolicy', nf.invite_policy,
         'ts', nf.ts, 'org', nf.org,
-        'pos', nf.pos, 'posTs', nf.pos_ts, 'posOrg', nf.pos_org)) from my_note_folders nf), '[]'::jsonb),
+        'pos', nf.pos, 'posTs', nf.pos_ts, 'posOrg', nf.pos_org,
+        'memberCount', public.note_folder_member_count(nf.id),
+        'shared', public.note_folder_member_count(nf.id) > 1,
+        'caps', public.note_folder_caps(nf.id, uid))) from my_note_folders nf), '[]'::jsonb),
     'notes', coalesce((select jsonb_agg(jsonb_build_object(
-        'id', n.id, 'creator', n.owner_id, 'createdByMe', true,
-        'project', n.project_id, 'folder', n.folder_id,
+        'id', n.id, 'creator', n.owner_id, 'createdByMe', n.owner_id = uid,
+        'project', n.project_id, 'folder', n.folder_id, 'free', n.free,
+        'role', n.direct_role, 'personalPos', n.personal_pos,
         'title', n.title, 'body', n.body, 'trashed', n.trashed,
         'archived', n.archived,
+        'locked', n.locked, 'unlocked', n.unlocked, 'invitePolicy', n.invite_policy,
         'ts', n.ts, 'org', n.org,
-        'pos', n.pos, 'posTs', n.pos_ts, 'posOrg', n.pos_org)) from my_notes n), '[]'::jsonb),
+        'pos', n.pos, 'posTs', n.pos_ts, 'posOrg', n.pos_org,
+        'memberCount', public.note_member_count(n.id),
+        'shared', public.note_member_count(n.id) > 1,
+        'caps', public.note_caps(n.id, uid))) from my_notes n), '[]'::jsonb),
     /* Koblingene. Typen står som ETT ord per side i stedet for tre kolonner,
        fordi det er den formen klienten faktisk bruker — hvilken kolonne som
        bærer id-en er databasens sak, ikke klientens. */
@@ -4980,27 +6019,28 @@ begin
         'ts', l.ts, 'org', l.org)) from my_links l), '[]'::jsonb),
     'invites_in', coalesce((select jsonb_agg(jsonb_build_object(
         'id', s.id,
-        'type', case when s.universe_id is not null then 'universe' else 'group' end,
+        'type', public.invite_type(s),
         'role', s.role,
         'name', coalesce((select name from public.universes where id = s.universe_id),
-                         (select name from public.groups    where id = s.group_id)),
+                         (select name from public.groups    where id = s.group_id),
+                         (select name from public.note_projects where id = s.note_project_id),
+                         (select name from public.note_folders where id = s.note_folder_id),
+                         (select title from public.notes where id = s.note_id)),
         'from', (select email from public.profiles where id = s.inviter_id),
         'from_name', (select display_name from public.profiles where id = s.inviter_id),
         'created_at', s.created_at) order by s.created_at)
       from public.share_invites s
       where s.status = 'pending'
-        and (s.universe_id is not null or s.group_id is not null)
         and (s.invitee_id = uid
              or lower(s.invitee_email) = (select lower(email) from public.profiles where id = uid))), '[]'::jsonb),
     'invites_out', coalesce((select jsonb_agg(jsonb_build_object(
         'id', s.id,
-        'type', case when s.universe_id is not null then 'universe' else 'group' end,
+        'type', public.invite_type(s),
         'role', s.role,
-        'target_id', coalesce(s.universe_id, s.group_id),
+        'target_id', public.invite_target(s),
         'email', s.invitee_email, 'created_at', s.created_at) order by s.created_at)
       from public.share_invites s
-      where s.status = 'pending' and s.inviter_id = uid
-        and (s.universe_id is not null or s.group_id is not null)), '[]'::jsonb),
+      where s.status = 'pending' and s.inviter_id = uid), '[]'::jsonb),
     -- Varsler: brukerens EGNE rader (docs/varsler.md). De hører ikke til
     -- innholds-doc-et og flettes ikke — klienten bare viser dem. Nyeste først,
     -- med de samme to grensene som notify_record() rydder etter — taket på 200
@@ -5571,17 +6611,35 @@ exception when duplicate_object then null; end $$;
 do $$ begin
   alter table public.share_invites add constraint share_invites_no_card_chk check (card_id is null);
 exception when duplicate_object then null; end $$;
-do $$ begin
-  alter table public.memberships add constraint memberships_target_chk
-    check (num_nonnulls(universe_id, group_id) = 1);
-exception when duplicate_object then null; end $$;
-do $$ begin
-  alter table public.share_invites add constraint share_invites_target_chk
-    check (num_nonnulls(universe_id, group_id) = 1);
-exception when duplicate_object then null; end $$;
+-- Nøyaktig ETT delbart objekt per rad — nå fem mulige (område, mappe,
+-- bokhylle, notatbok, notat). `drop … add` i stedet for `add … exception`,
+-- for sjekken FINNES allerede på en eksisterende database med den gamle
+-- to-kolonners formen og må erstattes, ikke hoppes over.
+alter table public.memberships  drop constraint if exists memberships_target_chk;
+alter table public.memberships  add  constraint memberships_target_chk
+  check (num_nonnulls(universe_id, group_id, note_project_id, note_folder_id, note_id) = 1);
+alter table public.share_invites drop constraint if exists share_invites_target_chk;
+alter table public.share_invites add  constraint share_invites_target_chk
+  check (num_nonnulls(universe_id, group_id, note_project_id, note_folder_id, note_id) = 1);
 
 drop index if exists public.memberships_card_user_key;
 drop index if exists public.share_invites_card_pending_key;
+
+-- ROLLE-BACKFILL FOR NOTATSIDEN (docs/notater-plan.md). Notatene var
+-- eierstyrte før denne runden: `owner_id = auth.uid()` var hele
+-- autorisasjonen, og det fantes ingen medlemskapsrader. Hver bokhylle som
+-- ennå ikke har EN ENESTE rolle får derfor oppretteren som eier; notatbøkene
+-- og notatene arver.
+--
+-- Kriteriet «ingen rader i det hele tatt» gjør backfillen naturlig idempotent
+-- OG hindrer at en bevisst fjernet rolle kommer tilbake: en bokhylle som har
+-- vært delt har alltid minst én rad igjen (siste-eier-invarianten holder den
+-- siste eieren på plass), så den røres aldri.
+insert into public.memberships (user_id, note_project_id, role, pos)
+select np.owner_id, np.id, 'owner', coalesce(np.pos, 0)
+  from public.note_projects np
+ where not exists (select 1 from public.memberships m where m.note_project_id = np.id)
+on conflict do nothing;
 
 -- ------------------------------------------------------------
 -- 12. RETTIGHETER — alt er kun for innloggede (authenticated);
@@ -5746,6 +6804,10 @@ end $$;
 -- opprydninger uten egen autorisasjonssjekk — kallerne kontrollerer myndighet).
 revoke all on function public.purge_universe_access(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.purge_group_access(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.purge_note_project_access(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.purge_note_folder_access(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.purge_note_access(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.purge_access(text, uuid, uuid) from public, anon, authenticated;
 revoke all on function public.notify_prefs_row(uuid) from public, anon, authenticated;
 revoke all on function public.notify_max_age_ms() from public, anon, authenticated;
 revoke all on function public.push_enqueue(uuid) from public, anon, authenticated;

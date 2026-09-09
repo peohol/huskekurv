@@ -20,6 +20,7 @@
        et drag i notatfanen kan slippes i kassen på alle tre nivåene — og
        notatfanens to kasser står i en FAST FOT nederst i viewportet, med halve
        bredden hver, mens en ETIKETT over det løftede objektet sier «Arkiver»
+       — og bytter riktig BEGGE veier mellom de to kassene i det samme draget
     8. Det felles søket: `Alt | Lister | Notater`, treff på notattittel,
        notattekst, bokhylle og notatbok — og at scopet filtrerer
     9. Navigering fra et søketreff til riktig objekt OG riktig hovedfane,
@@ -873,11 +874,47 @@ async function run(navn, viewport, touch) {
       farge: !!el && el.classList.contains('to-archive'),
       malt: !!el && getComputedStyle(el, '::after').content !== 'none' };
   });
+  /* ETIKETTEN MÅ BYTTE BEGGE VEIER I DET SAMME DRAGET. De to siktesetterne
+     kalles etter hverandre i samme politikkrunde, og da de skrev etiketten hver
+     for seg, vant den som kjørte SIST: arkiv → søppel tømte «Slett» i samme
+     åndedrag som den ble satt, mens søppel → arkiv virket. Begge retningene
+     måles derfor her, uten å slippe imellom. */
+  await G.travel(p, () => centre(p, '#note-trash-btn'), touch);
+  const tilKassen = await p.evaluate(() => {
+    const el = document.querySelector('[data-dnd-dragging]');
+    return { tekst: el && el.dataset.dropLabel,
+      slett: !!el && el.classList.contains('to-trash'),
+      arkiv: !!el && el.classList.contains('to-archive') };
+  });
+  await G.travel(p, () => centre(p, '#note-archive-btn'), touch);
+  const tilbakeTilArkivet = await p.evaluate(() => {
+    const el = document.querySelector('[data-dnd-dragging]');
+    return { tekst: el && el.dataset.dropLabel,
+      slett: !!el && el.classList.contains('to-trash'),
+      arkiv: !!el && el.classList.contains('to-archive') };
+  });
+  // … og ut av begge: ingen etikett når man ikke sikter på noe.
+  await G.travel(p, () => centre(p, notatSel), touch);
+  const utenfor = await p.evaluate(() => {
+    const el = document.querySelector('[data-dnd-dragging]');
+    return { tekst: el && el.dataset.dropLabel,
+      slett: !!el && el.classList.contains('to-trash'),
+      arkiv: !!el && el.classList.contains('to-archive') };
+  });
   await G.drop(p, undefined, touch);
   await p.waitForTimeout(400);
   log(M('7 etiketten over det løftede notatet sier «Arkiver»'),
     etikett.tekst === 'Arkiver' && etikett.farge === true && etikett.malt === true,
     JSON.stringify(etikett));
+  log(M('7 arkiv → søppelkasse bytter etiketten til «Slett»'),
+    tilKassen.tekst === 'Slett' && tilKassen.slett === true && tilKassen.arkiv === false,
+    JSON.stringify(tilKassen));
+  log(M('7 … og søppelkasse → arkiv bytter den tilbake til «Arkiver»'),
+    tilbakeTilArkivet.tekst === 'Arkiver' && tilbakeTilArkivet.arkiv === true
+    && tilbakeTilArkivet.slett === false, JSON.stringify(tilbakeTilArkivet));
+  log(M('7 … og ut av begge forsvinner etiketten helt'),
+    !utenfor.tekst && utenfor.slett === false && utenfor.arkiv === false,
+    JSON.stringify(utenfor));
 
   log(M('ingen JS-feil'), jsFeil.length === 0, jsFeil.join(' | ') || 'ingen');
   await browser.close();

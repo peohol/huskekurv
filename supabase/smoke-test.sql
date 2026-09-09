@@ -110,20 +110,25 @@ begin
     'ideas:cat_id', 'ideas:is_cat', 'ideas:collapsed',
     'ideas:ts', 'ideas:org', 'ideas:pos', 'ideas:pos_ts', 'ideas:pos_org',
 
-    -- Notater (docs/notater-plan.md): Prosjekt > Mappe > Notat, kontoens egne
-    -- rader. `folder_id` er null for et fritt notat rett i prosjektet.
+    -- Notater (docs/notater-plan.md): Bokhylle > Notatbok > Notat.
+    -- `folder_id` er null for et fritt notat rett i bokhyllen. Låsen og
+    -- invitasjonspolicyen er delingsmodellens (docs/rettigheter-og-deling.md
+    -- del 14) — de settes av RPC-er, men kolonnene må finnes.
     'note_projects:id', 'note_projects:owner_id', 'note_projects:name',
     'note_projects:collapsed', 'note_projects:trashed', 'note_projects:archived',
+    'note_projects:locked', 'note_projects:unlocked', 'note_projects:invite_policy',
     'note_projects:ts', 'note_projects:org',
     'note_projects:pos', 'note_projects:pos_ts', 'note_projects:pos_org',
 
     'note_folders:id', 'note_folders:owner_id', 'note_folders:project_id',
     'note_folders:name', 'note_folders:trashed', 'note_folders:archived',
+    'note_folders:locked', 'note_folders:unlocked', 'note_folders:invite_policy',
     'note_folders:ts', 'note_folders:org',
     'note_folders:pos', 'note_folders:pos_ts', 'note_folders:pos_org',
 
     'notes:id', 'notes:owner_id', 'notes:project_id', 'notes:folder_id',
     'notes:title', 'notes:body', 'notes:trashed', 'notes:archived',
+    'notes:locked', 'notes:unlocked', 'notes:invite_policy',
     'notes:ts', 'notes:org',
     'notes:pos', 'notes:pos_ts', 'notes:pos_org',
 
@@ -136,6 +141,9 @@ begin
 
     'memberships:id', 'memberships:user_id', 'memberships:universe_id',
     'memberships:group_id', 'memberships:role', 'memberships:pos',
+    -- Notatsidens tre nivåer deler den samme rolletabellen.
+    'memberships:note_project_id', 'memberships:note_folder_id', 'memberships:note_id',
+    'share_invites:note_project_id', 'share_invites:note_folder_id', 'share_invites:note_id',
 
     'profiles:id', 'profiles:email', 'profiles:display_name', 'profiles:avatar',
 
@@ -472,6 +480,8 @@ begin
     'notes:notes_parent_guard', 'note_folders:note_folders_cascade',
     'object_links:object_links_tombstone', 'object_links:object_links_insert_guard',
     'universes:universes_owner_seed', 'groups:groups_owner_seed',
+    'note_projects:note_projects_owner_seed', 'note_folders:note_folders_owner_seed',
+    'notes:notes_owner_seed',
     'memberships:memberships_guard', 'memberships:memberships_last_owner_guard',
     'share_invites:on_share_invite_created'
   ] loop
