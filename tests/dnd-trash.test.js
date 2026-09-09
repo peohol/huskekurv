@@ -50,6 +50,15 @@
        verten blir låst ETTER at kassen flyttet dit (en synk midt i draget): da
        må kassen ut igjen, og et slipp der den sto sletter ingenting. Begge
        scopene.
+   15. STØRRELSEN. Alle kassene er DOBBELT så høye mens et drag pågår. I et kort
+       tas den ekstra høyden OPPOVER, av en negativ toppmarg: kortets egen boks
+       er like høy som før, så ekstraher-terskelen og alt under kortet står
+       stille, og ＋-raden under kassen viker i stedet for å skinne gjennom
+       slippmålet. (Foten nederst på siden måles i
+       `notes-lifecycle-links.test.js`.)
+   16. ETIKETTEN. Sikter man på en kasse, sier en etikett over det løftede
+       objektet hva slippet betyr — «Slett» her, «Arkiver» i notatenes arkiv
+       (`notes-lifecycle-links.test.js`).
 
   Kjør:
     python3 -m http.server 8000                     # fra repo-roten, i egen terminal
@@ -436,6 +445,41 @@ async function runTrashVsExtract(label, viewport) {
   });
   log(label + ' 11: den armerte kassen er radbred (og holder seg innenfor kortet)',
     bredde.kasse >= bredde.kort - 24 && bredde.innenfor === true, JSON.stringify(bredde));
+
+  /* 15) … og DOBBELT så høy. Den ekstra høyden tas OPPOVER, av en negativ
+     toppmarg: kortet er like høyt som før draget, så `cardBand` og
+     ekstraher-terskelen står stille, og ＋-raden under kassen viker
+     (`visibility`) i stedet for å skinne gjennom slippmålet. */
+  const høyde = await p.evaluate(() => {
+    const btn = document.querySelector('.card[data-id="L1"] .item-trash-btn');
+    const rad = document.querySelector('.card[data-id="L1"] .add-item-row');
+    const hvile = parseFloat(getComputedStyle(document.documentElement)
+      .getPropertyValue('--control-h')) || 48;
+    return {
+      kasse: Math.round(btn.getBoundingClientRect().height),
+      hvile: Math.round(hvile),
+      // Raden kassen ligger i holder fortsatt bare HVILEhøyden: den ekstra
+      // høyden er tatt av en negativ toppmarg, ikke av kortets layout.
+      rad: Math.round(btn.closest('.item-trash').getBoundingClientRect().height),
+      plussSkjult: !!rad && getComputedStyle(rad).visibility === 'hidden',
+    };
+  });
+  log(label + ' 15: den armerte kassen er dobbelt så høy',
+    Math.abs(høyde.kasse - høyde.hvile * 2) <= 2, JSON.stringify(høyde));
+  log(label + ' 15: … uten å ta mer plass i kortet (＋-raden viker i stedet)',
+    Math.abs(høyde.rad - høyde.hvile) <= 2 && høyde.plussSkjult === true,
+    JSON.stringify(høyde));
+
+  // 16) Etiketten over det løftede objektet sier hva slippet betyr.
+  t = await p.locator('.card[data-id="L1"] .item-trash-btn').boundingBox();
+  for (let i = 0; i < 3; i++) { await p.mouse.move(t.x + t.width / 2, t.y + t.height / 2); await p.waitForTimeout(40); }
+  const etikett = await p.evaluate(() => {
+    const el = document.querySelector('[data-dnd-dragging]');
+    return { tekst: el && el.dataset.dropLabel,
+      malt: !!el && getComputedStyle(el, '::after').content !== 'none' };
+  });
+  log(label + ' 16: etiketten over objektet sier «Slett»',
+    etikett.tekst === 'Slett' && etikett.malt === true, JSON.stringify(etikett));
 
   // Ytterkanten av raden — målt fra KORTETS venstrekant, altså et punkt den
   // smale hvileknappen aldri nådde. Treffer man der, er det fortsatt kassen.

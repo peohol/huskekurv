@@ -210,11 +210,17 @@ const log = (n, ok, x = '') => { results.push(ok); console.log((ok ? 'PASS' : 'F
     const errs = []; p.on('pageerror', (e) => errs.push(e.message));
     await register(p); await seed(p);
 
-    // Løft «bunn» (nederste rad, ingen kategori-nabo) …
+    /* Løft «bunn» (nederste rad, ingen kategori-nabo) … NEDOVER, og bare så
+       langt at draget aktiveres (musterskelen er 5 px). «Ved løft» skal måle
+       plassen raden kom fra: «bunn» er siste rad, så et lite nedslag kan ikke
+       bytte plass med noe — mens et oppslag ville flyttet raden en plass opp
+       før noe ble målt (det løftede objektet er kompakt og sentrert på grepet,
+       og bytter derfor plass ved Smetts egen `swapRatio` på 0.2, se
+       docs/drag-and-drop.md). */
     const src = await centerOf(p, '.item[data-id="bunn"]');
     await p.mouse.move(src.x, src.y);
     await p.mouse.down();
-    await moveTo(p, src.x, src.y - 20, 4); await p.waitForTimeout(120);
+    await moveTo(p, src.x, src.y + 10, 4); await p.waitForTimeout(120);
     const lifted = sig(await rows(p));
     log('2 ved løft: ingen linje der placeholderen ligger (nabo er et listepunkt)',
       lifted === 'topp—cat-1—midt|item-ph', lifted);

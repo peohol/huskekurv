@@ -208,14 +208,18 @@ async function run(label, viewport, touch) {
   // sist i kolonnen, altså etter det virtuelle kortet.
   const before3 = await p.evaluate(() => window.__huskis.state.universes.map((u) => u.id));
   const c3 = await G.centre(p, '#nav-board .item[data-id="' + ids.GD1 + '"]');
+  /* Lufta måles FØR løftet, og brukes som et FAST punkt. Board-et vokser mens
+     draget står på — ny-liste-stripa legger seg sist i kolonnen — så et punkt
+     som måles på nytt underveis vandrer nedover, og til slutt inn i kassen som
+     folder seg ut nederst i kildekortet. Det er nettopp den fella
+     `tests/dnd-gestures.js` beskriver: et mål som draget selv flytter, kan
+     man ikke sikte på. */
+  const luft = await p.evaluate(() => {
+    const r = document.getElementById('nav-board').getBoundingClientRect();
+    return { x: Math.round(r.left + r.width / 2), y: Math.round(r.bottom + 14) };
+  });
   await G.lift(p, c3, touch);
-  await G.travel(p, async () => {
-    const b = await p.evaluate(() => {
-      const r = document.getElementById('nav-board').getBoundingClientRect();
-      return { x: r.left + r.width / 2, y: r.bottom + 14 };
-    });
-    return b;
-  }, touch);
+  await G.travel(p, luft, touch);
   await G.drop(p, undefined, touch);
   await p.waitForTimeout(800);
 

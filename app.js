@@ -1648,10 +1648,15 @@
   // badgen i DOM).
   // Kassen vises kun når den har innhold — med unntak av et pågående drag som
   // har avdekket den som slippmål (`data-drag-revealed`, se armDragTrash).
+  /* Hva som skjules når en kasse er tom: wrapperen den ligger i (`.item-trash`,
+     i et kort eller i en fot), ellers knappen selv. ÉN definisjon, for både
+     skjulingen og alle som spør om kassen er synlig. */
+  const trashSlot = (btnEl) => (btnEl && btnEl.closest('.item-trash')) || btnEl;
+  const trashShown = (btnEl) => { const t = trashSlot(btnEl); return !!t && !t.hidden; };
   function updateTrashBadge(trashedSel, countEl, btnEl) {
     const list = trashedSel();
     countEl.textContent = list.length;
-    const target = btnEl.closest('.item-trash') || btnEl;
+    const target = trashSlot(btnEl);
     if (!target.dataset.dragRevealed) target.hidden = list.length === 0;
   }
   // Lister-søppelkassen vises kun når den har innhold (samme logikk som de andre).
@@ -1833,6 +1838,13 @@
   let boardLiftedRow = null, boardLiftedRowH = 0;
   const boardRowHeight = (el) =>
     (el === boardLiftedRow && boardLiftedRowH ? boardLiftedRowH : el.offsetHeight);
+  // Samme notat for et NOTATKORT: det kollapser ikke sammen med naboene, men
+  // det krymper (`dndCompactLift`), og `notesCommitCard` fordeler kolonnene på
+  // nytt mens det fortsatt er løftet.
+  function notesNoteLiftedRow(el) {
+    boardLiftedRow = el;
+    boardLiftedRowH = el ? el.offsetHeight : 0;
+  }
 
   function relayoutBoardNow(scope) {
     const S = scope || boardScope;
@@ -4551,9 +4563,16 @@
      (`boardColumnCount`), så den kan ikke komme i utakt med det man ser — og
      den avgjøres ÉN gang per drag, i `beforedragstart`, før dnd-kit har malt en
      eneste frame. `drag.oneAxis` leses derfra av både modifikatoren og
-     rotasjonen. DELT av alle fem nivåene. */
+     rotasjonen. DELT av alle fem nivåene.
+
+     UNNTAKET ER SCOPENE MED TO SLIPPMÅL VED SIDEN AV HVERANDRE (`sideTargets`):
+     notatene har både et arkiv og en søppelkasse, og de står side om side —
+     nederst på siden og i notatenes nav-modal. Der BETYR sidelengs bevegelse
+     noe også i én kolonne: den er hele forskjellen på «legg bort» og «slett».
+     Listesiden og nav-modalen har bare den ene kassen, og der er låsen som før. */
   function dndLockAxis(b) {
-    drag.oneAxis = boardColumnCount(dragScope()) <= 1;
+    const S = dragScope();
+    drag.oneAxis = !S.sideTargets && boardColumnCount(S) <= 1;
     dndTuneAutoScroll(b);
   }
 
@@ -4563,11 +4582,31 @@
      opprettet. Alle fem nivåene får derfor den SAMME modifikatorlisten.
      Klassen lages først når den trengs: `Smett` er en global fra et eget
      skript, og board-ene selv sjekker at den finnes før de bygges. */
+  /* Slarken i ledesnoren: hvor langt INN fra objektets egen kant pekeren får
+     komme før objektet begynner å følge etter. Se `DndAxisLock` under. */
+  const DND_LEASH_PAD = 10;
   let DndAxisLock = null;
   function dndModifiers() {
     if (!DndAxisLock) {
+      /* Låsen er en LEDESNOR, ikke en spiker. En ren nulling av x holdt objektet
+         i ro uansett hvor fingeren gikk — og det holdt så lenge objektet var
+         like bredt som kolonnen. Det løftede objektet er nå kompakt og sentrert
+         på grepet (`dndCompactLift`), og da slapp en nulling fingeren ut av
+         objektet så snart den flyttet seg en halv objektbredde sidelengs: man
+         drar noe som ligger et godt stykke ved siden av fingeren.
+
+         Snoren gir det samme som før for det låsen faktisk er til for —
+         fingerskjelvet på en telefon flytter ingenting — og gir etter først når
+         fingeren ellers ville forlatt objektet. Da følger objektet akkurat så
+         mye at pekeren blir liggende innenfor kanten. */
       DndAxisLock = class extends Smett.Modifier {
-        apply(op) { return drag.oneAxis ? Object.assign({}, op.transform, { x: 0 }) : op.transform; }
+        apply(op) {
+          if (!drag.oneAxis) return op.transform;
+          const slakk = Math.max(0, (dndLiftedW || 0) / 2 - DND_LEASH_PAD);
+          const d = op.transform.x;
+          const x = d > slakk ? d - slakk : d < -slakk ? d + slakk : 0;
+          return Object.assign({}, op.transform, { x });
+        }
       };
     }
     /* Listen ERSTATTER Smetts standardliste, så viewport-klemma må skrives ut
@@ -4677,6 +4716,66 @@
     return y;
   }
 
+  /* ------- KOLONNENE ET KORTDRAG KAN LANDE I -------
+     Kolonnene lages av BREDDEN (`boardColumnCount`), ikke av innholdet, så et
+     bredt vindu har flere `.board-col` enn det er kort å fylle dem med. De tomme
+     står helt til høyre, og de er ingen plass et kort kan havne: pakkingen er
+     grådig (`packBoardColumns` fyller kolonne 1 helt før kolonne 2 oppstår), så
+     et kort sluppet i en tom kolonne faller tilbake til den siste som har
+     innhold. En plassholder der lover en plassering som ikke finnes — og
+     hovedregelen er at hullet står der objektet faktisk lander.
+
+     Grensen måles ÉN gang, ved løft, og fryses som resten av fordelingen: den
+     siste kolonnen som har et kort da draget startet. `isBoardRow` teller ikke
+     klonen, men det LØFTEDE kortet ligger fortsatt i sin egen kolonne og
+     teller — så kolonnen man dro FRA er alltid med. DELT av begge kortboardene. */
+  function dndNoteLiveColumns(root) {
+    const cols = boardColumns(root);
+    let last = 0;
+    cols.forEach((col, i) => { if ([...col.children].some(isBoardRow)) last = i; });
+    drag.lastCol = last;
+  }
+  const dndLiveColumns = (root) => boardColumns(root).slice(0, (drag.lastCol || 0) + 1);
+  /* Kolonnen som siste utvei, når verken et kort eller en sone kan måles.
+     Avgjøres av KORTETS EGEN BOKS, ikke pekeren: det er den samme kolonneregelen
+     som gjelder ellers (kortet hører til sporet det overlapper mest), og den
+     samme boksen Smetts hysterese-detektor måler med. Ingen overlapp i det hele
+     tatt (kortet dratt helt utenfor kolonnene): nærmeste kolonne langs x — et
+     slipp der er fortsatt et slipp. DELT av begge kortboardene. */
+  function dndPickColumn(root) {
+    const cols = dndLiveColumns(root);
+    if (!cols.length) return null;
+    const r = draggedRect();
+    let best = null, bestOverlap = 0, near = null, nearD = Infinity;
+    for (const col of cols) {
+      const cr = col.getBoundingClientRect();
+      const overlap = Math.max(0, Math.min(r.right, cr.right) - Math.max(r.left, cr.left));
+      if (overlap > bestOverlap) { bestOverlap = overlap; best = col; }
+      const d = Math.abs((cr.left + cr.right) / 2 - (r.left + r.right) / 2);
+      if (d < nearD) { nearD = d; near = col; }
+    }
+    return best || near;
+  }
+  /* Kolonne-detektoren begge kortboardene bruker. En kolonne draget ikke kan
+     lande i melder seg ALDRI — heller ikke på et pekertreff, som ellers ville
+     lagt hullet i en tom kolonne så snart fingeren gled dit.
+
+     Prioriteten er den lavest mulige: kolonnen er aldri vinneren mens et kort
+     eller en sone kan måles. */
+  function dndColumnCollision(input, targetCol) {
+    const col = input.droppable.element;
+    if (!col || dndLiveColumns(col.parentElement).indexOf(col) < 0) return null;
+    const hit = Smett.pointerIntersection(input);
+    if (hit) { hit.priority = Smett.CollisionPriority.Low; return hit; }
+    if (col !== targetCol) return null;
+    return {
+      id: input.droppable.id,
+      value: 0.5,
+      type: Smett.CollisionType.Collision,
+      priority: Smett.CollisionPriority.Lowest,
+    };
+  }
+
   // Dra-elementets logiske boks ut fra pekerposisjon (urørt av rotasjon/skala).
   function draggedRect() {
     const left = drag.lastX - drag.grabX;
@@ -4756,6 +4855,7 @@
     // Fjern den aktive om den fortsatt henger i DOM, og fei bort evt. foreldreløse
     // (f.eks. hvis en drag ble avbrutt uvanlig) så ingen blir stående etter slipp.
     if (drag.ph && drag.ph.parentNode) drag.ph.remove();
+    dndReleaseCompact();      // det løftede objektet folder seg ut igjen
     drag.el = null;
     drag.ph = null;
     drag.trashHost = null;
@@ -5314,6 +5414,18 @@
     const btn = dragArchiveBtn();
     if (btn) btn.classList.toggle('drop-target', on);
     if (drag.el) drag.el.classList.toggle('to-archive', on);
+    setDropLabel(on ? tr('notes.archive') : '');
+  }
+  /* HVA SLIPPET BETYR, i ord, på det som dras. Fargen alene sier det bare til
+     den som kjenner den fra før; etiketten sier det til alle. Den males av
+     `[data-drop-label]` i styles.css — på OBJEKTET, som ligger i top layer og
+     derfor ikke kan dekkes av noe, i motsetning til kassen, som ligger under
+     både fingeren og det man drar. */
+  function setDropLabel(text) {
+    const el = drag.el;
+    if (!el) return;
+    if (text) el.dataset.dropLabel = text;
+    else delete el.dataset.dropLabel;
   }
   // Selve arkiveringen et slipp i arkivet betyr — samme funksjon som menyens
   // «Arkiver», og med den samme «hold kassen i synsfeltet»-oppfølgingen.
@@ -5448,12 +5560,18 @@
      ny-liste-placeholderen blinket inn og ut idet pekeren streifer kanten av
      knappen, og hvert blink flytter kortene under den. */
   const DRAG_TRASH_PAD = 12;
+  /* Slarken går IKKE oppover. Kassen er dobbelt så høy under et drag og legger
+     seg allerede over ＋-raden; strakte den seg enda et stykke opp, ville den
+     spist av containerens EGEN bunn — og «legg raden sist i denne lista» (eller
+     «flytt mappa hit») blitt til en sletting for et sikte noen få piksler for
+     lavt. Under og ved siden av knappen er det bare kortkanten, og der er
+     slarken fortsatt det den alltid har vært. */
   function pointerOnCan(x, y, btn) {
     if (!btn || btn.hidden || !btn.isConnected) return false;
     const r = btn.getBoundingClientRect();
     if (!r.width || !r.height) return false;
     return x >= r.left - DRAG_TRASH_PAD && x <= r.right + DRAG_TRASH_PAD &&
-           y >= r.top - DRAG_TRASH_PAD && y <= r.bottom + DRAG_TRASH_PAD;
+           y >= r.top && y <= r.bottom + DRAG_TRASH_PAD;
   }
   function pointerOnDragTrash(x, y) {
     return !!drag.trashArmed && pointerOnCan(x, y, dragTrashBtn());
@@ -5471,9 +5589,10 @@
       el.hidden = true;
       delete el.dataset.dragRevealed;
     });
-    // Fargen på det som dras hører til siktet, ikke til objektet: den skal aldri
-    // bli liggende igjen etter et avbrutt drag.
+    // Fargen og etiketten på det som dras hører til siktet, ikke til objektet:
+    // de skal aldri bli liggende igjen etter et avbrutt drag.
     if (drag.el) drag.el.classList.remove('to-trash', 'to-archive');
+    setDropLabel('');
     drag.trashArmed = false;
     drag.overTrash = false;
     drag.archiveArmed = false;
@@ -5490,6 +5609,7 @@
     const btn = dragTrashBtn();
     if (btn) btn.classList.toggle('drop-target', on);
     if (drag.el) drag.el.classList.toggle('to-trash', on);
+    setDropLabel(on ? tr('menu.delete') : '');
   }
   // Selve slettingen et slipp i kassen betyr. Kalles ETTER at draget er rullet
   // tilbake, så animasjonen og angre-toasten kjører på et board i normal flyt.
@@ -7332,6 +7452,7 @@
     }
     armDragTrash();             // kassen for NIVÅET, avdekket for draget
     navHoldGrab(el, top0);
+    dndCompactLift(el, board);  // krymp det løftede objektet i begge retninger
     dndNoteLiftedBox(el);       // etter kollapsen: boksen dnd-kit straks måler
     dndLockAxis(board);         // nav-modalen har alltid én kolonne
   }
@@ -7358,6 +7479,80 @@
   function dndNoteLiftedBox(el) {
     dndLiftedW = el ? el.offsetWidth : 0;
     dndLiftedH = el ? el.offsetHeight : 0;
+  }
+
+  /* ------- KOMPAKT LØFT: det som dras krymper i BEGGE retninger -------
+     Et løftet objekt skal være så lite som mulig: det ligger oppå det man
+     sikter mot, og alt det dekker er svar man trenger — hullet, stripa,
+     skillelinja, kassen. Alt utenom TITTELEN og ikonene til VENSTRE for den
+     (typeikon, delt-merke, avkryssingsboks) foldes derfor bort ved løft
+     (`.dnd-compact` i styles.css), og bredden faller til innholdets egen
+     (`width: fit-content`) — aldri bredere enn før, siden `fit-content` også
+     har containerens bredde som tak.
+
+     Naboene kollapser som før, og bare LODDRETT (`navCollapseCardsForDrag`,
+     `boardCollapseCardsForDrag`, `dndCollapseCategory`): det er kortere vei å
+     dra. Vannrett krymping gjelder KUN objektet man holder i.
+
+     KRYMPINGEN ER ASYMMETRISK. Tar man tak i høyre kant av en bred rad, ville en
+     symmetrisk krymping revet raden ut av fingeren og lagt den til venstre for
+     den. Boksen sentreres derfor på GREPET: skiftet legges på FØR dnd-kit
+     måler, så det følger med i den ene målingen alt leser videre — `--dnd-left`
+     (malingen), `intentRectangle` (politikken) og viewport-klemma ser den samme
+     boksen, og det som males ligger der politikken tror det ligger.
+
+     Grepet er dnd-kits AKTIVERINGSPUNKT (`position.initial`) — det samme punktet
+     dnd-kit regner sin egen forflytning fra, så senteret blir liggende under
+     pekeren gjennom hele draget og ikke bare i første frame.
+
+     SKIFTET SKRIVES SOM `translate`, ikke som en marg. En marg ville flyttet
+     naboene i det ene bildet før løftet; `translate` er ren maling og rører
+     ingen layout, men er likevel med i `getBoundingClientRect()` — altså i den
+     ene målingen dnd-kit gjør. Det løftede objektet får sin geometri av
+     dnd-kit (`--dnd-left`/`--dnd-top`, som nettopp ER den målingen), så
+     skiftet tas av objektet med én gang draget er over, og av KLONEN i CSS —
+     ellers ville det blitt lagt på en gang til.
+
+     KUN VANNRETT. Et loddrett skift ville flyttet objektet langs SORTERINGENS
+     egen akse: dnd-kit måler den forskjøvne boksen som objektets utgangspunkt,
+     og et grep nede i et høyt notatkort ville dermed byttet plass med naboen i
+     samme øyeblikk som løftet — uten at fingeren hadde beveget seg. Loddrett
+     står objektet derfor der det sto; det er kollapsen, og
+     `navHoldGrab`/`anchorBegin`, som holder layouten i ro. */
+  let dndCompactEl = null;
+  function dndCompactLift(el, b) {
+    if (!el) return;
+    dndCompactEl = el;
+    el.classList.add('dnd-compact');
+    const op = b && b.manager && b.manager.dragOperation;
+    const at = op && op.position && (op.position.initial || op.position.current);
+    if (!at || !Number.isFinite(at.x)) return;
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const dx = at.x - (r.left + r.width / 2);
+    if (Math.abs(dx) >= 0.5) el.style.translate = dx.toFixed(2) + 'px';
+  }
+  /* Ut av den kompakte formen igjen. Skiftet tas av MED EN GANG (draget er
+     over, og dnd-kit maler nå drop-animasjonen av sin egen geometri), mens
+     selve utfoldingen venter til animasjonen er ferdig: dnd-kit holder
+     `--dnd-width`/`--dnd-height` på den kompakte boksen gjennom hele flyturen,
+     så innhold som kom tilbake for tidlig ville rent utenfor den. Er objektet
+     allerede ute av draget (avbrutt, rullet tilbake, revet ut av en
+     re-render), rydder første runde. */
+  function dndReleaseCompact() {
+    const el = dndCompactEl;
+    dndCompactEl = null;
+    if (!el) return;
+    el.style.translate = '';
+    let frames = 0;
+    const tick = () => {
+      if (el.isConnected && el.hasAttribute('data-dnd-dragging') && ++frames < 120) {
+        requestAnimationFrame(tick);
+        return;
+      }
+      el.classList.remove('dnd-compact');
+    };
+    tick();
   }
 
   /* Fyll `drag` fra dnd-kits operasjon, så alt som leser den ser det samme som
@@ -7900,42 +8095,12 @@
 
      Nav-modalen har nøyaktig én kolonne og kan svare ubetinget. Hovedsidens
      board har flere, og bare ÉN av dem kan være svaret — ellers ville alle
-     kolonnene meldt seg samtidig for et slipp i lufta under board-et. Hvilken
-     avgjøres av KORTETS EGEN BOKS, ikke pekeren: det er den samme kolonneregelen
-     som gjelder ellers (kortet hører til sporet det overlapper mest), og den
-     samme boksen Smetts hysterese-detektor måler med.
-
-     Prioriteten er den lavest mulige: kolonnen er aldri vinneren mens et kort
-     eller en sone kan måles. */
-  function boardPickColumn() {
-    const cols = boardColumns(board);
-    if (!cols.length) return null;
-    const r = draggedRect();
-    let best = null, bestOverlap = 0, near = null, nearD = Infinity;
-    for (const col of cols) {
-      const cr = col.getBoundingClientRect();
-      const overlap = Math.max(0, Math.min(r.right, cr.right) - Math.max(r.left, cr.left));
-      if (overlap > bestOverlap) { bestOverlap = overlap; best = col; }
-      const d = Math.abs((cr.left + cr.right) / 2 - (r.left + r.right) / 2);
-      if (d < nearD) { nearD = d; near = col; }
-    }
-    // Ingen overlapp i det hele tatt (kortet dratt helt utenfor kolonnene):
-    // nærmeste kolonne langs x. Et slipp der er fortsatt et slipp.
-    return best || near;
-  }
-  function boardColumnCollision(input) {
-    const col = input.droppable.element;
-    if (!col) return null;
-    const hit = Smett.pointerIntersection(input);
-    if (hit) { hit.priority = Smett.CollisionPriority.Low; return hit; }
-    if (col !== boardTargetCol) return null;
-    return {
-      id: input.droppable.id,
-      value: 0.5,
-      type: Smett.CollisionType.Collision,
-      priority: Smett.CollisionPriority.Lowest,
-    };
-  }
+     kolonnene meldt seg samtidig for et slipp i lufta under board-et. Regelen
+     og detektoren er DELT med notatboardet (`dndPickColumn`,
+     `dndColumnCollision` i «DELT DnD-POLITIKK»): de to fordeles av den samme
+     kolonnemotoren, og et kort skal oppføre seg likt begge steder. */
+  const boardPickColumn = () => dndPickColumn(board);
+  const boardColumnCollision = (input) => dndColumnCollision(input, boardTargetCol);
   // Smett registrerer containerne med `pointerIntersection` og fast lav
   // prioritet. Vår detektor bestemmer prioriteten selv, så `collisionPriority`
   // nulles: dnd-kit lar en prioritet på entiteten OVERSTYRE den detektoren svarte.
@@ -8037,7 +8202,9 @@
     // kollapser. `finishDrag` slipper den igjen.
     document.documentElement.style.overflowAnchor = 'none';
     boardCollapseCardsForDrag(el);
+    dndNoteLiveColumns(board);  // kolonnene som faktisk finnes å lande i
     boardTuneColumnCollisions();
+    dndCompactLift(el, b);      // krymp det løftede objektet i begge retninger
     dndNoteLiftedBox(el);       // etter kollapsen: boksen dnd-kit straks måler
     dndLockAxis(b);             // én kolonne (smal skjerm) = ingen vannrett vei
     armDragTrash();             // liste-kassen, avdekket for draget
@@ -8420,6 +8587,7 @@
     document.documentElement.style.overflowAnchor = 'none';
     boardFreezeForRowDrag(el);
     dndTuneRowCollisions(boardRowBoard);
+    dndCompactLift(el, b);      // krymp det løftede objektet i begge retninger
     dndNoteLiftedBox(el);       // etter kategoriens sammenfolding: boksen dnd-kit straks måler
     dndLockAxis(b);             // én kolonne (smal skjerm) = ingen vannrett vei
     armDragTrash();             // element-kassen, avdekket for draget
@@ -14807,6 +14975,7 @@
     document.documentElement.style.overflowAnchor = 'none';
     if (kind === 'category') dndCollapseCategory(el);
     dndTuneRowCollisions(ideaRowBoard);
+    dndCompactLift(el, b);      // krymp det løftede objektet i begge retninger
     dndNoteLiftedBox(el);
     dndLockAxis(b);             // idémodalen har alltid én kolonne
   }
@@ -16516,6 +16685,9 @@
     contKind: 'noteProject', rowKind: 'note',
     contSelector: '.note-card',
     get root() { return notesBoard; },
+    // Arkivet og søppelkassen står side om side i foten: sidelengs bevegelse
+    // betyr noe her, også når board-et står i én kolonne (se `dndLockAxis`).
+    sideTargets: true,
     // Samme kolonnemotor og samme pakkerekkefølge som listene; bare
     // minstebredden er notatenes egen — et notatkort (tittel + utdrag + dato)
     // er lesbart på mindre plass enn en liste med rader og chips.
@@ -16553,6 +16725,9 @@
     contSelector: '.card',
     get root() { return notesNavBoard; },
     singleColumn: true,               // nav-modalen har alltid én kolonne
+    // … men BEGGE nivåene har et arkiv ved siden av søppelkassen, så draget er
+    // ikke låst loddrett her (se `dndLockAxis`).
+    sideTargets: true,
     containers: () => visibleNoteProjects(),
     findContainer: (id) => findNoteProject(id),
     findRow: (id) => findNoteFolder(id),
@@ -16605,35 +16780,11 @@
       offBoard: () => tr('dnd.a11yOffBoard'),
     };
   }
-  // Kolonnen som siste utvei — samme regel som listeboardet (`boardPickColumn`),
-  // bare mot notatboardets egne kolonner.
-  function notesPickColumn() {
-    const cols = boardColumns(notesBoard);
-    if (!cols.length) return null;
-    const r = draggedRect();
-    let best = null, bestOverlap = 0, near = null, nearD = Infinity;
-    for (const col of cols) {
-      const cr = col.getBoundingClientRect();
-      const overlap = Math.max(0, Math.min(r.right, cr.right) - Math.max(r.left, cr.left));
-      if (overlap > bestOverlap) { bestOverlap = overlap; best = col; }
-      const d = Math.abs((cr.left + cr.right) / 2 - (r.left + r.right) / 2);
-      if (d < nearD) { nearD = d; near = col; }
-    }
-    return best || near;
-  }
-  function notesColumnCollision(input) {
-    const col = input.droppable.element;
-    if (!col) return null;
-    const hit = Smett.pointerIntersection(input);
-    if (hit) { hit.priority = Smett.CollisionPriority.Low; return hit; }
-    if (col !== notesTargetCol) return null;
-    return {
-      id: input.droppable.id,
-      value: 0.5,
-      type: Smett.CollisionType.Collision,
-      priority: Smett.CollisionPriority.Lowest,
-    };
-  }
+  // Kolonnevalg og kolonne-detektor er de DELTE (`dndPickColumn`,
+  // `dndColumnCollision`) — notatkortene fordeles av den samme kolonnemotoren
+  // som listene, og skal derfor lyde nøyaktig de samme reglene.
+  const notesPickColumn = () => dndPickColumn(notesBoard);
+  const notesColumnCollision = (input) => dndColumnCollision(input, notesTargetCol);
   function notesTuneColumnCollisions() {
     if (!notesCardBoard) return;
     for (const droppable of notesCardBoard.manager.registry.droppables) {
@@ -16710,7 +16861,10 @@
     notesTargetCol = null;
     document.body.classList.add('is-dragging');
     document.documentElement.style.overflowAnchor = 'none';
+    dndNoteLiveColumns(notesBoard);  // kolonnene som faktisk finnes å lande i
     notesTuneColumnCollisions();
+    notesNoteLiftedRow(el);     // hvilehøyden pakkingen skal regne med ved slippet
+    dndCompactLift(el, b);      // krymp det løftede objektet i begge retninger
     dndNoteLiftedBox(el);
     dndLockAxis(b);
     armDragTrash();             // notat-kassen, avdekket for draget
@@ -16788,6 +16942,7 @@
   }
   function notesRelayoutAfterDrop() {
     dndAfterCloneGone(notesBoard, () => {
+      notesNoteLiftedRow(null);   // hvilehøyden gjelder kun mens kortet er løftet
       relayoutBoard(notesScope);
       fixNotesBottomGap();
       const droppedId = notesDroppedId;
@@ -16894,8 +17049,9 @@
     document.body.classList.add('is-dragging');
     document.documentElement.style.overflowAnchor = 'none';
     if (kind === 'item') dndTuneRowCollisions(notesNavRowBoard);
+    dndCompactLift(el, b);         // krymp det løftede objektet i begge retninger
     dndNoteLiftedBox(el);
-    dndLockAxis(b);                // nav-modalen har alltid én kolonne
+    dndLockAxis(b);
     armDragTrash();                // kassen for NIVÅET, avdekket for draget
     armDragArchive();              // … og arkivet ved siden av den
   }
@@ -17745,6 +17901,10 @@
   const MAIN_TABS = ['lists', 'notes'];
   const topbarRowLists = document.getElementById('topbar-row-lists');
   const topbarRowNotes = document.getElementById('topbar-row-notes');
+  // Slippfoten nederst hører til fanen, som topplinjas rad: hver fane har sine
+  // egne kasser (docs/trash.md).
+  const listsDock = document.getElementById('lists-dock');
+  const notesDock = document.getElementById('notes-dock');
   let activeMainTab = 'lists';
 
   function readMainTab() {
@@ -17763,6 +17923,8 @@
     paintSeg(mainTabsEl, '.main-tab', (btn) => btn.dataset.tab === activeMainTab);
     if (topbarRowLists) topbarRowLists.hidden = notes;
     if (topbarRowNotes) topbarRowNotes.hidden = !notes;
+    if (listsDock) listsDock.hidden = notes;
+    if (notesDock) notesDock.hidden = !notes;
     board.hidden = notes;
     if (notesBoard) notesBoard.hidden = !notes;
     if (notes) renderNotes(); else renderBoard();
@@ -23956,7 +24118,7 @@
   // Kalles etter hver board-rendring: hvilke gester er relevante NÅ? Ett tips
   // om gangen — resten kommer neste gang de fortsatt er relevante.
   function maybeContextualTips(cardCount) {
-    if (!trashBtn.hidden && showTip('trash')) return;
+    if (trashShown(trashBtn) && showTip('trash')) return;
     if (cardCount >= 2 && showTip('drag')) return;
     // Søppelkassen dukker først opp UNDER et drag, så den er ikke selvforklarende
     // — men gesten er den samme på mus og finger, og tipset gjelder overalt.

@@ -31,6 +31,13 @@
       som «veier» en korthøyde. Testen følger selve flukten: der animasjonen
       ENDER skal være der kortet blir liggende.
 
+  (10) EN KOLONNE SOM IKKE FINNES ER INGEN PLASS. Kolonnene lages av BREDDEN, så
+      et bredt vindu har flere `.board-col` enn det er kort å fylle dem med. De
+      tomme står til høyre, og pakkingen er grådig — et kort sluppet der faller
+      tilbake til den siste kolonnen som HAR innhold. Plassholderen skal derfor
+      aldri vises i en av dem, uansett hvor langt til høyre man drar. Måles på
+      BEGGE kortboardene: lister og notater deler kolonnemotor.
+
   Gestene er EKTE input (`tests/dnd-gestures.js`).
 
   Kjør:
@@ -165,7 +172,16 @@ async function lift(p, sel) {
     await seed(p, [1, 1, 1]); // alle tre i kolonne 1
     const l1 = await rectOf(p, '.card[data-id="card-0"]');
     const z = await lift(p, '.card[data-id="card-1"] .item');
-    // Sikt i board-lufta rett under L1 og beveg pekeren én piksel om gangen.
+    /* Sikt i board-lufta rett under L1 og beveg pekeren én piksel om gangen.
+       FØRST to bevegelser til utgangspunktet: dnd-kit lar av og til ETT
+       `pointermove` falle på gulvet — posisjonen oppdateres, men `dragmove`
+       fyrer ikke — og et stort hopp inn i lufta er nettopp et slikt sted. Uten
+       oppvarmingen måler første prøve tilstanden FØR gesten kom fram, og
+       «ingen veksling» ville handlet om det i stedet for om flimring. */
+    for (let i = 0; i < 2; i++) {
+      await p.mouse.move(Math.round(l1.cx), Math.round(l1.b) + 12);
+      await p.waitForTimeout(60);
+    }
     const snaps = [];
     for (let i = 0; i < 14; i++) {
       await p.mouse.move(Math.round(l1.cx), Math.round(l1.b) + 12 - i);
@@ -469,6 +485,35 @@ async function lift(p, sel) {
       'under=' + JSON.stringify(under.kol) + ' etter=' + JSON.stringify(etter));
     log('9 lista havnet i den andre kolonnen', etter[1].includes('L1'), JSON.stringify(etter));
     log('9 ingen JS-feil', errs.length === 0, errs.join(' | '));
+    await p.close();
+  }
+
+  /* ============ 10) Plassholderen havner aldri i en kolonne som ikke finnes ============ */
+  {
+    const p = await b.newPage({ viewport: { width: 1400, height: 900 } });
+    const errs = []; p.on('pageerror', (e) => errs.push(e.message));
+    await register(p);
+    await seed(p, [1, 1]);           // to korte lister → alt i kolonne 1
+    const antall = (await cols(p)).length;
+    log('10 board-et har tomme kolonner til høyre', antall >= 3, 'kolonner=' + antall);
+    const z = await rectOf(p, '.card[data-id="card-0"] .card-head');
+    await G.liftMouse(p, { x: z.cx, y: z.cy });
+    const spor = [];
+    for (const dx of [250, 600, 1000]) {
+      await p.mouse.move(Math.min(z.cx + dx, 1390), z.cy + 20, { steps: 6 });
+      await p.waitForTimeout(120);
+      spor.push(await p.evaluate(() => {
+        const ph = document.querySelector('#board [data-dnd-placeholder]');
+        const c = [...document.querySelectorAll('#board > .board-col')];
+        return ph ? c.indexOf(ph.parentElement) : -1;
+      }));
+    }
+    await p.mouse.up(); await p.waitForTimeout(500);
+    log('10 hullet blir i kolonnen som finnes, uansett hvor langt til høyre man drar',
+      spor.every((i) => i === 0), JSON.stringify(spor));
+    const etter = (await cols(p)).map((c) => c.join(',')).join('|');
+    log('10 … og lista lander der den lå', /^L1,L2\|/.test(etter + '|'), etter);
+    log('10 ingen JS-feil', errs.length === 0, errs.join(' | '));
     await p.close();
   }
 

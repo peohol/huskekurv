@@ -291,18 +291,25 @@ async function run(label, viewport, touch) {
   await lift(p, await centre(p, sel(idDrag) + ' .item-text'), touch);
   log(label + ': draget avdekker IKKE idé-kassen (den er ikke et slippmål)',
     await p.$eval('#idea-trash', (el) => el.hidden));
-  /* Løftet objektet skal ikke følge pekeren sidelengs — lista er én kolonne.
-     SENTERET måles, ikke venstrekanten: løfte-skaleringen flytter kantene, men
-     ikke senteret. (Den dynamiske rotasjonen er av her — den hører til
-     flerkolonnevisningen, se `dnd-vertical-axis.test.js`.) */
-  const senterX = () => p.$eval('#ideas-list [data-dnd-dragging]',
-    (el) => { const r = el.getBoundingClientRect(); return Math.round((r.left + r.right) / 2); });
-  const xFørSide = await senterX();
+  /* Lista er én kolonne, så draget er låst til den loddrette aksen: det løftede
+     objektet skal ikke FØLGE pekeren sidelengs. Låsen er en ledesnor — det
+     kompakte objektet henger etter i stedet for å følge med, men slipper aldri
+     pekeren (se `dnd-vertical-axis.test.js` og docs/drag-and-drop.md). SENTERET
+     måles, ikke venstrekanten: løfte-skaleringen flytter kantene, men ikke
+     senteret. (Den dynamiske rotasjonen er av her — den hører til
+     flerkolonnevisningen.) */
+  const boksen = () => p.$eval('#ideas-list [data-dnd-dragging]',
+    (el) => { const r = el.getBoundingClientRect();
+      return { x: Math.round((r.left + r.right) / 2), l: Math.round(r.left), r: Math.round(r.right) }; });
+  const xFørSide = (await boksen()).x;
   const start = await centre(p, sel(idDrag));
   await travel(p, { x: start.x + 140, y: start.y }, touch);
-  const xEtterSide = await senterX();
-  log(label + ': draget er låst til den vertikale aksen', Math.abs(xEtterSide - xFørSide) <= 1,
-    xFørSide + ' → ' + xEtterSide);
+  const etterSide = await boksen();
+  log(label + ': draget henger etter fingeren i stedet for å følge den sidelengs',
+    Math.abs(etterSide.x - xFørSide) < 140, xFørSide + ' → ' + etterSide.x);
+  log(label + ': … og slipper den aldri (ledesnoren)',
+    start.x + 140 >= etterSide.l && start.x + 140 <= etterSide.r,
+    'peker=' + (start.x + 140) + ' objekt=' + etterSide.l + '–' + etterSide.r);
   await drop(p, undefined, touch);
   await p.waitForTimeout(400);
   log(label + ': ingen idé forsvant av et sidelengs drag', (await nivå1(p)).length === førKassen,

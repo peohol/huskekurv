@@ -17,7 +17,9 @@
     6. LWW: to enheter som skriver `archived`/`trashed` i motsatt rekkefølge
        ender likt, og posisjonsregisteret flettes for seg
     7. Kassene og arkivene som knapper: skjult når tomme, teller riktig, og
-       et drag i notatfanen kan slippes i kassen på alle tre nivåene
+       et drag i notatfanen kan slippes i kassen på alle tre nivåene — og
+       notatfanens to kasser står i en FAST FOT nederst i viewportet, med halve
+       bredden hver, mens en ETIKETT over det løftede objektet sier «Arkiver»
     8. Det felles søket: `Alt | Lister | Notater`, treff på notattittel,
        notattekst, bokhylle og notatbok — og at scopet filtrerer
     9. Navigering fra et søketreff til riktig objekt OG riktig hovedfane,
@@ -801,6 +803,81 @@ async function run(navn, viewport, touch) {
     avvist(kontrakt.ingenNotatside) && avvist(kontrakt.toNotatsider), JSON.stringify(kontrakt));
   log(M('mocken avviser en koblingsrad uten eller med to id-er på listesiden'),
     avvist(kontrakt.ingenListeside) && avvist(kontrakt.toListesider), JSON.stringify(kontrakt));
+
+  /* ---------- 7d) Foten: to kasser side om side, og etiketten ----------
+     Måles TIL SLUTT: seksjonen setter arkiv- og slette-flagg for å få begge
+     kassene fram samtidig, og det ville stått i veien for koblingsseksjonene
+     over (en kobling til et bortlagt notat er en annen sak, med sin egen
+     sjekk). Her er det kun geometrien og etiketten som måles. */
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    H.closeNotesNav();
+    H.closeNoteEditor();
+    H.setMainTab('notes');
+  });
+  await p.waitForFunction(() => !document.getElementById('notes-board').hidden,
+    null, { timeout: 5000, polling: 100 });
+  /* Begge kassene skal ha innhold samtidig — det er da foten har TO felt å dele
+     bredden mellom. Plasseringen settes eksplisitt (kassene er scopet til den
+     man står i), og flaggene skrives direkte: her handler det om geometrien, og
+     en buffret sletting ville dessuten committet seg selv midt i målingen. */
+  await p.evaluate((ids) => {
+    const H = window.__huskis;
+    H.setActiveProject(ids.proj);
+    H.setActiveNoteFolder(null);
+    H.state.notes.forEach((n) => { n.archived = false; n.trashed = false; n._pendingDelete = false; });
+    const frie = H.state.notes.filter((n) => n.project === ids.proj && !n.folder);
+    if (frie[0]) frie[0].archived = true;
+    if (frie[1]) frie[1].trashed = true;
+    H.renderNotes();
+  }, ids2);
+  await p.waitForFunction(() => {
+    const a = document.getElementById('note-archive'), t = document.getElementById('note-trash');
+    return !!a && !a.hidden && !!t && !t.hidden;
+  }, null, { timeout: 5000, polling: 100 });
+  const fot = await p.evaluate(() => {
+    const R = (sel) => { const e = document.querySelector(sel); if (!e) return null;
+      const b = e.getBoundingClientRect();
+      return { l: Math.round(b.left), r: Math.round(b.right), t: Math.round(b.top),
+        b: Math.round(b.bottom), w: Math.round(b.width) }; };
+    return { dokk: R('#notes-dock'), arkiv: R('#note-archive'), kasse: R('#note-trash'),
+      vh: window.innerHeight, vw: window.innerWidth,
+      fast: getComputedStyle(document.getElementById('notes-dock')).position };
+  });
+  log(M('7 foten står fast nederst i viewportet'),
+    !!fot.dokk && fot.fast === 'fixed' && fot.dokk.b === fot.vh && fot.dokk.w === fot.vw,
+    JSON.stringify(fot.dokk) + ' vh=' + fot.vh);
+  /* Halve bredden hver, med luft rundt og mellom — som bokhyllenes egen fot i
+     nav-modalen. Måles som «omtrent like brede, og til sammen nesten hele
+     bredden». */
+  const halv = fot.arkiv && fot.kasse
+    && Math.abs(fot.arkiv.w - fot.kasse.w) <= 4
+    && fot.arkiv.w + fot.kasse.w >= fot.vw - 60
+    && fot.kasse.l > fot.arkiv.r;
+  log(M('7 arkivet og kassen deler bredden likt, med luft mellom seg'), !!halv,
+    JSON.stringify({ arkiv: fot.arkiv, kasse: fot.kasse, vw: fot.vw }));
+
+  // Etiketten over det løftede objektet sier hva slippet betyr.
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    H.state.notes.forEach((n) => { n.archived = false; n.trashed = false; n._pendingDelete = false; });
+    H.renderNotes();
+  });
+  await p.waitForTimeout(300);
+  const notatSel = '#notes-board .note-card';
+  await G.lift(p, await centre(p, notatSel), touch);
+  await G.travel(p, () => centre(p, '#note-archive-btn'), touch);
+  const etikett = await p.evaluate(() => {
+    const el = document.querySelector('[data-dnd-dragging]');
+    return { tekst: el && el.dataset.dropLabel,
+      farge: !!el && el.classList.contains('to-archive'),
+      malt: !!el && getComputedStyle(el, '::after').content !== 'none' };
+  });
+  await G.drop(p, undefined, touch);
+  await p.waitForTimeout(400);
+  log(M('7 etiketten over det løftede notatet sier «Arkiver»'),
+    etikett.tekst === 'Arkiver' && etikett.farge === true && etikett.malt === true,
+    JSON.stringify(etikett));
 
   log(M('ingen JS-feil'), jsFeil.length === 0, jsFeil.join(' | ') || 'ingen');
   await browser.close();

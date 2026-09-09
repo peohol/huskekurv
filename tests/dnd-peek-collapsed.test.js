@@ -208,10 +208,17 @@ const log = (n, ok, x = '') => { results.push(ok); console.log((ok ? 'PASS' : 'F
     await slide(p, iB.x, iB.y); await p.waitForTimeout(300); // peek åpner
     let openPeek = await isCollapsedDom(p, 'card-B', 'card');
     log('2 B peek-åpnet før slipp', openPeek === false, 'collapsed=' + openPeek);
-    // Slipp inne i B.
+    /* Slipp inne i B — i TO OMGANGER, som en finger beveger seg.
+       Peek-åpningen er bare den første layout-endringen: når hullet så flytter
+       seg fra A til B, krymper A og B rykker et godt stykke oppover, og et punkt
+       målt før den flyttingen ligger langt lenger NEDE i B enn det gjorde da det
+       ble målt — nede ved ＋-raden, der søppelkassen folder seg ut under et drag.
+       Andre omgang måler på nytt og sikter der lista faktisk er. */
     const drop = await centerOf(p, '.card[data-id="card-B"] .items-container');
     await slide(p, drop.x, drop.y + 6); await p.waitForTimeout(80);
-    await release(p, drop.x, drop.y + 6); await p.waitForTimeout(400);
+    const dropNå = await centerOf(p, '.card[data-id="card-B"] .items-container');
+    await slide(p, dropNå.x, dropNå.y); await p.waitForTimeout(80);
+    await release(p, dropNå.x, dropNå.y); await p.waitForTimeout(400);
     const st = await state(p);
     const inB = st['card-B'].items.some((it) => it.id === 'a-free' && it.home === 'card-B');
     const notInA = !st['card-A'].items.some((it) => it.id === 'a-free');
