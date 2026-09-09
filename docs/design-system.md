@@ -92,7 +92,10 @@ Det som regnes ut i JS kan ikke få sonen fra CSS, og leser den i stedet fra
 `safeInsets()` i `app.js`: demonstrasjonens kort (`placeTour`), popover-skallet
 på desktop (`positionSwitcherPanel`), søppelkassens sveipefelt (`openField` —
 feltet utvider seg mot HØYRE og stopper ved den brukbare kanten; sveipe-strekket
-regnes ut fra bredden og følger med), og de tre stedene som trenger den
+regnes ut fra bredden og følger med), notat-editorens to paneler
+(`placeNotePanel` — som klemmer BÅDE plassering, høyde og bredde mot det
+brukbare feltet; å bare flytte venstrekanten gjør ikke et for bredt panel
+smalere), og de tre stedene som trenger den
 BRUKBARE bunnen i stedet for viewportkanten — kolonnebudsjettet
 (`docs/board-layout.md`) og dra-og-slippets to scroll-grenser
 (`docs/drag-and-drop.md`). `env()` erstattes når custom-propertyen regnes ut, så de fire

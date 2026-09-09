@@ -294,9 +294,11 @@ sted i frontend, og skal ikke være det:
 ## Eksterne lenker
 
 **Huskis' UI genererer ingen utgående lenker.** Det finnes ikke én `<a>`-tagg
-med en absolutt adresse, ikke ett `target="_blank"` og ikke ett
-`window.open()` i web-kildekoden. De eneste adressene utenfor eget origin som
-i det hele tatt står i frontend er to, og ingen av dem er en navigasjon:
+med en absolutt adresse og ikke ett `target="_blank"` i web-kildekoden.
+Adressen i en notatlenke er den ENE tingen som kan sendes ut av appen, og den
+går gjennom nøyaktig ett kall — se «Lenker i notater» under. De eneste
+adressene utenfor eget origin som i det hele tatt står HARDKODET i frontend er
+to, og ingen av dem er en navigasjon:
 
 - **Supabase-endepunktet** (`config.js`) — data over `fetch`/WebSocket,
   navngitt i `connect-src` ([`sikkerhetsheadere.md`](sikkerhetsheadere.md));
@@ -314,18 +316,51 @@ guarden gjør ingenting der — appen kan ikke navigere seg selv ut på nett.
 Notat-editoren har en **lenkeknapp** ([`notater-plan.md`](notater-plan.md)), og
 den bryter ikke regelen over: en lenke i et notat er MERKET TEKST, ikke et
 anker. Adressen bæres i `data-url` på et `<span class="note-link">`, vises i
-`title`, og kan leses, endres, kopieres og fjernes i lenke-panelet. Det finnes
-altså fortsatt ikke én `<a href>` med en absolutt adresse i noe Huskis rendrer,
-og begge vaktene (`tests/capacitor-android.test.js` del 12 og
-`tests/external-links.test.js`) står urørt.
+`title`, og kan leses, endres, åpnes, kopieres og fjernes i lenke-panelet. Det
+finnes altså fortsatt ikke én `<a href>` med en absolutt adresse i noe Huskis
+rendrer, og `tests/external-links.test.js` — som ser i det FERDIGE DOM-et —
+står urørt.
 
 Adressen NORMALISERES når den lagres, i to lag: `safeNoteUrl()` fjerner
 kontrolltegn, gir en adresse uten skjema `https:`, og slipper bare gjennom
 `http:`, `https:` og `mailto:`. Alt annet — `javascript:`, `data:`, `blob:` —
 blir tom streng, både på vei inn i tilstanden og igjen når dokumentet rendres.
 
-Å ÅPNE en slik lenke er ikke innført. Det hører sammen med mobilskallets ruting
-(regelen under) og tas i det steget som også tar deling og Android-polering.
+#### Å åpne en lenke: `openExternalUrl()`
+
+Å åpne lenken går gjennom **ÉN funksjon i `app.js`**, og det er den eneste
+veien ut av appen som finnes:
+
+```js
+openExternalUrl(raw)   // safeNoteUrl(raw)  →  window.open(url, '_blank', 'noopener')
+```
+
+- **Adressen normaliseres på nytt**, uansett hvor den kommer fra. En lagret
+  `data-url` har alt vært gjennom `safeNoteUrl`, men en vakt som bare gjelder
+  én vei inn er ingen vakt. `javascript:` blir tom streng og åpnes ikke.
+- **Samme mekanisme i begge kjøremiljøene.** I nettleseren åpnes en ny fane,
+  og `noopener` gjør at siden som åpnes ikke har noen referanse til Huskis'
+  vindu. I mobilskallet står WebView-en med `supportMultipleWindows = false`
+  (Capacitors standard), så `window.open` blir en vanlig navigasjon som går
+  gjennom `shouldOverrideUrlLoading` → `Bridge.launchIntent()` — altså akkurat
+  regelen under ([`mobilapp-plan.md`](mobilapp-plan.md)).
+- **Returverdien sier ingenting.** Med `noopener` svarer `window.open` alltid
+  `null` (HTML-standarden), så den kan ikke brukes til å oppdage en
+  popup-blokkering. Å felle en feilmelding på den ville løyet hver gang.
+
+**Veiene inn dit** er tre, og alle tre gir den samme normaliseringen:
+lenke-panelets «Åpne», `Cmd`/`Ctrl`-klikk på en lenke i et redigerbart notat,
+og et vanlig klikk (eller `Enter`) i et SKRIVEBESKYTTET notat, der det ikke er
+noe å redigere og lenkene derfor er tabbstopp
+([`tilgjengelighet.md`](tilgjengelighet.md)).
+
+**Vakten er justert, ikke fjernet.** `tests/capacitor-android.test.js` del 12
+forbød `open()` i enhver form. Nå har den ett unntak, og unntaket er knyttet
+til STEDET: nøyaktig én forekomst, i `app.js`, skrevet nøyaktig
+`window.open(url, '_blank', 'noopener')`, inne i `openExternalUrl`, med
+`safeNoteUrl` foran seg. Testen KREVER dessuten at unntaket ble brukt — én
+gang i kilden, én gang i `dist/`, én gang i den synkede builden — så åpningen
+kan verken forsvinne eller få selskap uten at noen tar beslutningen om igjen.
 
 ### Regelen
 

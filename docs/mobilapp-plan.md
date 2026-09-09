@@ -16,7 +16,7 @@ autoritative dokumentet for fagfeltet.
 | Målarkitektur | Én HTML/CSS/JS-kodebase + Capacitor for Android/iOS |
 | Nåværende fase | **Fase 6 — Android intern distribusjon.** Repo-siden er innført: stabil release-signering, reproducerbar release-AAB fra CI, endelig package ID og butikkregelen for `versionCode`. Det som gjenstår er manuelt i Google Play Console. |
 | Native kapabiliteter | Systemets tilbakeknapp, safe areas, lifecycle-/network-signaler, OTA — og **lokale systemvarsler** (`@capacitor/local-notifications`, se «Native varsler» under). Ingen andre native plugins. |
-| Status — fase 3 | **Ferdigkriteriet er nådd.** Alle seks punktene er avgjort: systemets tilbakeknapp og safe areas/systemfeltene/skjermtastaturet, begge verifisert på fysisk telefon; eksterne lenker og auth-/e-postlenker, som begge er beslutninger uten kode og derfor ikke har noe å prøve på en telefon; sikker lagring/`android:allowBackup`, der sikkerhetskopien av WebView-lagringen er slått av; og lifecycle-/network-signalene, målt på enhet med sonden. `navigator.onLine` er bekreftet dødt uten `ACCESS_NETWORK_STATE`, og tillatelsen er lagt inn med vakt. Gjenopptakelsen er tilskrevet: et `get_my_doc` står i enhetsloggen merket `by: 'visibilitychange'`. Målingen viste samtidig at hendelsen IKKE leveres når Android har fryst prosessen — der starter pollets forfalte tikk runden i samme øyeblikk som opptiningen. Begge ledd er dermed bærende, hvert i sitt regime (se seksjonen). Ingen native plugin er innført. Automatisk dekket av `tests/safe-area.test.js`, `tests/landscape-chrome.test.js`, `tests/system-back.test.js`, `tests/sync-foreground.test.js` (del 2 og del 6 kjører hvert sitt regime) og `tests/capacitor-android.test.js`. |
+| Status — fase 3 | **Ferdigkriteriet er nådd.** Alle seks punktene er avgjort: systemets tilbakeknapp og safe areas/systemfeltene/skjermtastaturet, begge verifisert på fysisk telefon; eksterne lenker og auth-/e-postlenker, der rutingen er en beslutning uten kode (appens første utgående lenke — adressen i et notat — kom senere, og har sin egen fysiske sekvens i seksjonen); sikker lagring/`android:allowBackup`, der sikkerhetskopien av WebView-lagringen er slått av; og lifecycle-/network-signalene, målt på enhet med sonden. `navigator.onLine` er bekreftet dødt uten `ACCESS_NETWORK_STATE`, og tillatelsen er lagt inn med vakt. Gjenopptakelsen er tilskrevet: et `get_my_doc` står i enhetsloggen merket `by: 'visibilitychange'`. Målingen viste samtidig at hendelsen IKKE leveres når Android har fryst prosessen — der starter pollets forfalte tikk runden i samme øyeblikk som opptiningen. Begge ledd er dermed bærende, hvert i sitt regime (se seksjonen). Ingen native plugin er innført. Automatisk dekket av `tests/safe-area.test.js`, `tests/landscape-chrome.test.js`, `tests/system-back.test.js`, `tests/sync-foreground.test.js` (del 2 og del 6 kjører hvert sitt regime) og `tests/capacitor-android.test.js`. |
 | Status — fase 4 | Fase 4s ferdigkriterium er **oppfylt**: en kjørende APK og en Vercel-preview bygget av samme commit rapporterte den samme `releaseId` (`d10867a7c0a6`) med hver sin `buildId`, lest på telefon. Alle sju punktene er avgjort. Fem er implementert: kartleggingen av dagens release-identiteter, `releaseId` er definert og generert i `build.js`, web og Android bygget fra samme commit rapporterer den samme verdien, `version.json` er utvidet additivt uten at cache- eller reload-sikkerheten er rørt, og kompatibilitetsregelen mellom klientrelease og databaseskjema er skrevet ned ([`release-og-deploy.md`](release-og-deploy.md)). De to siste er beslutninger, ikke kode — `minimumSupportedRelease` og valget mellom byte-identisk artifact og separate builds — sto åpne til OTA ga dem en konsekvens, og er nå avgjort i fase 5: ingen nedre grense, og separate builds med samme `releaseId` (se «De to punktene fra fase 4 får sitt svar her»). Automatisk dekket av `tests/build-version.test.js`, `tests/auto-update.test.js` og `tests/capacitor-android.test.js`. |
 | Status — fase 5 | **Ferdigkriteriet er oppfylt på fysisk Android.** Installasjon A beviste produksjonskjeden: et `versionCode 3`-skall fra `0ebb737` lastet ned og stilte opp en senere produksjonsbundle, Java godtok produksjonssignaturen, `updateSafety()` blokkerte byttet offline og under synk, origin/sesjon/data overlevde byttet, OTA-aktiveringen var varig, og fire flymodus-kaldstarter nådde `ready()` på 249–314 ms mot `readyTimeout = 10000` ms — også med token nær utløp. Installasjon B beviste fallbacken på måleriggen: både `rig-broken-1` (`throw`) og `rig-broken-2` (`blank`) ble rullet tilbake til innebygd bundle og sperret varig; for `rig-broken-2` ble hele signaturen lest direkte som `rollback: true`, `previousBundleId: 'rig-broken-2'`, klientkarantene og pluginblokkliste. Råmålingene står i fase 5-seksjonen. |
 | Status — fase 6 | **Repo-siden er ferdig; butikk-siden er manuell.** Innført og maskinelt dekket: `no.huskis.app` er bekreftet endelig og låst i alle seks stedene som navngir den; release-signeringen tar imot materiale utenfra (miljøvariabler eller en gitignorert properties-fil) og AVVISER et release-bygg uten det, i tre fail-closed-lag; `.github/workflows/android-release.yml` bygger `app-release.aab` reproducerbart av den samme `dist/`-kjeden og laster den opp som artifact; `versionCode` har fått butikkens monotone regel uten å bli et tall nummer to; og appikonet og splash-bildet er Huskis' eget merke, utledet av `favicon.svg`, i stedet for Capacitor-malens logo. Ingen nøkkel, intet passord og ingen Play-konto finnes ennå — det signerte bygget er derfor prøvd bare fra avvisningssiden. Automatisk dekket av `tests/android-release.test.js`. |
@@ -397,9 +397,11 @@ funksjoner bare fordi de er mulige.
       inkludert punkt 10, som er kjørt om igjen med rettingen inne og bekreftet
       på telefon (identisk i lys og mørk modus, lesbart i begge).
 - [x] Definer hvilke eksterne lenker som åpnes i systembrowser og hvilke som
-      forblir i appen. Regelen er skrevet ned og voktet; den krevde ingen kode,
-      fordi appen ikke har én eneste utgående lenke og Capacitors egen ruting
-      allerede gjør nøyaktig det regelen sier.
+      forblir i appen. Regelen er skrevet ned og voktet, og selve rutingen
+      krevde ingen kode: Capacitors egen ruting gjør nøyaktig det regelen sier.
+      Appen har siden fått sin første utgående lenke — adressen i et notat —
+      og den går gjennom ÉN funksjon (`openExternalUrl`), som er den samme i
+      nettleseren og i skallet. Se seksjonen for den fysiske sekvensen.
 - [x] Gjør auth-/e-postlenker robuste; vurder Android App Links og senere iOS
       Universal Links slik at bekreftelse/reset kan returnere til appen.
       Kartlagt og avgjort: lenkene er robuste, App Links utsettes til fase 6.
@@ -619,20 +621,19 @@ Huskis-feil — ikke en Capacitor-tilpasning.
 ## Eksterne lenker
 
 **Kartleggingen først.** Huskis' UI har ikke én utgående lenke: null `<a>`-tagger
-med absolutt adresse, null `target="_blank"`, null `window.open()`. De to eneste
-adressene utenfor eget origin som står i frontend i det hele tatt er
-Supabase-endepunktet (data over `fetch`/WebSocket, ikke navigasjon) og
-`canonicalAppUrl` (går inn i auth-lenkene Supabase sender på e-post, og
-navigeres aldri til). Appen navigerer seg selv nøyaktig ett sted:
-`location.replace(target)` i guarden øverst i `index.html` — og den rører kun de
-tre navngitte redirect-hostene, så i appen, der verten er `localhost`, gjør den
-ingenting.
+med absolutt adresse, null `target="_blank"`. De to eneste adressene utenfor
+eget origin som står HARDKODET i frontend er Supabase-endepunktet (data over
+`fetch`/WebSocket, ikke navigasjon) og `canonicalAppUrl` (går inn i
+auth-lenkene Supabase sender på e-post, og navigeres aldri til). Appen
+navigerer seg selv nøyaktig ett sted: `location.replace(target)` i guarden
+øverst i `index.html` — og den rører kun de tre navngitte redirect-hostene, så
+i appen, der verten er `localhost`, gjør den ingenting.
 
 **Regelen som ble valgt:** appens eget origin lastes inne i appen, alt annet
 åpnes i systembrowseren. Autoritativt, med begrunnelse og de tre grensetilfellene:
 [`domains-and-urls.md`](domains-and-urls.md) («Eksterne lenker»).
 
-**Den krevde ingen kode.** Capacitors `BridgeWebViewClient.shouldOverrideUrlLoading()`
+**Rutingen krevde ingen kode.** Capacitors `BridgeWebViewClient.shouldOverrideUrlLoading()`
 → `Bridge.launchIntent()` sender allerede hver adresse med et annet skjema+vert
 enn appens ut som `Intent.ACTION_VIEW`. Det ER regelen. Å legge en
 `@capacitor/browser`-plugin (Custom Tab) oppå ville vært et native API for et
@@ -641,35 +642,60 @@ Web-laget kjenner derfor fortsatt native-runtimen på nøyaktig ÉN gated linje,
 broen for tilbakeknappen; unntaket i `tests/capacitor-android.test.js` er
 uendret.
 
+**Appen HAR nå én utgående lenke: adressen i et notat.** Den åpnes gjennom
+`openExternalUrl()` i `app.js` — ett kall,
+`window.open(url, '_blank', 'noopener')`, med `safeNoteUrl()` foran seg
+([`domains-and-urls.md`](domains-and-urls.md), «Lenker i notater»). Det er
+BEVISST den samme mekanismen i begge kjøremiljøene, og ikke et nytt plugin:
+
+- WebView-en står med `supportMultipleWindows = false` — Capacitors standard,
+  og `BridgeWebChromeClient` har ingen `onCreateWindow`. Da er `window.open`
+  ikke et nytt vindu, men en vanlig navigasjon i den samme WebView-en;
+- og en vanlig navigasjon går gjennom `shouldOverrideUrlLoading` →
+  `launchIntent()`, som sender adressen ut som `ACTION_VIEW` og svarer `true`.
+  Siden lastes altså aldri inne i WebView-en, og Huskis blir stående med
+  tilstanden sin.
+
+Web-laget kjenner fortsatt ikke native-runtimen her: kallet er det samme i
+nettleseren, der det åpner en fane.
+
 | Ledd | Rolle |
 |---|---|
 | `capacitor.config.json` uten `server.allowNavigation` | Det ene feltet som kan slå regelen av: hver oppføring der er en vert som lastes INNE i WebView-en. Den får ikke Huskis' data — Web Storage er origin-skilt — men den får Capacitor-broen, som injiseres i WebView-en og ikke i et bestemt origin ([`domains-and-urls.md`](domains-and-urls.md)). |
 | `MainActivity.java` | Overtar ikke `WebViewClient`/`shouldOverrideUrlLoading`, og navigerer ikke WebView-en direkte med `loadUrl` — rutingen er Capacitors, ikke vår. |
 | CSP `default-src 'none'` + `form-action 'self'` (`index.html`) | To av de tre unntakene fra rutingen: en fremmed side kommer ikke inn som `<iframe>`, og et skjema kan ikke sendes til et annet origin — heller ikke med POST, som ikke når `shouldOverrideUrlLoading` ([`sikkerhetsheadere.md`](sikkerhetsheadere.md)). Det tredje er `data:`/`blob:`, som blir i WebView-en — appen bruker dem bare til bilder, og en framtidig NAVIGASJON dit må kreve at nyttelasten er uavhengig etterprøvd ([`domains-and-urls.md`](domains-and-urls.md)). |
-| `tests/capacitor-android.test.js` (del 12) | De to måtene å miste regelen på: `allowNavigation`, og web-kildekode som begynner å produsere utgående lenker. Vokter også at den ene selvnavigasjonen fortsatt er guardens. |
+| `tests/capacitor-android.test.js` (del 12) | De to måtene å miste regelen på: `allowNavigation`, og web-kildekode som begynner å produsere utgående lenker. Vokter også at den ene selvnavigasjonen fortsatt er guardens, og at den ene tillatte `window.open` står nøyaktig ett sted — i `openExternalUrl`, bak `safeNoteUrl` — i kilden, i `dist/` og i den synkede builden. |
 
 **De to grensetilfellene, avgjort.** Auth-lenkene i e-post kommer fra utsiden og
 røres ikke av regelen: e-postklienten gir adressen til telefonens standardapp
 for den — browseren — og Huskis har ikke noe intent-filter som gjør krav på
 noen vert (neste seksjon). URL-er brukeren selv skriver i et
 listepunkt er ren tekst og forblir det: å gjøre dem klikkbare er en
-produktendring med egne spørsmål, ikke en native integrasjon. Regelen sier
-allerede hvor en slik lenke havner den dagen den lages.
+produktendring med egne spørsmål, ikke en native integrasjon. En lenke i et
+NOTAT er derimot lagt inn med vilje, og den følger regelen — den forlater
+WebView-en som enhver annen fremmed adresse.
 
-### Ikke prøvd på telefon — det finnes ingenting å trykke på
+### Å prøve på telefon: nå finnes det noe å trykke på
 
-Dette punktet har **ingen fysisk sekvens**, og det er ikke en utsettelse: appen
-har ingen lenke som kan tappes, så det finnes ingen handling en telefon kunne
-svart annerledes på enn den allerede gjør. Det som er verifisert er kildekoden
-— Capacitors ruting er LEST i `node_modules/@capacitor/android`, ikke observert
-på en enhet.
+Punktet hadde lenge **ingen fysisk sekvens** — appen hadde ingen lenke som
+kunne tappes, så det fantes ingen handling en telefon kunne svart annerledes
+på. Det som var verifisert, var kildekoden: Capacitors ruting er LEST i
+`node_modules/@capacitor/android`, ikke observert på en enhet.
 
-Det skillet er verdt å holde fast på, av samme grunn som systemfeltene i forrige
-punkt: koden er ikke fasit for hva enheten gjør. Den dagen appen får sin første
-utgående lenke skal det observeres på telefon at adressen faktisk forlater
-WebView-en og lander i browseren, og at Huskis står igjen med tilstanden sin når
-man kommer tilbake. Neste punkt gir den ikke: App Links handler om lenker INN i
-appen, og det punktet endte uten kode.
+Med lenker i notater finnes handlingen. Sekvensen, når en debug-APK er på en
+telefon:
+
+| # | Handling | Forventet | Dekker |
+|---|---|---|---|
+| 1 | Lag et notat, marker et ord, sett lenken til `https://huskis.no`, trykk «Åpne». | Telefonens browser åpner adressen. Huskis blir liggende i bakgrunnen. | `window.open` → `shouldOverrideUrlLoading` → `ACTION_VIEW` |
+| 2 | Gå tilbake til Huskis med systemets tilbakeknapp/oppgavebytteren. | Editoren står som før, med samme notat, samme markør og uten å ha lastet på nytt. | at WebView-en aldri navigerte |
+| 3 | Sett lenken til `mailto:noen@example.com` og åpne den. | E-postklienten åpnes med adressen utfylt. | at «ut av appen» ikke betyr «i browseren» |
+| 4 | Sett lenken til `javascript:alert(1)` og trykk «Åpne». | Ingenting åpnes; toasten sier at adressen ikke kan brukes. | `safeNoteUrl` som andre lag |
+
+Skillet mellom lest kode og observert enhet er fortsatt verdt å holde fast på,
+av samme grunn som systemfeltene i forrige punkt. Neste punkt gir ikke denne
+observasjonen: App Links handler om lenker INN i appen, og det punktet endte
+uten kode.
 
 ## Auth-/e-postlenker og App Links
 

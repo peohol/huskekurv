@@ -1756,12 +1756,39 @@ function jsOmråder(tekst, modus) {
   return [...tekst.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script/gi)]
     .map((m) => ({ del: m[1], fra: m.index + m[0].indexOf(m[1]) }));
 }
+/* DEN ENE VEIEN UT, og bare den. Appen har fått ÉN utgående handling: en lenke
+   i et notat kan åpnes (docs/domains-and-urls.md, «Lenker i notater»). Da må
+   adressen forlate appen ett sted, og `open()` kan ikke lenger være forbudt
+   uansett form.
+
+   Unntaket er derfor knyttet til STEDET, ikke til et mønster: én forekomst, i
+   app.js, skrevet nøyaktig slik, med den normaliserte variabelen som argument.
+   En annen fil, en annen skrivemåte, en forekomst til — alt feller testen som
+   før. `_blank` som ATTRIBUTT er fortsatt forbudt overalt: det er markup, og
+   den er det nettleseren følger selv.
+
+   Og unntaket er en PÅSTAND, ikke en unnskyldning. Sjekkene rett under krever
+   at det faktisk ble brukt, at kallet står inne i `openExternalUrl`, og at den
+   funksjonen normaliserer gjennom `safeNoteUrl` FØRST. En vakt som bare kan
+   frita, uten å kreve, ville stått grønn den dagen åpningen forsvant ut av
+   koden. */
+const ÅPNE_FIL = 'app.js';
+const ÅPNE_FORM = "window.open(url, '_blank', 'noopener')";
+/* Treffet begynner PÅ formen når mønsteret matchet linjestart, ellers på tegnet
+   foran den — `open()`-mønsteret spiser ett ledetegn. Begge posisjonene godtas,
+   så en omformatering ikke gjør fritaket til en gåte. */
+const erÅpningen = (tekst, i) =>
+  tekst.startsWith(ÅPNE_FORM, i) || tekst.startsWith(ÅPNE_FORM, i + 1);
 const utLenker = [];
+let åpneFritatt = 0;
 for (const f of WEB_KILDE) {
   const { tekst, linjeFor } = strippetMedLinjer(les(f), modusFor(f));
   for (const [navn, re] of UT_MØNSTRE) {
     re.lastIndex = 0;
-    for (const m of tekst.matchAll(re)) utLenker.push(f + ':' + linjeFor(m.index) + ' (' + navn + ')');
+    for (const m of tekst.matchAll(re)) {
+      if (navn === 'open()' && f === ÅPNE_FIL && erÅpningen(tekst, m.index)) { åpneFritatt++; continue; }
+      utLenker.push(f + ':' + linjeFor(m.index) + ' (' + navn + ')');
+    }
   }
   for (const { del, fra } of jsOmråder(tekst, modusFor(f))) {
     for (const [navn, re] of JS_MARKUP) {
@@ -1770,8 +1797,25 @@ for (const f of WEB_KILDE) {
     }
   }
 }
-check('web-kildekoden produserer ingen utgående lenke (ingen _blank, open(), DOM-satt destinasjon, meta refresh eller href/action med skjema)',
+check('web-kildekoden produserer ingen utgående lenke (ingen _blank, DOM-satt destinasjon, meta refresh eller href/action med skjema)',
   utLenker.length === 0, utLenker.join(', ') || 'ingen');
+check('nøyaktig ÉN `window.open` i hele web-kilden, og den står i ' + ÅPNE_FIL,
+  åpneFritatt === 1, åpneFritatt + ' forekomst(er) på den fritatte formen');
+
+/* Stedet, ikke bare tallet: kallet må ligge inne i `openExternalUrl`, og
+   adressen må ha vært gjennom `safeNoteUrl` før den brukes. Uten dette kunne
+   den ene tillatte forekomsten flyttes hvor som helst i app.js og åpne hva som
+   helst. Avstanden holdes kort med vilje — funksjonen er ti linjer. */
+const åpneKode = strippet(les(ÅPNE_FIL), 'js');
+const iFn = åpneKode.indexOf('function openExternalUrl(');
+/* Søket starter i funksjonen: `safeNoteUrl(raw)` er også dens EGEN signatur
+   lenger opp i fila, og et rått indexOf ville truffet definisjonen i stedet
+   for bruken. */
+const iSafe = iFn < 0 ? -1 : åpneKode.indexOf('safeNoteUrl(raw)', iFn);
+const iOpen = åpneKode.indexOf(ÅPNE_FORM);
+check('åpningen ligger i openExternalUrl, og adressen normaliseres av safeNoteUrl først',
+  iFn > -1 && iSafe > iFn && iOpen > iSafe && iOpen - iFn < 1200,
+  'openExternalUrl@' + iFn + ' safeNoteUrl@' + iSafe + ' open@' + iOpen);
 
 /* VAKT FOR VAKTEN. Alle sjekkene over hviler på at kommentarfjerneren faktisk
    etterlater koden. Hver feil den har hatt — `<!--` lest som markup i JS, `//`
@@ -1935,6 +1979,7 @@ const DIST = path.join(ROOT, 'dist');
 const distTreff = [];
 let distAntall = 0;
 let guardFritatt = false;
+let distÅpne = 0;
 if (byggUt.status === 0 && fs.existsSync(DIST)) {
   for (const q of distFiler(DIST, true)) {
     distAntall++;
@@ -1942,7 +1987,16 @@ if (byggUt.status === 0 && fs.existsSync(DIST)) {
     const { tekst, linjeFor } = strippetMedLinjer(fs.readFileSync(q, 'utf8'), modusFor(q));
     for (const [navn, re] of UT_MØNSTRE) {
       re.lastIndex = 0;
-      for (const m of tekst.matchAll(re)) distTreff.push(rel + ':' + linjeFor(m.index) + ' (' + navn + ')');
+      for (const m of tekst.matchAll(re)) {
+        /* Den ene tillatte åpningen skal OGSÅ overleve byggesteget, og bare
+           den: fritaket gjelder per treff, i dist/app.js, på nøyaktig samme
+           form som i kilden — og telles, så en injisert forekomst nummer to
+           felles her. */
+        if (navn === 'open()' && rel === path.join('dist', ÅPNE_FIL) && erÅpningen(tekst, m.index)) {
+          distÅpne++; continue;
+        }
+        distTreff.push(rel + ':' + linjeFor(m.index) + ' (' + navn + ')');
+      }
     }
     for (const { del, fra } of jsOmråder(tekst, modusFor(q))) {
       for (const [navn, re] of JS_MARKUP) {
@@ -2000,6 +2054,8 @@ check('SVG/XML som kan navigeres til har ingen utgående lenke',
 check('den BYGDE dist/ har ingen utgående lenke heller (byggesteget legger ingen inn)',
   byggUt.status === 0 && distAntall > 0 && distTreff.length === 0,
   distTreff.join(', ') || distAntall + ' filer skannet');
+check('den ene tillatte åpningen overlevde byggesteget — og fikk ingen selskap',
+  byggUt.status === 0 && distÅpne === 1, distÅpne + ' i dist/' + ÅPNE_FIL);
 /* Fritaket er en PÅSTAND, ikke bare en unnskyldning. Sjekken over feller det
    uventede, men ville stått grønn også hvis guarden FORSVANT ut av bygget —
    ingen treff er ingen treff. Kildesjekkene under ser fortsatt originalen, så
@@ -2022,6 +2078,7 @@ const SYNKET = path.join(ROOT, 'android', 'app', 'src', 'main', 'assets', 'publi
 const synketTreff = [];
 let synketAntall = 0;
 let synketGuard = false;
+let synketÅpne = 0;
 if (fs.existsSync(SYNKET)) {
   for (const q of distFiler(SYNKET, true)) {
     synketAntall++;
@@ -2029,7 +2086,11 @@ if (fs.existsSync(SYNKET)) {
     const { tekst, linjeFor } = strippetMedLinjer(fs.readFileSync(q, 'utf8'), modusFor(q));
     for (const [navn, re] of UT_MØNSTRE) {
       re.lastIndex = 0;
-      for (const m of tekst.matchAll(re)) synketTreff.push(rel + ':' + linjeFor(m.index) + ' (' + navn + ')');
+      for (const m of tekst.matchAll(re)) {
+        if (navn === 'open()' && rel === path.join(path.relative(ROOT, SYNKET), ÅPNE_FIL)
+          && erÅpningen(tekst, m.index)) { synketÅpne++; continue; }
+        synketTreff.push(rel + ':' + linjeFor(m.index) + ' (' + navn + ')');
+      }
     }
     for (const { del, fra } of jsOmråder(tekst, modusFor(q))) {
       for (const [navn, re] of JS_MARKUP) {
@@ -2062,6 +2123,8 @@ if (fs.existsSync(SYNKET)) {
   check('web-assetene cap sync KOPIERTE inn i APK-en har ingen utgående lenke',
     synketAntall > 0 && synketTreff.length === 0,
     synketTreff.join(', ') || synketAntall + ' filer skannet');
+  check('… og nøyaktig ÉN tillatt åpning i den kopierte builden',
+    synketÅpne === 1, synketÅpne + ' i den synkede ' + ÅPNE_FIL);
 
   /* Sterkere enn å skanne kopien med de samme mønstrene: å BEVISE at kopien er
      bygget. `build.js` kopierer hver fil uendret og rører bare to av dem —

@@ -48,7 +48,11 @@ kort — de SAMME kortene som listene, ikke en egen korttype:
 - samme kolonnepakking som listene (venstre kolonne fylles først), og samme
   posisjonsbaserte palettfarge;
 - hvert kort viser tittel med notatikonet foran, «sist endret» øverst til høyre,
-  og et tekstutdrag i «…» på en plate i kortkroppen. Ikonet står på tittelens
+  og et tekstutdrag i «…» på en plate i kortkroppen. «Sist endret» er KORT og
+  kommer fra appens egen datoordbok — klokkeslettet i dag, «i går» i går, ellers
+  datoen — fordi hodet deler bredden med tittelen, og en full dato med
+  klokkeslett presset tittelen ned i en smal søyle; hele tidspunktet ligger i
+  chipens hjelpetekst. Ikonet står på tittelens
   FØRSTE LINJE og i samme størrelse som type-ikonene ellers i appen: hodet her er
   topp-justert fordi tittelen kan gå over flere linjer, så ikonet får høyden til
   den første linjeboksen og sentreres i den (vakt: `notes-tab` punkt 8);
@@ -113,7 +117,8 @@ Første versjon skal støtte:
 - understrek;
 - hevet skrift;
 - senket skrift;
-- lenker;
+- lenker — med adresse, og med en vei UT: «Åpne» i lenke-panelet,
+  `Cmd`/`Ctrl`-klikk på lenken, og et vanlig klikk i et skrivebeskyttet notat;
 - spesialsymboler;
 - punktlister;
 - nummererte lister;
@@ -494,18 +499,65 @@ skrivinger, koblinger, gravsteiner, kontosletting) og
 
 **Mål:** Gjøre Notater til en moden del av den mobile Huskis-opplevelsen.
 
-Omfang vurderes mot faktisk produktbehov:
+Omfang:
 
 - Android/Capacitor-regresjoner;
 - tilgjengelighet og tastaturnavigasjon;
 - endelig mobilpolering;
 - å ÅPNE en lenke i et notat, sammen med mobilskallets ruting (PR 1 lot
-  adressen ligge i `data-url` uten en vei ut);
-- eventuell import/eksport av enkeltstående notater som filer.
+  adressen ligge i `data-url` uten en vei ut).
 
-Sanntids samarbeid i samme dokument inngår ikke automatisk i dette steget.
+Sanntids samarbeid i samme dokument inngår ikke. Import/eksport av notater som
+filer inngår heller ikke: det er en faglig uavhengig funksjon med egne
+produktspørsmål, og den viste seg ikke å være nødvendig for robusthetsarbeidet.
 
-Status: **ikke startet**.
+Status: **gjennomført**.
+
+Slik ble det:
+
+- **Lenken har fått en vei ut, og det er ÉN vei.** `openExternalUrl()` i
+  `app.js` er appens eneste utgående handling: `safeNoteUrl()` normaliserer på
+  nytt, og `window.open(url, '_blank', 'noopener')` gjør resten. Kallet er
+  BEVISST det samme i nettleseren og i mobilskallet — der står WebView-en uten
+  støtte for flere vinduer, så `window.open` blir en vanlig navigasjon som
+  Capacitors ruting sender ut som `ACTION_VIEW` og aldri laster inne i appen.
+  Vakten mot utgående lenker er justert, ikke fjernet: den tillater nøyaktig
+  denne ene forekomsten, på dette ene stedet, og KREVER at den finnes — i
+  kilden, i `dist/` og i den synkede builden.
+  Autoritativt: [`domains-and-urls.md`](domains-and-urls.md).
+- **Escape og systemets tilbakeknapp går i den SAMME stigen.** Editoren hadde
+  sin egen Escape-lytter i tillegg til `closeTopLayer`, og de to trakk i hver
+  sin retning: et Escape i lenkefeltet lukket panelet, hendelsen boblet videre,
+  og editorens lytter så to lukkede paneler og lukket hele bildet. Nå er
+  panelet ett trinn i den felles stigen — så tilbakeknappen, som tidligere
+  hoppet rett forbi panelene, gjør nøyaktig det samme som Escape.
+- **Fokus overlever at noe forsvinner.** Editoren lukkes tilbake til
+  NOTATKORTET man åpnet (ikke til breadcrumben), og å ARKIVERE flytter fokus
+  som å slette alltid har gjort — til naboen, ellers til ＋-knappen. Notatkortet
+  navngir seg selv i stedet for å la `role="button"` regne navnet ut av hele
+  innholdet, og raden «Frie notater» har mistet malens navnløse menyknapp.
+- **Berøringsflatene i editoren er 44 px**, som overalt ellers. Knappene tegnes
+  fortsatt små (38 og 40 px) — seksten verktøy og femti tegn skal få plass uten
+  å rulle — men luften mellom dem er nå nøyaktig det utvidelsen krever, så
+  nabo-flatene møtes uten å dekke hverandre.
+- **Panelene klemmes mot den SIKRE SONEN**, ikke mot skjermkanten, og både
+  høyden og BREDDEN begrenses av det brukbare feltet. Et trykk utenfor lukker
+  dem: på en kort skjerm legger spesialtegnpanelet seg over verktøylinjen, og
+  da er knappen man åpnet det med ikke en vei ut.
+- **«Sist endret» er blitt kort og norsk.** Chipen gikk utenom ordboken
+  (`toLocaleString`) og tok en tredjedel av korthodet, så tittelen ble presset
+  ned i en smal søyle. Nå leser den appens egen datovokabular: klokkeslettet i
+  dag, «i går» i går, «9. sep» ellers — med hele tidspunktet i hjelpeteksten.
+  Utdraget i en kasse-/arkivrad er kortet ned av samme grunn.
+
+Dekket av `tests/note-link-open.test.js` (ny: alle tre veiene ut,
+skjemavakten, lesemodus, at DOM-et fortsatt er uten `<a href>`),
+og av nye seksjoner i `tests/notes-tab.test.js` (berøringsflater,
+fokusgjenoppretting, kortets navn, datoformatet, trykk utenfor et panel),
+`tests/notes-lifecycle-links.test.js` (fokus ved arkivering, «Frie notater»
+uten meny, radutdraget), `tests/system-back.test.js` (panelet som eget trinn i
+stigen) og `tests/safe-area.test.js` (editoren og panelene mot alle fire
+kantene, og festet til det synlige feltet).
 
 ## Prinsipper for gjennomføring
 
@@ -536,17 +588,21 @@ databasekontrakten; døp dem ikke om.
 | PR 1 — Fundament + fungerende Notater-fane | **Gjennomført** |
 | PR 2 — Livssyklus + integrasjon | **Gjennomført** |
 | PR 3A — Deling og rettigheter | **Gjennomført** |
-| PR 3B — Robusthet og polering | Ikke startet |
+| PR 3B — Robusthet og polering | **Gjennomført** |
 
-**Neste steg:** PR 3B — robusthet og polering. Notatene er nå en hel del av
-appen, også for flere brukere: de kan deles på alle tre nivåene, med de samme
-rollene, den samme delemodalen og den samme serverhåndhevede modellen som
-listene.
+**Leveranseplanen er gjennomført.** Notatene er en hel del av appen: de kan
+deles på alle tre nivåene med den samme serverhåndhevede modellen som listene,
+de har arkiv og søppelkasse, de finnes i det felles søket, de kan kobles til
+listesiden, og de oppfører seg som resten av appen på telefon — tastatur,
+fokus, berøringsflater, den sikre sonen og systemets tilbakeknapp.
 
-**Datamodellen forbereder fortsatt ting som IKKE er implementert.** Det er ikke
-det samme som ferdig:
+**Det som gjenstår er egne leveranser, ikke restarbeid:**
 
+- **Import/eksport av notater som filer.** En faglig uavhengig funksjon med
+  egne produktspørsmål (formater, navngiving, hva som skjer med koblinger og
+  deling). Datamodellen er forberedt — dokumentet er strukturert og kan
+  serialiseres — men ingenting er implementert.
+- **Sanntids samskriving i samme notat.** Konfliktmodellen er per DOKUMENT, som
+  planen sier; en CRDT-editor er et eget prosjekt.
 - `object_links` kan bære flere typer per side enn de seks som finnes i dag —
   men bare de seks er koblingsbare nå.
-- Lenker i et notat lagres med adressen i `data-url` — men UI-et åpner dem
-  fortsatt ikke.

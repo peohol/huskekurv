@@ -23,6 +23,11 @@
        uten dette ville appen kunne avsluttes midt i en navngiving.
     7. Demonstrasjonen: tilbakeknappen rører den ikke (samme regel som Escape i
        `demoGate`) — den svarer false, så trykket blir et vanlig «forlat appen».
+    8. Notat-editoren og panelene i den: et åpent lenke-/spesialtegnpanel er
+       ETT TRINN over editoren, ikke ved siden av den. Regresjon: panelene sto
+       kun i editorens egen Escape-lytter, så tilbakeknappen hoppet rett forbi
+       dem og lukket hele bildet med panelet åpent (docs/notater-plan.md,
+       docs/tilgjengelighet.md).
 
   Kjør:
     python3 -m http.server 8000                     # fra repo-roten, i egen terminal
@@ -87,10 +92,13 @@ const lag = (p) => p.evaluate(() => {
   return {
     nav: vis('nav-modal'), konto: vis('account-modal'), soppel: vis('trash-modal'),
     del: vis('share-modal'), meny: vis('obj-menu'),
+    editor: vis('note-editor'), lenkepanel: vis('note-link-panel'),
+    symbolpanel: vis('note-symbol-panel'),
     redigerer: !!document.querySelector('.edit-input'),
   };
 });
-const ingenting = (s) => !s.nav && !s.konto && !s.soppel && !s.del && !s.meny && !s.redigerer;
+const ingenting = (s) => !s.nav && !s.konto && !s.soppel && !s.del && !s.meny
+  && !s.editor && !s.redigerer;
 
 async function run(label, viewport, touchMode) {
   const b = await chromium.launch();
@@ -258,6 +266,41 @@ async function run(label, viewport, touchMode) {
     t8 === false && demoEtter === true, 'aktiv etter: ' + demoEtter);
   await p.evaluate(() => window.__huskis.tour.end());
   await p.waitForTimeout(200);
+
+  /* ---------- 8) Notat-editoren: panelet er ett trinn over bildet ---------- */
+  const nyttNotat = await p.evaluate(() => {
+    const H = window.__huskis;
+    H.setMainTab('notes');
+    const pr = H.addNoteProject();
+    H.setActiveProject(pr.id);
+    H.setActiveNoteFolder(null);
+    const n = H.addNote();          // åpner editoren med det samme
+    return n.id;
+  });
+  await p.waitForFunction(() => !document.getElementById('note-editor').hidden,
+    null, { timeout: 5000, polling: 50 });
+  await p.waitForTimeout(200);
+
+  for (const [navn, cmd, felt] of [['lenke', 'link', 'lenkepanel'], ['spesialtegn', 'symbol', 'symbolpanel']]) {
+    await p.evaluate((c) => window.__huskis.runNoteCommand(c), cmd);
+    await p.waitForTimeout(250);
+    const før = await lag(p);
+    log(label + ': ' + navn + '-panelet står åpent i editoren før trykket',
+      før.editor === true && før[felt] === true, JSON.stringify(før));
+    const tA = await back(p); await p.waitForTimeout(250);
+    const etterA = await lag(p);
+    log(label + ': første trykk lukker BARE ' + navn + '-panelet — editoren står',
+      tA === true && etterA[felt] === false && etterA.editor === true, JSON.stringify(etterA));
+  }
+  const tB = await back(p); await p.waitForTimeout(400);
+  const etterB = await lag(p);
+  log(label + ': neste trykk lukker editoren', tB === true && etterB.editor === false,
+    JSON.stringify(etterB));
+  const tC = await back(p); await p.waitForTimeout(250);
+  log(label + ': og deretter faller trykket gjennom til OS igjen', tC === false, String(tC));
+  await p.evaluate((id) => window.__huskis.deleteNoteObject('note', id), nyttNotat);
+  await p.evaluate(() => window.__huskis.setMainTab('lists'));
+  await p.waitForTimeout(250);
 
   log(label + ': ingen JS-feil', errs.length === 0, errs.join(' | ') || 'ingen');
   await b.close();
