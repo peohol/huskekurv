@@ -30,6 +30,7 @@
     NODE_PATH=$(npm root -g) node tests/notes-sharing.test.js
 */
 const { chromium } = require(require('path').join(process.env.NODE_PATH || require('child_process').execSync('npm root -g').toString().trim(), 'playwright'));
+const G = require('./dnd-gestures.js');
 const BASE = process.env.HUSKIS_URL || 'http://localhost:8000';
 
 const results = [];
@@ -426,21 +427,16 @@ async function run(label, viewport, mobile) {
   });
   log(label + ' 5: C kan redigere notatet, men ikke slette det for alle',
     cRett.skriv === true && cRett.slett === false, JSON.stringify(cRett));
-  const cKasser = await p.evaluate(async () => {
-    const el = document.querySelector('#notes-board .note-card');
-    if (!el) return { feil: 'fant ikke notatkortet' };
-    const b = el.getBoundingClientRect();
-    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: b.x + b.width / 2,
-      clientY: b.y + b.height / 2, pointerId: 1, isPrimary: true, button: 0 }));
-    await new Promise((r) => setTimeout(r, 320));
+  const kortBoks = await p.locator('#notes-board .note-card').first().boundingBox();
+  await G.lift(p, { x: kortBoks.x + kortBoks.width / 2, y: kortBoks.y + kortBoks.height / 2 }, mobile);
+  const cKasser = await p.evaluate(() => {
     const synlig = (id) => {
       const w = document.getElementById(id);
       return !!w && !w.hidden;
     };
-    const ut = { arkiv: synlig('note-archive'), kasse: synlig('note-trash') };
-    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 }));
-    return ut;
+    return { arkiv: synlig('note-archive'), kasse: synlig('note-trash') };
   });
+  await G.drop(p, undefined, mobile);
   log(label + ' 5: … så draget folder ut ARKIVET, men ikke søppelkassen',
     cKasser.arkiv === true && cKasser.kasse === false, JSON.stringify(cKasser));
   await p.waitForTimeout(300);
