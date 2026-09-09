@@ -55,8 +55,21 @@ $PSQL --no-psqlrc --echo-errors -f tests/test-list-share-migration.sql
 # Også en oppgradert gammel database må tilfredsstille deploy-kontrakten.
 $PSQL --no-psqlrc --echo-errors -f smoke-test.sql
 
+# ---- 3. Reparasjonsløp: en HALVMIGRERT database, slik produksjon sto ----
+# Fila kjøres uten transaksjon rundt, så en feil midt i den etterlater alt over
+# feilpunktet committet. Migreringen må derfor kunne KJØRES FERDIG fra en slik
+# mellomtilstand — ikke bare fra en gammel eller en ferdig migrert database.
+fresh_schema
+$PSQL -f tests/legacy-share-fixture.sql
+$PSQL -f users-and-sharing.sql
+$PSQL -f tests/partial-migration-fixture.sql   # skru tilbake til mellomtilstanden
+$PSQL -f users-and-sharing.sql                 # reparasjonen
+$PSQL -f users-and-sharing.sql                 # og den må fortsatt tåle re-kjøring
+$PSQL --no-psqlrc --echo-errors -f tests/test-list-share-migration.sql
+$PSQL --no-psqlrc --echo-errors -f smoke-test.sql
+
 echo "✅ Alle SQL-tester grønne (roller, capabilities, mappeflytting, e-postvarsel,"
 echo "   gravsteiner, idéer, notater, arkiv, koblinger og notatdeling, kontosletting, varsler,"
 echo "   web push (òg samtidighet), økter,"
 echo "   native varselenheter,"
-echo "   migrering av gamle listedelinger og deploy-smoke-testen — begge løp)."
+echo "   migrering av gamle listedelinger og deploy-smoke-testen — alle tre løp)."

@@ -483,7 +483,9 @@ Slik ble det:
   settes aldri inn igjen. Editoren lukkes hvis notatet var åpent.
 - **Migrering:** hver bokhylle uten EN ENESTE rolle får oppretteren som eier.
   Kriteriet gjør backfillen naturlig idempotent og hindrer at en bevisst fjernet
-  rolle kommer tilbake.
+  rolle kommer tilbake. Den pensjonerte, anonyme mål-sjekken på `memberships`
+  og `share_invites` (den som bare teller område, mappe og liste) må være
+  droppet FØR backfillen — se `docs/rettigheter-og-deling.md` del 14.
 
 Dekket av `supabase/tests/test-note-sharing.sql` (fire brukere: roller og arv på
 tre nivåer, ren leser, sletterett, flytting, tilbakekalling, uautoriserte

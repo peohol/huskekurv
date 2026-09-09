@@ -43,9 +43,12 @@ kjøre parallelt. Hele rekkefølgen, inkludert feil/retry/rollback:
 
 ## Tester
 
-`tests/run-tests.sh` kjører hele SQL-suiten mot en LOKAL PostgreSQL i to løp:
-nytt skjema, og det gamle skjemaet med data migrert. Kommandoene for å sette opp
-en midlertidig server står øverst i skriptet; deretter:
+`tests/run-tests.sh` kjører hele SQL-suiten mot en LOKAL PostgreSQL i tre løp:
+nytt skjema, det gamle skjemaet med data migrert, og en HALVMIGRERT database
+(`tests/partial-migration-fixture.sql`) som migreringen må kunne kjøres ferdig
+fra — fila kjøres uten transaksjon rundt, så en feil midt i den etterlater alt
+over feilpunktet committet. Kommandoene for å sette opp en midlertidig server
+står øverst i skriptet; deretter:
 
 ```bash
 PGHOST=/tmp/hkpg PGPORT=5433 PGUSER=postgres PGDATABASE=hk_test \
@@ -57,7 +60,7 @@ PGHOST=/tmp/hkpg PGPORT=5433 PGUSER=postgres PGDATABASE=hk_test \
 uten Supabase. En ny serverside-regel skal ha en ny sjekk i den testfilen som
 dekker området (roller/deling, mappeflytting, gravsteiner, kontosletting,
 e-postvarsel, varsler, web push, native varselenheter, innloggede økter,
-migrering av gamle listedelinger).
+migrering av gamle listedelinger, reparasjon av en halvmigrert database).
 
 Én ting kan ikke bevises fra én databaseøkt: at to samtidige operasjoner på den
 samme raden ikke kan passere hverandre. `tests/test-push-race.sh` kjører derfor
@@ -73,7 +76,7 @@ som EIEREN — altså rollen som kjørte migreringen. At den rollen faktisk kan 
 er ikke noe koden kan se; `smoke-test.sql` seksjon 8b sjekker det eksplisitt, og
 stopper deployen hvis rettigheten mangler.
 
-Begge løp avsluttes med `smoke-test.sql` — deploy-porten fra
+Alle løp avsluttes med `smoke-test.sql` — deploy-porten fra
 `docs/release-og-deploy.md`. Den skal være grønn mot et ferdig migrert skjema;
 er den ikke det lokalt, blokkerer den produksjonsdeployen uten at noe faktisk
 er galt.
