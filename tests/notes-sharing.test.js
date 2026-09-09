@@ -19,6 +19,9 @@
        tilbake — BÅDE innholdet og posisjonen/forelderen
     8. En EKTE flytting ut av «Delt med meg» blir godtatt av serveren og
        skriver den nye plasseringen, ikke den gamle kanoniske
+    9. Arkivering og sletting er ULIKE rettigheter i dra-og-slipp: et direkte
+       medlem som kan redigere, men ikke slette for alle, får arkivmålet og
+       ikke søppelkassen
 
   Kjøres på BÅDE desktop- og mobil-viewport.
 
@@ -410,6 +413,37 @@ async function run(label, viewport, mobile) {
     cShelf.seksjon && !cShelf.meny && !cShelf.addKnapp, JSON.stringify(cShelf));
   await p.evaluate(() => window.__huskis.closeNotesNav());
   await p.waitForTimeout(200);
+
+  /* ARKIVERING ER IKKE SLETTING. C er et rent DIREKTE medlem av notatet: hen
+     kan lese og redigere det, men ikke ta det fra alle andre (`can_delete_object`
+     spør om en ARVET rolle ovenfra, som C ikke har). Da skal dra-og-slipp gi
+     nøyaktig ett av de to slippmålene — arkivet, ikke søppelkassen. Kassene
+     spurte tidligere den samme capabilityen, og en redaktør uten sletterett
+     mistet dermed arkivet òg. */
+  const cRett = await p.evaluate(() => {
+    const n = (window.__huskis.state.notes || [])[0] || {};
+    return { skriv: n._caps && n._caps.editContent, slett: n._caps && n._caps.delete };
+  });
+  log(label + ' 5: C kan redigere notatet, men ikke slette det for alle',
+    cRett.skriv === true && cRett.slett === false, JSON.stringify(cRett));
+  const cKasser = await p.evaluate(async () => {
+    const el = document.querySelector('#notes-board .note-card');
+    if (!el) return { feil: 'fant ikke notatkortet' };
+    const b = el.getBoundingClientRect();
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, clientX: b.x + b.width / 2,
+      clientY: b.y + b.height / 2, pointerId: 1, isPrimary: true, button: 0 }));
+    await new Promise((r) => setTimeout(r, 320));
+    const synlig = (id) => {
+      const w = document.getElementById(id);
+      return !!w && !w.hidden;
+    };
+    const ut = { arkiv: synlig('note-archive'), kasse: synlig('note-trash') };
+    document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1 }));
+    return ut;
+  });
+  log(label + ' 5: … så draget folder ut ARKIVET, men ikke søppelkassen',
+    cKasser.arkiv === true && cKasser.kasse === false, JSON.stringify(cKasser));
+  await p.waitForTimeout(300);
 
   /* ---------- 6) Tilbakekalling: notatet forsvinner, editoren lukkes ---------- */
   await p.evaluate((id) => { window.__huskis.openNoteEditor(id); }, ids.N1);

@@ -12,8 +12,9 @@
      skala 1.02 for en liste og et område, 1.03 for et listepunkt, en mappe og en
      kategori, og kategorien males i tillegg KOMPAKT som en rad (hylla er foldet
      sammen ved løft). Skalaen ligger i CSS på `[data-dnd-dragging]`, så det som
-     måles er det som faktisk STÅR MALT under draget — og at rotasjonen settes
-     som en EGEN `rotate`-egenskap: dnd-kit skriver `transform` selv, med
+     måles er det som faktisk STÅR MALT under draget — og at INGENTING roteres:
+     vinkelen er fjernet. Skalaen ligger fortsatt i en EGEN egenskap, for
+     dnd-kit skriver `transform` selv, med
      `!important`, så en rotasjon lagt der ville forsvunnet uten at noe annet
      feilet. Nav-modalens to nivåer måles motsatt: der er draget låst til én
      akse, og da males det UTEN rotasjon (`dnd-vertical-axis`).
@@ -267,8 +268,10 @@ const log = (n, ok, x = '') => { results.push(ok); console.log((ok ? 'PASS' : 'F
     await G.touchMove(p, ch.x - 40, ch.y + 30); await p.waitForTimeout(120);
     const cPaint = await paintOf(p, '#board [data-dnd-dragging]');
     log('6 liste: løftes med skala 1.02', !!cPaint && cPaint.scale === '1.02', JSON.stringify(cPaint));
-    log('6 liste: rotasjonen er en EGEN `rotate`-egenskap, ikke en `transform`',
-      !!cPaint && /^-?[\d.]+deg$/.test(cPaint.rotate), JSON.stringify(cPaint));
+    // INGENTING ROTERES: `rotate` skal aldri stå på det som males. Vinkelen ble
+    // fjernet fordi et rotert lag gjør teksten i det som dras uklar.
+    log('6 liste: males UTEN rotasjon',
+      !!cPaint && cPaint.rotate === '', JSON.stringify(cPaint));
     log('6 liste: løftes i top layer (dnd-kits `position: fixed`)',
       !!cPaint && cPaint.position === 'fixed', JSON.stringify(cPaint));
     log('6 liste: flaten er halvgjennomsiktig med bakgrunnsslør, teksten i full styrke',

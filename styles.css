@@ -2099,6 +2099,18 @@ body.is-dragging * { cursor: grabbing !important; }
 /* Litt luft rundt kortene under draging så de ikke oppleves «låst» */
 .card, .item { -webkit-user-select: none; user-select: none; }
 .item-text, .card-title, .edit-input { -webkit-user-select: text; user-select: text; }
+/* … MEN ALDRI MENS ET DRAG PÅGÅR. `body.is-dragging` slår av markering på
+   body, og arv alene ville holdt — men de tre reglene over setter
+   `user-select: text` PÅ etterkommere, og en eksplisitt verdi på et barn slår
+   arven. Uten denne overstyringen markerer selve dra-gesten teksten den drar
+   over (pekeren beveger seg med knappen nede), og et drag som endte over en
+   tittel etterlot den blå. Regelen gjelder BARE under et aktivt drag, så
+   vanlig markering ellers er urørt. `dnd-selection.test.js` er nettet. */
+body.is-dragging,
+body.is-dragging * {
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
 
 /* ---------------- Slette-animasjon («pakk sammen og fly i søpla») ----------------
    En klone av det slettede kortet/elementet krymper til en sirkel og svever
@@ -2371,9 +2383,8 @@ body.is-dragging * { cursor: grabbing !important; }
 
    Geometrien er dnd-kits og skrives med `!important` (`position`, `top`, `left`,
    `width`, `height`, `transform`, `translate`). Vår egen løfte-effekt må derfor
-   uttrykkes i egenskaper dnd-kit IKKE skriver: `scale` og `rotate` som EGNE
-   egenskaper, aldri via `transform`. Rotasjonen er dynamisk og settes fra JS
-   (dndPaintRotation); skalaen står her.
+   uttrykkes i egenskaper dnd-kit IKKE skriver: `scale` som en EGEN egenskap,
+   aldri via `transform`. Den står her.
 
    ALT SOM DRAS ER HALVGJENNOMSIKTIG. Det løftede objektet ligger oppå det man
    sikter mot, og det man sikter mot er hele svaret på hvor slippet lander:
@@ -2581,12 +2592,11 @@ body.is-dragging * { cursor: grabbing !important; }
 .dnd-surface .card[data-dnd-placeholder] { border-radius: var(--radius); }
 .dnd-surface .item[data-dnd-placeholder],
 .dnd-surface .category[data-dnd-placeholder] { border-radius: 10px; }
-/* Klonen er tatt av det løftede objektet ETTER at rotasjonen ble satt fra JS
-   (dndPaintRotation), så den bærer den som en INLINE-stil — og en inline-stil
-   slår enhver klasseregel. Hullet i lista skal stå rett, så her må det
-   `!important` til; uten det er regelen en vakt som ikke vokter noe (en bred,
-   lav rad fikk et hull dobbelt så høyt som seg selv). */
-.dnd-surface [data-dnd-placeholder] { rotate: none !important; scale: none !important; }
+/* Klonen er tatt av det løftede objektet ETTER at skalaen er satt, så den
+   bærer den som en INLINE-stil — og en inline-stil slår enhver klasseregel.
+   Hullet i lista skal stå i sin egen størrelse, så her må det `!important`
+   til; uten det er regelen en vakt som ikke vokter noe. */
+.dnd-surface [data-dnd-placeholder] { scale: none !important; }
 /* … og av samme grunn skiftet som sentrerte den KRYMPEDE boksen på grepet
    (`dndCompactLift`): det ligger allerede i målingen dnd-kit tok, så et hull
    som bar det en gang til ville stått forskjøvet i lista. */
@@ -3790,6 +3800,7 @@ body.no-auth .corner-controls { display: none; }
 }
 .menu-setting-label .icon { width: 22px; height: 22px; flex: 0 0 auto; color: var(--ink-soft); }
 .toggle-switch {
+  touch-action: pan-y;       /* sidelengs er dragets, loddrett er scrollens */
   flex: 0 0 auto;
   width: 50px; height: 28px;
   border: none; border-radius: 999px;
@@ -3807,7 +3818,13 @@ body.no-auth .corner-controls { display: none; }
   transition: transform var(--switch-motion);
 }
 .toggle-switch[aria-checked="true"] { background: var(--accent); }
-.toggle-switch[aria-checked="true"] .toggle-knob { transform: translateX(22px); }
+/* Knottens plassering er en BRØK av vandringen, ikke to faste stillinger: da
+   kan den samme egenskapen bære både hvilestillingen (0 eller 1, fra
+   `aria-checked`) og et pågående drag (`--knob-drag`, hva som helst imellom).
+   Vandringen er sporets bredde minus knotten og polstringen: 50 − 22 − 2×3. */
+.toggle-switch .toggle-knob { transform: translateX(calc(var(--knob-drag, var(--knob-p, 0)) * 22px)); }
+.toggle-switch[aria-checked="true"] { --knob-p: 1; }
+.toggle-switch.is-tog-drag .toggle-knob { transition: none; }
 .toggle-switch:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 2px; }
 
 /* ---------------- Språkvelger ----------------
@@ -5295,6 +5312,7 @@ body.no-auth .corner-controls { display: none; }
    (se kontrast-kontrakten øverst), og tokenene pinnes på samme måte her, så
    den mørke drakten ikke kan lyse dem opp på en flate som ikke skifter. */
 .seg {
+  touch-action: pan-y;       /* sidelengs er dragets, loddrett er scrollens */
   position: relative;
   /* GRID, ikke flex: `grid-auto-columns: 1fr` gir segmentene like brede spor OG
      lar beholderen bli så bred at det bredeste segmentet får plass i sitt eget
@@ -5326,9 +5344,16 @@ body.no-auth .corner-controls { display: none; }
   border-radius: 999px;
   background: var(--grad-green);
   box-shadow: var(--shadow-sm);
-  transform: translateX(calc(var(--seg-i, 0) * 100%));
+  /* `--seg-drag` er dragets BRØKDELS-indeks og overstyrer hvilestillingen
+     mens fingeren er nede (`attachToggleDrag`). Hvilestillingen (`--seg-i`,
+     et helt tall fra `paintSeg`) står urørt under, så et slipp bare fjerner
+     overstyringen og lar den vanlige overgangen gli på plass. */
+  transform: translateX(calc(var(--seg-drag, var(--seg-i, 0)) * 100%));
   transition: transform var(--switch-motion);
 }
+/* Under selve draget følger flaten fingeren direkte — en overgang ville lagt
+   seg som et etterslep mellom fingeren og flaten. */
+.seg.is-tog-drag::before { transition: none; }
 .seg-btn {
   position: relative;        /* over den glidende flaten */
   appearance: none;
@@ -5421,7 +5446,12 @@ body.no-auth .corner-controls { display: none; }
 }
 /* IKKE flex: `.card-body` er det, og en flex-item BLOKKIFISERES — da faller
    `-webkit-box` (og dermed linjeklippingen på utdraget) bort. */
-.note-card-body { display: block; padding: 0 10px 10px; }
+/* SYMMETRISK LUFT: like mye over utdraget som under og på sidene. Uten
+   toppolstringen lå utdragsplaten inntil hodet over, og kortet leste som to
+   flater som var klistret sammen. Kroppen skjules helt når den er tom
+   (`hidden` fra renderNoteCard) — en padding uten innhold ble ellers stående
+   som en lav, tom stripe under hodet på et notat uten tekst. */
+.note-card-body { display: block; padding: 10px; }
 /* Utdraget står på listepunktets plate — den flaten brødtekst i `--ink` er
    målt mot i begge drakter, oppå kortets egen palettfarge. */
 .note-card-excerpt {

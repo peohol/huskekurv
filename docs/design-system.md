@@ -367,6 +367,17 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   ikke flex: med `flex: 1 1 0` blir beholderen bare like bred som innholdet, og
   `min-width: auto` klemmer det lengste segmentet ut av takt.)
 
+  **Bryteren kan DRAS, ikke bare klikkes.** Ta tak i den glidende flaten, før
+  den langs aksen og slipp: ved slipp snapper den til nærmeste segment. Under
+  draget følger flaten fingeren direkte (`--seg-drag`, en brøkdels indeks, som
+  overstyrer hvilestillingen `--seg-i` og slår av overgangen). Gesten er DELT
+  med av/på-bryterne — begge er én akse med n gyldige stopp — og ligger derfor
+  ett sted, som en delegert pekerlytter (`attachToggleDrag`-blokken i app.js).
+  Et drag utfører valget ved å KLIKKE segmentet man landet på, altså gjennom de
+  samme lytterne som et ekte klikk, og det ekte klikket som følger svelges — så
+  et drag aldri teller to ganger. En gest under terskelen på 3 px er et helt
+  vanlig klikk, og tastaturnavigasjonen er urørt.
+
   Den aktive flaten er den grønne ＋-knappens (`--grad-green`). Den bærer derfor
   SVARTE ikoner og MØRKT blekk, som `.btn-solid` pinner dem — samme
   kontrakt, samme tokens, i begge drakter. Trenger noe annet et to- eller
@@ -471,6 +482,14 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   hvert nivå, og `docs/tilgjengelighet.md` for Alt-snarveiene som ligger på de
   samme elementene. Listevisningens `.card-head`/`.cat-head` har nå det samme
   oppsettet, så kollaps og flytting er like tilgjengelige der.
+- `.toggle-switch` + `.toggle-knob`: av/på-bryteren (varseltypene, varselkanalen,
+  e-postsamtykket i konto-modalen). Den kan DRAS på nøyaktig samme vis som den
+  segmenterte: grip knotten, før den, slipp — den snapper til nærmeste ende.
+  Knottens plassering er en BRØK av vandringen (`--knob-p` i hvile, `--knob-drag`
+  under et drag), så den samme egenskapen bærer begge. `role="switch"` +
+  `aria-checked` settes bare av de vanlige veiene, ved slipp: midt i en gest har
+  bryteren ingen ny tilstand å melde. `touch-action: pan-y` på begge bryterne, så
+  sidelengs er dragets og loddrett fortsatt scrollens.
 - Checkboxes i modaler: rendres alltid som en pille-formet toggle-switch, ren
   CSS på selve `<input type="checkbox">` (`appearance: none` + `::before`-
   håndtak, ingen ekstra DOM/JS). Av = grå spor, på = `--grad-green` (samme

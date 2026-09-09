@@ -100,12 +100,14 @@ Detaljer som er lette å bryte:
 - **Slippet SLETTER, det flytter ikke.** Draget rulles tilbake som et avbrutt
   drag (ingen ny `pos`, ingen lagring, ingen flytte-velger) før slettingen
   kjøres, så objektet ikke også blir omrokkert eller overført.
-- **Uten slette-rett vises ingen kasse.** `draggedCanBeTrashed()` bruker de
-  samme capabilities som objektmenyens «Slett»-rad og feiler LUKKET — man kan
-  ikke sikte på noe serveren ville avvist. Det gjelder også notatsiden, som nå
-  har roller og låser som resten ([`rettigheter-og-deling.md`](rettigheter-og-deling.md)
-  del 14): en ren leser får ingen kasse å sikte på, og den virtuelle «Delt med
-  meg»-bokhyllen kan aldri slettes.
+- **Uten slette-rett vises ingen kasse, og uten redigeringsrett intet arkiv.**
+  `draggedCanBeTrashed()` og `draggedCanBeArchived()` bruker de samme
+  capabilities som objektmenyens «Slett»- og «Arkiver»-rader og feiler LUKKET —
+  man kan ikke sikte på noe serveren ville avvist. Det gjelder også notatsiden,
+  som nå har roller og låser som resten
+  ([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14): en ren leser
+  får ingen av dem å sikte på, en redaktør uten sletterett får bare arkivet, og
+  den virtuelle «Delt med meg»-bokhyllen kan verken arkiveres eller slettes.
 - **Kassen må ligge under board-ets ROT for å bli registrert som sone.** Både
   liste-kassen og notat-kassene står i den FASTE FOTEN, utenfor selve board-et,
   så de to board-ene har `document.body` som rot (selektorene er fortsatt
@@ -150,6 +152,13 @@ arkiverer akkurat som et slipp i kassen sletter. Det er det samme maskineriet
 opprydding på alle veier ut av draget); bare fargen og betydningen skiller dem.
 Uten dette var arkivet den ene bortleggingsmåten man ikke kunne dra til.
 Se [`drag-and-drop.md`](drag-and-drop.md).
+
+**Men RETTEN er ikke den samme.** Arkivering er reversibelt innhold og krever
+redigeringsrett (`draggedCanBeArchived`); sletting er destruktivt og krever
+sletterett (`draggedCanBeTrashed`). Nå som notatene deles, spriker de to: et
+medlem som lovlig kan redigere et delt notat, men ikke slette det for alle, får
+arkivmålet foldet ut og søppelkassen ikke. Det er den samme forskjellen
+objektmenyens to rader gjør, og de to spørsmålene stilles hver for seg.
 
 **Arkivet låner søppelkassens modal.** Det er den samme `showTrashModal`, den
 samme raden og den samme foten — bare et annet ikon i hodet, en «Slett»-knapp

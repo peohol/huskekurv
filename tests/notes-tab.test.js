@@ -22,7 +22,8 @@
     6. Autosave: ingen Lagre-knapp, «Lagrer …» → «Lagret»
     7. Tilbakeknappen fører tilbake til riktig fane, bokhylle/notatbok og
        scrollposisjon
-    8. Notatkortet: tittel, utdrag og «sist endret»
+    8. Notatkortet: tittel, utdrag og «sist endret» — symmetrisk luft rundt
+       utdraget, og ingen tom stripe når notatet er uten tekst
     9. Reload: innhold og struktur er intakt, og fanen er den samme
    10. Synk: radene ligger i mock-databasen med riktig forelder, og en endring
        fra «en annen enhet» flettes inn
@@ -519,6 +520,47 @@ async function run(navn, viewport, touch) {
   log(navn + ': kortet viser tittel, utdrag og sist endret',
     kort.tittel === 'Utvalg' && kort.utdrag.indexOf('Vanlig tekst') > -1 && kort.meta.length > 3,
     JSON.stringify(kort));
+
+  /* KORTKROPPEN: symmetrisk luft når det FINNES et utdrag, og ingen flate i det
+     hele tatt når det ikke gjør det. Før lå utdragsplaten inntil hodet over
+     (`padding: 0 10px 10px`), og et notat uten tekst etterlot en lav, tom
+     stripe fordi bare selve utdraget ble skjult mens kroppen rundt beholdt
+     polstringen sin. */
+  const luft = await p.evaluate(() => {
+    const b2 = document.querySelector('#notes-board .note-card .note-card-body');
+    const cs = getComputedStyle(b2);
+    return { topp: cs.paddingTop, bunn: cs.paddingBottom, venstre: cs.paddingLeft, høyre: cs.paddingRight,
+      skjult: b2.hidden };
+  });
+  log(navn + ': utdraget har like mye luft over som under og på sidene',
+    luft.topp === luft.bunn && luft.topp === luft.venstre && luft.topp === luft.høyre
+    && parseFloat(luft.topp) > 0 && luft.skjult === false, JSON.stringify(luft));
+
+  // … og et notat UTEN tekst stopper etter hodet: ingen tom stripe under.
+  const tomt = await p.evaluate(() => {
+    const H = window.__huskis;
+    const n = H.state.notes.find((x) => x.title === 'Utvalg');
+    n.doc = H.emptyNoteDoc();
+    H.renderNotes();
+    const el = document.querySelector('#notes-board .note-card');
+    const b2 = el.querySelector('.note-card-body');
+    return {
+      skjult: b2.hidden,
+      høyde: Math.round(b2.getBoundingClientRect().height),
+      // Kortets underkant skal ligge like under hodet — ingen flate imellom.
+      gap: Math.round(el.getBoundingClientRect().bottom
+        - el.querySelector('.note-card-head').getBoundingClientRect().bottom),
+    };
+  });
+  log(navn + ': et notat uten tekst etterlater ingen tom stripe',
+    tomt.skjult === true && tomt.høyde === 0 && tomt.gap <= 12, JSON.stringify(tomt));
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    const n = H.state.notes.find((x) => x.title === 'Utvalg');
+    n.doc = { v: 1, blocks: [{ t: 'p', c: [{ s: 'Vanlig tekst' }] }] };
+    H.renderNotes();
+  });
+  await p.waitForTimeout(200);
 
   /* … og TYPEIKONET står på tittelens FØRSTE LINJE, slik ikonet gjør på alle
      andre objekttyper. Hodet her er topp-justert (tittelen kan gå over flere

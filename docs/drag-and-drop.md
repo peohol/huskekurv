@@ -227,7 +227,7 @@ Skiftet skrives som `translate` FØR dnd-kit måler:
 - det som males og det politikken regner på blir da det SAMME: `--dnd-left`,
   `intentRectangle` (og dermed `draggedRect`, 1/3-tersklene, kolonnevalget) og
   viewport-klemma ser alle den sentrerte boksen;
-- klonen får `translate: none !important` (som `rotate` og `scale` over den), og
+- klonen får `translate: none !important` (som `scale` over den), og
   objektet får skiftet fjernet i det draget er over — ellers ville det blitt lagt
   på en gang til.
 
@@ -760,10 +760,9 @@ kasse, og et hull som ligger igjen i en annen liste.
 Plassen tas av en negativ `margin-bottom` på klonen, som en ARVET variabel fra
 containeren (`--hole-shrink`) — ikke som en inline-stil på klonen selv. Klonen er
 en kopi av raden som dras, og dnd-kit bygger den om fra originalens
-`style`-attributt — det samme attributtet Huskis maler rotasjonen i hver frame
-(`dndPaintRotation`). MÅLT: attributtet ble skrevet i sin helhet,
-«rotate: …deg; margin-bottom: -56px» ble til «rotate: …deg», og lista sto med en
-åpen rad til neste runde.
+`style`-attributt på nytt hver frame. MÅLT: attributtet ble skrevet i sin
+helhet, og en «margin-bottom: -56px» lagt der forsvant med den neste — lista sto
+med en åpen rad til neste runde.
 
 **Klonens boks er DRA-OBJEKTETS GEOMETRI**, og derfor må plassen tas med margin
 og ingenting annet. dnd-kit speiler mål, plassering OG viewport-klemme fra
@@ -979,9 +978,16 @@ den SLETTER objektet i stedet for å flytte det.
 står ved siden av kassen på alle tre nivåene. Det er den samme knappen, den
 samme sonen og den samme utfoldingen — bare betydningen og fargen er en annen:
 `--drag-archive` i stedet for `--drag-danger`, fordi arkivering ikke er en fare.
-Retten er slettingens (`draggedCanBeTrashed`), og opprydningen er felles:
-`disarmDragTrash` rydder BEGGE kassene og begge fargene på alle veier ut av et
-drag, også avbrutte.
+RETTEN ER EN ANNEN. Å arkivere er å legge bort — reversibelt INNHOLD, og det
+krever redigeringsrett (`draggedCanBeArchived` → `canEditNoteObj`). Å slette er
+destruktivt og tar objektet fra alle andre med tilgang, og krever sletterett
+(`draggedCanBeTrashed` → `caps.delete`). Nå som notatene kan deles på alle tre
+nivåene ([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14), er de
+to ikke lenger det samme spørsmålet: et medlem som lovlig kan redigere et delt
+notat, men ikke slette det for alle, får arkivmålet og ikke søppelkassen — den
+samme forskjellen objektmenyens «Arkiver»- og «Slett»-rader gjør. Opprydningen
+er derimot felles: `disarmDragTrash` rydder BEGGE kassene, begge fargene og
+etiketten på alle veier ut av et drag, også avbrutte.
 
 Kassene er **soner** (`zoneSelector` + `onZoneDrop`), og Smett ruller raden
 tilbake dit den kom fra FØR handlingen kalles — nøyaktig semantikken vi vil ha:
@@ -1006,6 +1012,13 @@ Sikter man på en kasse, får det løftede objektet i tillegg en ETIKETT
 objektet, som ligger i top layer og derfor ikke kan dekkes av noe — en etikett på
 kassen ville havnet under både fingeren og det man drar. Se
 [`trash.md`](trash.md).
+
+**Etiketten er ÉN tilstand for hele draget** (`refreshDropLabel`), ikke én per
+kasse. De to siktesetterne kalles etter hverandre i samme politikkrunde, og da
+de skrev etiketten hver for seg, vant den som kjørte SIST: søppel → arkiv virket,
+arkiv → søppel tømte «Slett» i samme åndedrag som den ble satt. Etiketten utledes
+derfor av begge flaggene ETTER at begge er oppdatert, og de to retningene er den
+samme koden. `dnd-trash` måler begge veier i det samme draget.
 
 - **Kassen FØLGER objektet**: for et listepunkt/en mappe står den i containeren
   objektet er i NÅ (`retargetDragTrash` flytter `drag.trashHost` på hver
@@ -1090,9 +1103,11 @@ kassen ville havnet under både fingeren og det man drar. Se
 - **Kategorier har ingen kasse.** En kategori slettes ikke — den LØSES OPP
   (listepunktene blir stående), fra objektmenyen. `dragTrashBtn()` svarer null for
   dem, og ingenting armes.
-- **Feiler LUKKET** (`draggedCanBeTrashed`): samme capabilities som menyens
-  «Slett»-rad. Uten rett vises ingen kasse i det hele tatt, så man kan ikke sikte
-  på noe serveren ville avvist.
+- **Feiler LUKKET** (`draggedCanBeTrashed` for kassen, `draggedCanBeArchived`
+  for arkivet): samme capabilities som menyens «Slett»- og «Arkiver»-rader.
+  Uten rett vises ikke det slippmålet i det hele tatt, så man kan ikke sikte på
+  noe serveren ville avvist — og de to spørres hver for seg, så en som kan
+  arkivere uten å kunne slette får nøyaktig det ene målet.
 
 ### Kassen og ekstraheringen
 
@@ -1385,12 +1400,8 @@ flytter ingenting, en stor lar objektet henge etter uten å slippe fingeren.
 beskriver derfor fortsatt fingeren, og 1/3-tersklene, kolonnevalget og sonene
 svarer nøyaktig som før. Det er bare objektet som står stille sidelengs.
 
-**Rotasjonen følger låsen.** Den leser objektets vannrette posisjon, og den
-finnes ikke når x er nullet — vinkelen ville svingt av en intensjon ingen ser.
-`dndPaintRotation` er derfor en no-op når `drag.oneAxis` står, og `rotate` blir
-aldri satt (se under).
 
-## Viewport-klemmen og rotasjonen
+## Viewport-klemmen
 
 Det løftede objektet holdes innenfor det BRUKBARE feltet av Smetts
 `SafeViewport`, matet med `safeInsets()`. «Brukbart» = viewporten minus den sikre
@@ -1399,32 +1410,26 @@ ville lagt seg delvis under det mens board-et det kom fra står innenfor
 ([`design-system.md`](design-system.md)). Sonen er 0 i en nettleser, så klemmen
 regner ut nøyaktig det samme der.
 
-**Rotasjonen er ikke med i klemmen, og det er med vilje.** `SafeViewport` klemmer
-den boksen dnd-kit har MÅLT, og målingen tar ikke med rotasjonen vi maler
-objektet med etterpå (`dndPaintRotation`). En rotert boks er både høyere og
-bredere — for en bred, lav rad ved ±5° er forskjellen ~30 px i høyden — og
-differansen stikker ut med halvparten på hver kant: et kort dratt til nedre høyre
-hjørne på en 390 × 780-skjerm ligger ~13 px under viewportkanten.
+**Det finnes ingen dynamisk rotasjon.** Den fantes — ±5° ut fra objektets
+vannrette posisjon — og er fjernet. Et rotert lag rasteriseres og resamples av
+kompositoren: subpiksel-antialiasingen faller bort, og både tittelen i det som
+dras og slippetiketten over det ble merkbart uklare. Det finnes ingen
+kryssnettleser-måte å beholde skarp tekst i et vilkårlig rotert lag, og skarp
+tekst er verdt mer enn vinkelen. Løftet er fortsatt kompakt løft, skala og
+translasjon — alt sammen ting som ikke koster lesbarhet. `dnd-vertical-axis`
+måler at ingenting noen gang settes i `rotate`.
 
-Å legge slarken inn i klemmen — enten som ekstra safe insets eller ved å klemme
-mot den roterte boksen — koster det som betyr noe: grepet løsner fra fingeren med
-nøyaktig den samme slarken hver gang objektet nærmer seg en kant
-(`dnd-layout-modes` sjekk 1). Objektet ligger i top layer (`position: fixed`), så
-hjørnet utenfor kanten lager verken scrollbar eller overflow — det er kosmetikk;
-grepet er det ikke. `dnd-viewport-clamp` regner derfor rotasjons-slarken inn i sin
-egen toleranse, og måler den ut fra objektets faktiske `rotate`.
+### Ingen tekstmarkering mens et drag pågår
 
-**Rotasjonen er dynamisk** (`cardRotation()`, ±5° ut fra horisontal posisjon: −5°
-inntil venstre kant, +5° inntil høyre) og gjelder ALLE objekt-typene — men bare
-der draget faktisk KAN gå sidelengs (se «Én akse» over). Den settes fra JS som en
-EGEN `rotate`-egenskap, aldri via `transform`: geometrien er dnd-kits og skrives
-med `!important` (`position`, `top`, `left`, `width`, `height`, `transform`,
-`translate`). Skalaen ligger i CSS av samme grunn.
-
-**Og en regel uten virkning er ingen regel.** `.dnd-surface [data-dnd-placeholder] {
-rotate: none }` gjorde ingenting — klonen bærer rotasjonen som en INLINE-stil, og
-en inline-stil slår enhver klasseregel, så en bred, lav rad fikk et hull dobbelt
-så høyt som seg selv. Med `!important` står den.
+Gesten er pekerbasert: knappen er nede og pekeren beveger seg, som er nøyaktig
+den gesten en nettleser ellers markerer tekst med. `body.is-dragging` slo av
+markering på body, men tre regler setter `user-select: text` PÅ etterkommere
+(`.item-text`, `.card-title`, `.edit-input`), og en eksplisitt verdi på et barn
+slår arven — så titler ble markert av selve draget, og markeringen ble stående
+blå etterpå. Under et aktivt drag overstyres derfor markering for hele flaten
+(`body.is-dragging *`, med `!important`), og en markering som alt LÅ der ryddes
+i det draget begynner (`beginDragBody`). Utenfor draget er markering urørt.
+`dnd-selection.test.js` er nettet.
 
 ### Alt som dras er halvgjennomsiktig
 
@@ -1485,7 +1490,7 @@ bare et annet state-tre (`navScope`). Det som er verdt å merke seg:
   nøyaktig én `.board-col` (samme kolonnemaskineri som hovedsiden, se
   [`board-layout.md`](board-layout.md)), så kort-draget aldri møter
   flerkolonne-logikken. Draget er dermed alltid låst til den loddrette aksen, og
-  males uten rotasjon (se «Én akse» over).
+  (se «Én akse» over).
 - **Scrollen etter slippet ruller MODALKROPPEN**, ikke vinduet
   (`navScrollAfterDrop`). Se «Etterarbeidet ved slippet».
 - **En mappe som bytter område går gjennom `move_group`-RPC-en**

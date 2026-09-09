@@ -4576,8 +4576,8 @@
      Låsen spør det SAMME regnestykket som layouten fordeler kortene etter
      (`boardColumnCount`), så den kan ikke komme i utakt med det man ser — og
      den avgjøres ÉN gang per drag, i `beforedragstart`, før dnd-kit har malt en
-     eneste frame. `drag.oneAxis` leses derfra av både modifikatoren og
-     rotasjonen. DELT av alle fem nivåene.
+     eneste frame. `drag.oneAxis` leses derfra av modifikatoren. DELT av alle
+     fem nivåene.
 
      UNNTAKET ER SCOPENE MED TO SLIPPMÅL VED SIDEN AV HVERANDRE (`sideTargets`):
      notatene har både et arkiv og en søppelkasse, og de står side om side —
@@ -4790,27 +4790,25 @@
     };
   }
 
-  // Dra-elementets logiske boks ut fra pekerposisjon (urørt av rotasjon/skala).
+  /* DRA-FLAGGET PÅ BODY — og ingen tekstmarkering mens draget står på.
+     CSS-en hindrer at NY markering oppstår (`body.is-dragging` i styles.css),
+     men en markering som alt lå der ville blitt stående blå gjennom hele
+     draget. Den ryddes derfor i det samme åndedraget. Står markøren i et felt
+     som redigeres, er markeringen brukerens egen og røres ikke — et drag
+     starter uansett ikke der. DELT av alle fem nivåene. */
+  function beginDragBody() {
+    document.body.classList.add('is-dragging');
+    const sel = window.getSelection && window.getSelection();
+    const a = document.activeElement;
+    const iFelt = !!a && (a.isContentEditable || /^(INPUT|TEXTAREA)$/.test(a.tagName || ''));
+    if (sel && !sel.isCollapsed && !iFelt) sel.removeAllRanges();
+  }
+
+  // Dra-elementets logiske boks ut fra pekerposisjon (urørt av skalaen).
   function draggedRect() {
     const left = drag.lastX - drag.grabX;
     const top = drag.lastY - drag.grabY;
     return { left, top, right: left + drag.width, bottom: top + drag.height, width: drag.width, height: drag.height };
-  }
-
-  // Dynamisk rotasjon av dra-kortet ut fra horisontal posisjon på siden:
-  // −5° når kortet ligger inntil venstre ytterkant, 0° midtstilt, +5° inntil
-  // høyre ytterkant. Vi normaliserer mot det oppnåelige senter-området
-  // (halve kortbredden inn fra hver kant) så ytterpunktene faktisk nås.
-  const MAX_ROT = 5;
-  function cardRotation() {
-    const r = draggedRect();
-    const vw = window.innerWidth || document.documentElement.clientWidth || 1;
-    const half = r.width / 2;
-    const min = half, max = vw - half;   // senter når kortet er inntil venstre/høyre kant
-    const cx = r.left + half;
-    let t = max > min ? ((cx - min) / (max - min)) * 2 - 1 : 0; // −1 venstre, +1 høyre
-    t = Math.max(-1, Math.min(1, t));
-    return t * MAX_ROT;
   }
 
   /* ------- FLIP-animasjon ------- */
@@ -5407,9 +5405,32 @@
      slippet betyr. Listesiden har ikke noe arkiv; der svarer
      `dragArchiveBtn()` null, og ingenting armes.
 
-     Retten er den samme som slettingens (`draggedCanBeTrashed`): arkivering er
-     en svakere handling enn sletting, så den som ikke får slette, får heller
-     ikke arkivere ved å dra. */
+     RETTEN ER EN ANNEN ENN SLETTINGENS. Å arkivere er å legge bort: det er
+     reversibelt INNHOLD, og krever redigeringsrett. Å slette er destruktivt og
+     tar objektet fra alle andre med tilgang, og krever sletterett
+     (`docs/rettigheter-og-deling.md` del 14). Nå som notatene kan deles, er de
+     to ikke lenger det samme spørsmålet: et medlem som lovlig kan redigere et
+     delt notat, men ikke slette det for alle, skal få arkivmålet og ikke
+     søppelkassen. Kassene spør derfor hver sin capability, nøyaktig som
+     objektmenyens «Arkiver»- og «Slett»-rader. */
+  function draggedCanBeArchived() {
+    const S = dragScope();
+    const id = drag.el && drag.el.dataset.id;
+    if (!id) return false;
+    // Bare notatsiden har et arkiv. Den virtuelle «Delt med meg»-bokhyllen
+    // finnes ikke i databasen og kan verken arkiveres eller slettes.
+    if (S === notesScope) {
+      const n = findNoteById(id);
+      return !!n && canEditNoteObj(n);
+    }
+    if (S !== notesNavScope) return false;
+    if (drag.kind === 'card') {
+      const p2 = findNoteProject(id);
+      return !!p2 && !p2._virtual && canEditNoteObj(p2);
+    }
+    const f = findNoteFolder(id);
+    return !!f && canEditNoteObj(f);
+  }
   function dragArchiveBtn() {
     if (!drag.active) return null;
     const S = dragScope();
@@ -5422,7 +5443,7 @@
   function armDragArchive() {
     drag.overArchive = false;
     drag.archiveArmed = false;
-    if (!draggedCanBeTrashed()) return;
+    if (!draggedCanBeArchived()) return;
     const btn = dragArchiveBtn();
     if (!btn) return;
     drag.archiveArmed = true;
@@ -5437,13 +5458,24 @@
     const btn = dragArchiveBtn();
     if (btn) btn.classList.toggle('drop-target', on);
     if (drag.el) drag.el.classList.toggle('to-archive', on);
-    setDropLabel(on ? tr('notes.archive') : '');
+    refreshDropLabel();
   }
   /* HVA SLIPPET BETYR, i ord, på det som dras. Fargen alene sier det bare til
      den som kjenner den fra før; etiketten sier det til alle. Den males av
      `[data-drop-label]` i styles.css — på OBJEKTET, som ligger i top layer og
      derfor ikke kan dekkes av noe, i motsetning til kassen, som ligger under
      både fingeren og det man drar. */
+  /* ETIKETTEN ER ÉN TILSTAND FOR HELE DRAGET, ikke én per kasse. De to
+     siktesetterne kalles etter hverandre i samme runde, og begge skrev
+     etiketten direkte: den som kjørte SIST vant. Trash → arkiv virket
+     (arkivet ble satt sist), arkiv → trash gjorde det ikke — `setDragArchive-
+     Target(false)` tømte «Slett» i samme åndedrag som den ble satt. Etiketten
+     utledes derfor av begge flaggene, ETTER at begge er oppdatert, og da er de
+     to retningene den samme koden. */
+  function refreshDropLabel() {
+    setDropLabel(drag.overTrash ? tr('menu.delete')
+      : drag.overArchive ? tr('notes.archive') : '');
+  }
   function setDropLabel(text) {
     const el = drag.el;
     if (!el) return;
@@ -5632,7 +5664,7 @@
     const btn = dragTrashBtn();
     if (btn) btn.classList.toggle('drop-target', on);
     if (drag.el) drag.el.classList.toggle('to-trash', on);
-    setDropLabel(on ? tr('menu.delete') : '');
+    refreshDropLabel();
   }
   // Selve slettingen et slipp i kassen betyr. Kalles ETTER at draget er rullet
   // tilbake, så animasjonen og angre-toasten kjører på et board i normal flyt.
@@ -6456,10 +6488,10 @@
        klonen opp, og containeren krymper med raden og gapet.
 
        Men beløpet kan ikke SKRIVES på klonen. Klonen er en kopi av raden som
-       dras, og dnd-kit bygger den om fra originalens `style`-attributt — der vi
-       selv maler rotasjonen hver frame (`dndPaintRotation`). MÅLT: attributtet
-       ble skrevet i sin helhet, «rotate: …deg; margin-bottom: -56px» ble til
-       «rotate: …deg», og lista sto med en åpen rad igjen til neste runde.
+       dras, og dnd-kit bygger den om fra originalens `style`-attributt hver
+       frame. MÅLT: attributtet ble skrevet i sin helhet, og en «margin-bottom:
+       -56px» lagt der forsvant med den neste — lista sto med en åpen rad igjen
+       til neste runde.
        Verdien legges derfor på CONTAINEREN, som er VÅR node, og klonen arver den
        (`--hole-shrink` i styles.css). */
     const boks = ph ? ph.getBoundingClientRect() : null;
@@ -7458,7 +7490,7 @@
     dndPeekPending = null;
     dndPolicyX = dndPolicyY = null;
     navSourceCardId = drag.trashHost ? drag.trashHost.dataset.id : null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     // Nettleserens scroll-anchoring ville ellers rykket modalen brått når
     // kortene kollapser. `finishDrag` slipper den igjen.
     document.documentElement.style.overflowAnchor = 'none';
@@ -7483,7 +7515,6 @@
   function navDragStart(board) {
     dndSyncIntent(board.manager.dragOperation);
     anchorBegin();              // layouten skal fra nå av flytte seg bort fra siktet
-    dndPaintRotation();
     if (drag.kind === 'card') return;
     dndRowTargetCont = dndPickRowContainer(dragOverCard());
     applyDragSeparators();
@@ -7492,7 +7523,7 @@
   /* Det løftede objektets LAYOUT-boks, målt ved løft.
      Smetts `intentRectangle` er uklemt, men den er målt på elementet slik det
      MALES — og vi skalerer det (1,02/1,03) mens det er løftet. Kontrakten til
-     `draggedRect()` er den logiske boksen, «urørt av rotasjon/skala»:
+     `draggedRect()` er den logiske boksen, «urørt av skalaen»:
      1/3-tersklene måler mot listenes egne kanter, og to piksler der er
      forskjellen på å være i lista og å falle ut av den (målt: en peek som ikke
      rakk å åpne fordi den nedre 1/3 lå 0,3 px for lavt). `offsetWidth`/
@@ -7599,22 +7630,10 @@
     drag.grabY = at.y - (box.top + box.height / 2 - h / 2);
   }
 
-  // Rotasjonen er dynamisk (±5° etter horisontal posisjon) og må derfor settes
-  // fra JS. Som EGEN egenskap (`rotate`), aldri `transform`: den skriver dnd-kit
-  // selv, med `!important`. Skalaen ligger i CSS av samme grunn. DELT.
-  //
-  // Den hører til FLERKOLONNEVISNINGEN. Er draget låst loddrett (`dndLockAxis`),
-  // står objektet stille i x mens intensjonen (`draggedRect`) fortsatt glir
-  // sidelengs — vinkelen ville da svingt uten at noe beveget seg.
-  function dndPaintRotation() {
-    if (!drag.el || drag.oneAxis) return;
-    drag.el.style.rotate = cardRotation().toFixed(2) + 'deg';
-  }
 
   function navDragMove(board) {
     if (drag.kind === 'card') {
       dndSyncIntent(board.manager.dragOperation);
-      dndPaintRotation();
       return;
     }
     dndRowPolicy(board, navUpdateExtractMode);
@@ -7635,7 +7654,6 @@
     // `drag` fortsatt beskrev draget. Her rydder vi — med mindre en av dem
     // allerede har gjort det (ekstrahering og kryss-område-flytting rydder før
     // `render()`, som de alltid har gjort).
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;    // klikket som ellers ville fulgt slippet
     navExtract = false;
     dndRowTargetCont = null;
@@ -8220,7 +8238,7 @@
     drag.trashHost = null;
     drag.crumbTarget = false;
     boardTargetCol = null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     // Nettleserens scroll-anchoring ville ellers rykket siden brått når listene
     // kollapser. `finishDrag` slipper den igjen.
     document.documentElement.style.overflowAnchor = 'none';
@@ -8235,13 +8253,11 @@
 
   function boardDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     boardTargetCol = boardPickColumn();
   }
 
   function boardDragMove(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     boardTargetCol = boardPickColumn();
   }
 
@@ -8250,7 +8266,6 @@
     // sluttplasseringen er satt, og `onCommit`/`onZoneDrop` har gjort sitt mens
     // `drag` fortsatt beskrev draget. Her rydder vi — restore/release er
     // idempotente, så veien gjennom en sone (som rydder selv) koster ingenting.
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;    // klikket som ellers ville fulgt slippet
     setCardCrumbTarget(false);
     boardTargetCol = null;
@@ -8417,7 +8432,7 @@
      `navRowBoard` er malen, og alt som er FELLES for de to radnivåene står i
      «NAV-SCOPET PÅ dnd-kit»: `dndRowSibling`, `dndPickRowContainer`, de to
      kollisjonsdetektorene, `dndKeepCatAddLast`, `dndCollapseCategory`/
-     `dndSettleCategory`, `dndSyncIntent`, `dndPaintRotation` og klikk-vakten.
+     `dndSettleCategory`, `dndSyncIntent` og klikk-vakten.
 
      ETT BOARD, ETT NIVÅ — men TO CONTAINERNIVÅER. Kortenes `.items-container`
      (nivå 1: listepunkter og kategorier om hverandre) og kategorienes
@@ -8604,7 +8619,7 @@
     dndPeekPending = null;
     dndPolicyX = dndPolicyY = null;
     boardRowSourceCardId = drag.trashHost ? drag.trashHost.dataset.id : null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     // Nettleserens scroll-anchoring ville ellers rykket siden brått når
     // kategorien folder seg sammen. `finishDrag` slipper den igjen.
     document.documentElement.style.overflowAnchor = 'none';
@@ -8619,7 +8634,6 @@
   function boardRowDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
     anchorBegin();              // layouten skal fra nå av flytte seg bort fra siktet
-    dndPaintRotation();
     dndRowTargetCont = dndPickRowContainer(dragOverCard());
     applyDragSeparators();
   }
@@ -8658,7 +8672,6 @@
       // kollisjonsrunden som kommer; ved løft alene ville de ikke overlevd.
       dndTuneRowCollisions(b);
       dndSyncIntent(b.manager.dragOperation);
-      dndPaintRotation();
       /* Sikter man på KASSEN, står plasseringen i ro: slippet SLETTER, det
          flytter ikke. Regelen er tilbake fra den gamle motoren, der den lå i
          `onItemMove`, og den forsvant i overgangen til dnd-kit.
@@ -8746,7 +8759,6 @@
     // `drag` fortsatt beskrev draget. Her rydder vi — med mindre en av dem
     // allerede har gjort det (ekstrahering og kryss-liste-flytting rydder før
     // `render()`, som de alltid har gjort).
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;    // klikket som ellers ville fulgt slippet
     boardExtract = false;
     dndRowTargetCont = null;
@@ -10343,6 +10355,108 @@
      `100% / --seg-n` bred og står `--seg-i * 100%` inn, så en tredje fane ville
      virket uten en eneste ny utregning. Semantikken (`aria-selected` + rullende
      `tabIndex`) settes her, ett sted for begge bryterne. */
+  /* ---------------- BRYTERE KAN DRAS ----------------
+     Begge bryterformene er den SAMME kontrollen sett to ganger: én akse med n
+     gyldige stopp og én flate som står på et av dem. Den segmenterte (`.seg`)
+     har n segmenter, av/på-bryteren (`.toggle-switch`) har to. Gesten er
+     dermed også den samme — ta tak, følg fingeren langs aksen, slipp, snap til
+     nærmeste stopp — og den ligger ETT sted: en delegert pekerlytter på
+     dokumentet. Da gjelder den også brytere som bygges av JS (varseltypene,
+     varselkanalen) uten at hvert byggested må vite om den.
+
+     KLIKK OG TASTATUR ER URØRT. En gest som ikke passerer terskelen gjør
+     ingenting, og det vanlige klikket kommer som før. Passerer den, utfører
+     draget valget ved å KLIKKE det segmentet man landet på — altså gjennom de
+     samme lytterne som et ekte klikk — og det etterfølgende ekte klikket
+     svelges, så et drag aldri teller to ganger. `aria-checked`/`aria-selected`
+     settes fortsatt bare av de vanlige veiene, ved slipp; midt i en gest har
+     bryteren ingen ny tilstand å melde. */
+  const TOG_THRESHOLD = 3;        // px før en gest regnes som et drag
+  let togDrag = null;             // { el, seg, stops, pitch, origin, moved }
+  let togEatClick = false;        // svelg det ekte klikket etter et drag
+  let togSelfClick = false;       // … men ikke vårt eget
+
+  // Aksens geometri: hvor stopp 0 ligger, og hvor langt det er mellom stoppene.
+  function togGeometry(el) {
+    const r = el.getBoundingClientRect();
+    const pad = parseFloat(getComputedStyle(el).paddingLeft) || 0;
+    if (el.classList.contains('seg')) {
+      const stops = el.querySelectorAll('.seg-btn').length;
+      const pitch = stops ? (r.width - pad * 2) / stops : 0;
+      return { stops, pitch, origin: r.left + pad + pitch / 2 };
+    }
+    const knob = el.querySelector('.toggle-knob');
+    const kw = knob ? knob.offsetWidth : 0;
+    return { stops: 2, pitch: r.width - pad * 2 - kw, origin: r.left + pad + kw / 2 };
+  }
+  // Hvor bryteren står NÅ, som stoppnummer.
+  function togCurrent(el, seg) {
+    if (!seg) return el.getAttribute('aria-checked') === 'true' ? 1 : 0;
+    const btns = [...el.querySelectorAll('.seg-btn')];
+    const i = btns.findIndex((b) => b.classList.contains('is-active'));
+    return i < 0 ? 0 : i;
+  }
+  function togPaint(d, f) {
+    d.el.style.setProperty(d.seg ? '--seg-drag' : '--knob-drag', f.toFixed(4));
+  }
+  function togRelease(d) {
+    d.el.classList.remove('is-tog-drag');
+    d.el.style.removeProperty(d.seg ? '--seg-drag' : '--knob-drag');
+  }
+  // Utfør valget gjennom den vanlige klikkveien, så all eksisterende logikk
+  // (og alle eksisterende lyttere) er den samme enten man klikker eller drar.
+  function togCommit(d, stop) {
+    const mål = d.seg ? d.el.querySelectorAll('.seg-btn')[stop] : d.el;
+    if (!mål) return;
+    if (stop === togCurrent(d.el, d.seg)) return;    // landet der den sto
+    togSelfClick = true;
+    try { mål.click(); } finally { togSelfClick = false; }
+  }
+  document.addEventListener('pointerdown', (ev) => {
+    togEatClick = false;
+    if (ev.button != null && ev.button !== 0) return;
+    const el = ev.target.closest && ev.target.closest('.seg, .toggle-switch');
+    if (!el || el.disabled || el.closest('[disabled]')) return;
+    const seg = el.classList.contains('seg');
+    const g = togGeometry(el);
+    if (!(g.pitch > 0) || g.stops < 2) return;
+    togDrag = { el, seg, moved: false, x0: ev.clientX, stops: g.stops, pitch: g.pitch, origin: g.origin };
+  }, true);
+  document.addEventListener('pointermove', (ev) => {
+    const d = togDrag;
+    if (!d) return;
+    if (!d.moved) {
+      if (Math.abs(ev.clientX - d.x0) < TOG_THRESHOLD) return;
+      d.moved = true;
+      d.el.classList.add('is-tog-drag');
+      d.el.setPointerCapture && d.el.setPointerCapture(ev.pointerId);
+    }
+    const f = Math.max(0, Math.min(d.stops - 1, (ev.clientX - d.origin) / d.pitch));
+    togPaint(d, f);
+    ev.preventDefault();
+  });
+  function togEnd(ev, avbrutt) {
+    const d = togDrag;
+    togDrag = null;
+    if (!d) return;
+    if (!d.moved) return;                            // en ren klikk-gest
+    togRelease(d);
+    togEatClick = true;                              // det ekte klikket er dragets
+    if (avbrutt) return;
+    const f = Math.max(0, Math.min(d.stops - 1, (ev.clientX - d.origin) / d.pitch));
+    togCommit(d, Math.round(f));
+  }
+  document.addEventListener('pointerup', (ev) => togEnd(ev, false));
+  document.addEventListener('pointercancel', (ev) => togEnd(ev, true));
+  // Klikket som følger et drag er dragets eget ekko, ikke et nytt valg.
+  document.addEventListener('click', (ev) => {
+    if (togSelfClick || !togEatClick) return;
+    togEatClick = false;
+    if (!ev.target.closest || !ev.target.closest('.seg, .toggle-switch')) return;
+    ev.stopPropagation();
+    ev.preventDefault();
+  }, true);
+
   function paintSeg(el, sel, erAktiv) {
     if (!el) return;
     const btns = [...el.querySelectorAll(sel)];
@@ -14896,7 +15010,7 @@
      Det TREDJE scopet, og det enkleste: ÉN container, ingen ekstrahering,
      ingen låser, ingen kryss-beholder-flytting, ingen sletting. Det eneste et
      slipp kan bety er ny plass i rekka, inn i eller ut av en kategori. Alt
-     annet (skillelinjer, peek av en kollapset kategori, rotasjon under løft) er
+     annet (skillelinjer, peek av en kollapset kategori, skala under løft) er
      den DELTE politikken over, som leser `drag.scope`.
 
      DRAGET GÅR BARE OPP OG NED. Lista er én smal kolonne, så en vannrett
@@ -15000,7 +15114,7 @@
     dndRowTargetCont = null;
     dndPeekPending = null;
     dndPolicyX = dndPolicyY = null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     document.documentElement.style.overflowAnchor = 'none';
     if (kind === 'category') dndCollapseCategory(el);
     dndTuneRowCollisions(ideaRowBoard);
@@ -15011,7 +15125,6 @@
 
   function ideaRowDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     dndRowTargetCont = dndPickRowContainer(ideasCardEl);
     applyDragSeparators();
   }
@@ -15028,7 +15141,6 @@
     applyDragSeparatorsSoon();
   }
   function ideaRowDragEnd(event) {
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;
     dndRowTargetCont = null;
     dndPeekPending = null;
@@ -15558,6 +15670,12 @@
       row.appendChild(chip);
       el.querySelector('.note-card-body').appendChild(row);
     }
+    /* EN TOM KROPP SKAL IKKE STÅ IGJEN SOM EN STRIPE. Å skjule utdraget alene
+       holdt ikke: kroppen rundt beholdt polstringen sin, og et notat uten tekst
+       fikk en lav, tom flate under hodet. Kroppen har to mulige innhold —
+       utdraget og koblingschipen — så den skjules når ingen av dem finnes, og
+       kortet stopper etter hodet. */
+    el.querySelector('.note-card-body').hidden = !text && !chip;
     // Menyknappen: den SAMME objektmenyen som resten av appen — arkiver,
     // koblinger, slett (docs/menus.md).
     const noteMenu = el.querySelector('.obj-menu-btn');
@@ -16961,7 +17079,7 @@
     drag.trashHost = null;
     drag.crumbTarget = false;
     notesTargetCol = null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     document.documentElement.style.overflowAnchor = 'none';
     dndNoteLiveColumns(notesBoard);  // kolonnene som faktisk finnes å lande i
     notesTuneColumnCollisions();
@@ -17004,16 +17122,13 @@
   function notesZoneDrop(result) { notesCanDrop(notesScope, result); }
   function notesDragStart(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     notesTargetCol = notesPickColumn();
   }
   function notesDragMove(b) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     notesTargetCol = notesPickColumn();
   }
   function notesDragEnd(event) {
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;         // klikket som ellers ville åpnet editoren
     notesTargetCol = null;
     if (!drag.active) { notesDroppedId = null; return; }
@@ -17150,7 +17265,7 @@
     dndPeekPending = null;
     dndPolicyX = dndPolicyY = null;
     notesNavSourceProjectId = drag.overCard ? drag.overCard.dataset.id : null;
-    document.body.classList.add('is-dragging');
+    beginDragBody();
     document.documentElement.style.overflowAnchor = 'none';
     if (kind === 'item') dndTuneRowCollisions(notesNavRowBoard);
     dndCompactLift(el, b);         // krymp det løftede objektet i begge retninger
@@ -17163,7 +17278,6 @@
   function notesNavZoneDrop(result) { notesCanDrop(notesNavScope, result); }
   function notesNavDragStart(b, kind) {
     dndSyncIntent(b.manager.dragOperation);
-    dndPaintRotation();
     if (kind === 'card') return;
     anchorBegin();              // layouten skal fra nå av flytte seg bort fra siktet
     dndRowTargetCont = dndPickRowContainer(dragOverCard());
@@ -17173,7 +17287,7 @@
     dndSetRowTarget(dndPickRowContainer(dragOverCard()));
   }
   function notesNavDragMove(b, kind) {
-    if (kind === 'card') { dndSyncIntent(b.manager.dragOperation); dndPaintRotation(); return; }
+    if (kind === 'card') { dndSyncIntent(b.manager.dragOperation); return; }
     dndRowPolicy(b, notesNavUpdateTargetCont);
   }
   function notesNavDragOver(b, kind) {
@@ -17182,7 +17296,6 @@
     applyDragSeparatorsSoon();
   }
   function notesNavDragEnd(event) {
-    if (drag.el && drag.el.isConnected) drag.el.style.rotate = '';
     dndSwallowClick = true;
     dndRowTargetCont = null;
     dndPeekPending = null;
@@ -24767,7 +24880,7 @@
       };
     },
     /* Den LOGISKE dra-boksen, slik plasseringsreglene faktisk leser den
-       (`draggedRect`: pekeren minus grepet, uklemt og uten rotasjon/skala).
+       (`draggedRect`: pekeren minus grepet, uklemt og uten skala).
        Testene rekonstruerte den før fra dnd-kits `intentRectangle`, og den
        ligger inntil én frame bak — et sveip i 3 px steg målte da terskelen opp
        til to steg feil. `band` er kortets egen kant, altså den andre siden av

@@ -776,6 +776,15 @@ tar ingenting fra noen, så det krever bare redigeringsrett. Søppelkassen er
 felles for alle med tilgang, så den krever sletterett. Skillet er verdt å holde
 presist: et medlem skal kunne rydde uten å kunne ta noe fra alle andre.
 
+Det gjelder **også dra-og-slipp**. De to slippmålene står ved siden av
+hverandre, men de spør hver sin capability: arkivet `can_edit_content`
+(`draggedCanBeArchived`), søppelkassen `can_delete_object`
+(`draggedCanBeTrashed`). Et rent direkte medlem får derfor arkivet foldet ut og
+søppelkassen ikke — nøyaktig som objektmenyen viser «Arkiver» uten «Slett».
+Begge feiler LUKKET: mangler capabilityen, finnes ikke slippmålet, så man kan
+ikke sikte på noe serveren ville avvist. Se
+[`drag-and-drop.md`](drag-and-drop.md).
+
 **Et rent DIREKTE medlem kan aldri slette objektet for alle.** Samme grense som
 holder et direkte mappemedlem fra å slette mappen: deler man et notat med noen,
 deler man lesing og redigering — ikke retten til å ta det fra resten.
@@ -919,5 +928,5 @@ idempotent og hindrer at en bevisst fjernet rolle kommer tilbake.
 * `tests/notes-sharing.test.js` — delerad i den vanlige objektmenyen på alle
   tre nivåene, delemodalen, eier/redaktør/leser, «Delt med meg»-bokhyllen,
   tilbakekalling, samtidige endringer, rollback av både innholds- og
-  posisjonsregisteret uten skriverett, og en ekte flytting ut av «Delt med meg»
-  (desktop + mobil).
+  posisjonsregisteret uten skriverett, en ekte flytting ut av «Delt med meg»,
+  og at et direkte medlem får arkivmålet uten søppelkassen (desktop + mobil).
