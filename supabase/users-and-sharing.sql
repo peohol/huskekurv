@@ -649,6 +649,44 @@ alter table public.share_invites add column if not exists note_folder_id uuid
 alter table public.share_invites add column if not exists note_id uuid
   references public.notes (id) on delete cascade;
 
+-- DEN GAMLE, ANONYME MÅL-SJEKKEN MÅ VEKK FØR NOTATKOLONNENE KAN BRUKES.
+--
+-- Den aller første formen av disse tabellene skrev vilkåret INNE i
+-- `create table`: `check (num_nonnulls(universe_id, group_id, card_id) = 1)`.
+-- PostgreSQL navnga den selv — `memberships_check` hhv. `share_invites_check`
+-- — og da den navngitte `*_target_chk` kom til, ble den gamle ALDRI fjernet.
+-- På en database som har eksistert siden den gang står derfor BEGGE, og de er
+-- forenlige helt til notatsiden kommer: den gamle kjenner bare tre kolonner,
+-- så enhver rad med note_project_id/note_folder_id/note_id har null av dem og
+-- avvises. Det var nøyaktig det som stoppet migreringen i produksjon, midt i
+-- backfillen i del 11.
+--
+-- Vi dropper etter FORM, ikke etter navn: hver CHECK på disse to tabellene som
+-- teller `card_id` med i et `num_nonnulls`-vilkår ER den pensjonerte
+-- mål-sjekken, uansett hvilket navn PostgreSQL ga den (`…_check`, `…_check1`).
+-- `memberships_no_card_chk` (`card_id is null`) nevner ingen `num_nonnulls` og
+-- røres ikke. Den nye, navngitte `*_target_chk` — nøyaktig ett av de fem
+-- delbare objektene — settes i del 11, etter at listemedlemskapene er migrert
+-- bort. Idempotent: på en fersk eller allerede migrert database finner løkka
+-- ingenting.
+do $$
+declare c record;
+begin
+  for c in
+    select rel.relname as tabell, con.conname as navn
+      from pg_constraint con
+      join pg_class rel on rel.oid = con.conrelid
+      join pg_namespace ns on ns.oid = rel.relnamespace
+     where ns.nspname = 'public'
+       and rel.relname in ('memberships', 'share_invites')
+       and con.contype = 'c'
+       and pg_get_constraintdef(con.oid) like '%num_nonnulls%'
+       and pg_get_constraintdef(con.oid) like '%card_id%'
+  loop
+    execute format('alter table public.%I drop constraint %I', c.tabell, c.navn);
+  end loop;
+end $$;
+
 create unique index if not exists share_invites_universe_pending_key
   on public.share_invites (universe_id, lower(invitee_email))
   where status = 'pending' and universe_id is not null;
@@ -6615,6 +6653,10 @@ exception when duplicate_object then null; end $$;
 -- bokhylle, notatbok, notat). `drop … add` i stedet for `add … exception`,
 -- for sjekken FINNES allerede på en eksisterende database med den gamle
 -- to-kolonners formen og må erstattes, ikke hoppes over.
+--
+-- Den ANONYME forgjengeren (`memberships_check`/`share_invites_check`) ble
+-- droppet allerede i del 3, sammen med notatkolonnene — den måtte vekk før
+-- backfillen under i det hele tatt kan sette inn en rad.
 alter table public.memberships  drop constraint if exists memberships_target_chk;
 alter table public.memberships  add  constraint memberships_target_chk
   check (num_nonnulls(universe_id, group_id, note_project_id, note_folder_id, note_id) = 1);

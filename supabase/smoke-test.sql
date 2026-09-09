@@ -215,6 +215,52 @@ begin
   end if;
 end $$;
 
+\echo '──────── 2b. Delingstabellenes mål-sjekk + notat-backfillen ────────'
+-- Produksjonsfeilen 2026-09-09: den anonyme mål-sjekken fra den aller første
+-- `create table` (`memberships_check` / `share_invites_check`) teller bare
+-- område, mappe og liste, og avviste derfor hver eneste rolle på notatnivå.
+-- Migreringen stoppet midt i backfillen, og bokhylleeierne mistet sine egne
+-- notater av syne fordi RLS-en på notatsiden spør `memberships` alene.
+--
+-- To sjekker, og de er uavhengige: at fella er ryddet bort, og at backfillen
+-- FAKTISK kom i mål. Den siste er den som ser brukerens virkelighet — en
+-- bokhylle uten en eneste rolle er en bokhylle ingen kan åpne.
+do $$
+declare
+  feil text[] := '{}';
+  gamle text; foreldrelose int;
+begin
+  select string_agg(rel.relname || '.' || con.conname, ', ')
+    into gamle
+    from pg_constraint con
+    join pg_class rel on rel.oid = con.conrelid
+    join pg_namespace ns on ns.oid = rel.relnamespace
+   where ns.nspname = 'public'
+     and rel.relname in ('memberships', 'share_invites')
+     and con.contype = 'c'
+     and pg_get_constraintdef(con.oid) like '%num_nonnulls%'
+     and pg_get_constraintdef(con.oid) like '%card_id%';
+  if gamle is not null then
+    feil := array_append(feil,
+      'Pensjonert mål-sjekk står igjen og blokkerer notatnivåene: ' || gamle);
+  end if;
+
+  select count(*) into foreldrelose
+    from public.note_projects np
+   where not exists (select 1 from public.memberships m where m.note_project_id = np.id);
+  if foreldrelose > 0 then
+    feil := array_append(feil,
+      foreldrelose || ' bokhylle(r) har ingen rolle i det hele tatt — backfillen kom ikke i mål, og eierne ser dem ikke.');
+  end if;
+
+  if array_length(feil, 1) > 0 then
+    perform set_config('huskis.smoke_feil',
+      current_setting('huskis.smoke_feil', true) || array_to_string(feil, E'\n') || E'\n', false);
+  else
+    raise notice '  ✓ mål-sjekken dekker alle fem nivåene, og hver bokhylle har en eier';
+  end if;
+end $$;
+
 \echo '──────── 3. RLS er på ────────'
 do $$
 declare

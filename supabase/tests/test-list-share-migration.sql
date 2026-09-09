@@ -43,6 +43,10 @@ grant execute on function public.t_fails(text, text) to public;
 \set G3 '12000000-3333-0000-0000-000000000003'
 \set CZ '13000000-3333-0000-0000-000000000004'
 \set CZS '13000000-3333-0000-0000-000000000005'
+\set NP '15000000-3333-0000-0000-000000000001'
+\set NF '16000000-3333-0000-0000-000000000001'
+\set N1 '17000000-3333-0000-0000-000000000001'
+\set N2 '17000000-3333-0000-0000-000000000002'
 
 -- ---------- 1. Roller er backfillet fra oppretterne ----------
 select public.t_check('områdets oppretter ble områdeeier',
@@ -141,14 +145,98 @@ select public.t_check('… men IKKE den aktive søskenlista',
   (select count(*) from public.cards where id = :'CZS') = 0
   and not public.can_read_card(:'CZS', :'Z'));
 
+-- ---------- 5c. Den GAMLE, ANONYME MÅL-SJEKKEN ER RYDDET BORT ----------
+-- Regresjonsvakten for produksjonsfeilen etter PR 3A: `memberships_check` og
+-- `share_invites_check` (PostgreSQL-navn på `check (num_nonnulls(universe_id,
+-- group_id, card_id) = 1)` i den opprinnelige `create table`) kjenner ikke
+-- notatnivåene. Står de igjen, avvises HVER medlemskapsrad for en bokhylle —
+-- og migreringen stopper midt i backfillen, slik den gjorde i produksjon.
+reset role;
+select public.t_check('ingen pensjonert card_id-mål-sjekk står igjen',
+  (select count(*) from pg_constraint con
+     join pg_class rel on rel.oid = con.conrelid
+     join pg_namespace ns on ns.oid = rel.relnamespace
+    where ns.nspname = 'public'
+      and rel.relname in ('memberships', 'share_invites')
+      and con.contype = 'c'
+      and pg_get_constraintdef(con.oid) like '%num_nonnulls%'
+      and pg_get_constraintdef(con.oid) like '%card_id%') = 0);
+select public.t_check('den nye mål-sjekken dekker alle fem delbare objektene',
+  (select count(*) from pg_constraint con
+     join pg_class rel on rel.oid = con.conrelid
+     join pg_namespace ns on ns.oid = rel.relnamespace
+    where ns.nspname = 'public'
+      and con.conname in ('memberships_target_chk', 'share_invites_target_chk')
+      and pg_get_constraintdef(con.oid)
+          like '%num_nonnulls(universe_id, group_id, note_project_id, note_folder_id, note_id) = 1%') = 2);
+-- Og den slipper faktisk igjennom en notatrad — beviset som ikke hviler på
+-- hvordan sjekken er formulert.
+select public.t_check('en medlemskapsrad på bokhyllenivå godtas av databasen',
+  public.note_project_role(:'NP', :'O') = 'owner');
+-- Listesiden er urørt: mål-sjekken avviser fortsatt en rad uten mål, og
+-- listenivået er fortsatt stengt.
+select public.t_fails('en medlemskapsrad HELT uten mål avvises fortsatt',
+  format('insert into public.memberships (user_id, role) values (%L, ''member'')', :'X'));
+select public.t_fails('en medlemskapsrad med TO mål avvises fortsatt',
+  format('insert into public.memberships (user_id, universe_id, group_id, role) values (%L, %L, %L, ''member'')',
+         :'X', :'U', :'G1'));
+
+-- ---------- 5d. Eksisterende notatdata fikk eierrolle av backfillen ----------
+-- Bokhyllen fantes FØR PR 3A og hadde ingen medlemskapsrad. RLS-en på
+-- notatsiden spør utelukkende `memberships`, så uten denne backfillen ville
+-- eieren mistet sin egen bokhylle av syne i det de nye policyene ble
+-- installert.
+select public.t_check('bokhyllens oppretter ble bokhylleeier',
+  public.note_project_role(:'NP', :'O') = 'owner'
+  and public.note_project_owner_count(:'NP') = 1);
+select public.t_check('notatboken og notatene fikk INGEN egne rader …',
+  public.note_folder_role(:'NF', :'O') is null
+  and public.note_role(:'N1', :'O') is null
+  and public.note_role(:'N2', :'O') is null);
+select public.t_check('… men arver eierskapet fra bokhyllen',
+  public.is_note_folder_owner(:'NF', :'O')
+  and public.is_note_owner(:'N1', :'O')
+  and public.is_note_owner(:'N2', :'O'));
+select public.t_check('ingen andre fikk tilgang til bokhyllen',
+  not public.can_read_note_project(:'NP', :'M')
+  and not public.can_read_note(:'N1', :'X'));
+
+-- Gjennom de NYE rettighetsfunksjonene og RLS-modellen, som eieren selv.
+reset role; select set_config('request.jwt.claim.sub', :'O', false); set role authenticated;
+select public.t_check('eieren LESER bokhylle, notatbok og begge notatene gjennom RLS',
+  (select count(*) from public.note_projects where id = :'NP') = 1
+  and (select count(*) from public.note_folders where id = :'NF') = 1
+  and (select count(*) from public.notes where id in (:'N1', :'N2')) = 2);
+select public.t_check('capability-funksjonene sier at eieren kan redigere alle tre nivåene',
+  public.can_edit_content('note_project', :'NP', :'O')
+  and public.can_edit_content('note_folder', :'NF', :'O')
+  and public.can_edit_content('note', :'N1', :'O')
+  and public.can_edit_content('note', :'N2', :'O'));
+update public.note_projects set name = 'Bokhylla etter migrering', ts = 1 where id = :'NP';
+update public.note_folders  set name = 'Notatboka etter migrering', ts = 1 where id = :'NF';
+update public.notes set title = 'Notatet etter migrering', ts = 1 where id = :'N1';
+select public.t_check('… og skrivingen gikk faktisk gjennom',
+  (select name  from public.note_projects where id = :'NP') = 'Bokhylla etter migrering'
+  and (select name  from public.note_folders where id = :'NF') = 'Notatboka etter migrering'
+  and (select title from public.notes where id = :'N1') = 'Notatet etter migrering');
+select public.t_check('eieren kan invitere til bokhyllen med den nye modellen',
+  public.can_invite_to('note_project', :'NP', :'O')
+  and public.can_delete_object('note_project', :'NP', :'O'));
+
 -- ---------- 6. Idempotens ----------
 -- users-and-sharing.sql er allerede kjørt to ganger av run-tests.sh; her
 -- kontrollerer vi at det ikke ble duplikater av noe slag.
 reset role;
 select public.t_check('ingen dupliserte roller etter dobbel kjøring',
   (select count(*) from (
-     select user_id, coalesce(universe_id::text, group_id::text) k, count(*) n
+     select user_id, coalesce(universe_id::text, group_id::text,
+                              note_project_id::text, note_folder_id::text, note_id::text) k,
+            count(*) n
        from public.memberships group by 1, 2 having count(*) > 1) d) = 0);
+select public.t_check('bokhylle-backfillen ga NØYAKTIG én rad etter dobbel kjøring',
+  (select count(*) from public.memberships where note_project_id = :'NP'::uuid) = 1
+  and (select count(*) from public.memberships
+        where note_folder_id is not null or note_id is not null) = 0);
 select public.t_check('ingen dupliserte mapper etter dobbel kjøring',
   (select count(*) from public.groups where universe_id = :'U' and name = 'Y-lista') = 1
   and (select count(*) from public.groups where universe_id = :'U') = 5);

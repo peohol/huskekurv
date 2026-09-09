@@ -901,6 +901,16 @@ bokhylle som ennå ikke har EN ENESTE rolle, oppretteren som eier; notatbøkene 
 notatene arver. Kriteriet «ingen rader i det hele tatt» gjør backfillen naturlig
 idempotent og hindrer at en bevisst fjernet rolle kommer tilbake.
 
+**Rekkefølgen er en del av kontrakten.** Den aller første formen av
+`memberships` og `share_invites` skrev mål-vilkåret rett inn i `create table`,
+og PostgreSQL navnga det selv — `memberships_check` hhv. `share_invites_check`.
+Den sjekken teller bare område, mappe og liste, så den avviser hver eneste rad
+på notatnivå. Migreringen dropper derfor alle mål-sjekker på de to tabellene som
+nevner `card_id`, uansett navn, FØR notatkolonnene tas i bruk; den navngitte
+`*_target_chk` — nøyaktig ett av de fem delbare objektene — settes etterpå, når
+listemedlemskapene er migrert bort. Uten det steget stopper backfillen midt i
+fila og etterlater databasen halvmigrert.
+
 ---
 
 ## 15. Testdekning
@@ -911,7 +921,11 @@ idempotent og hindrer at en bevisst fjernet rolle kommer tilbake.
 * `supabase/tests/test-group-moves.sql` — reorder, reparenting, kryssdomene-
   kopiering, gravsteiner, rettighetskrav, rollback.
 * `supabase/tests/test-list-share-migration.sql` (+ `legacy-share-fixture.sql`)
-  — oppgraderingsløpet fra den gamle databasefasongen.
+  — oppgraderingsløpet fra den gamle databasefasongen, inkludert eksisterende
+  notatdata: bokhylle, notatbok og notater fra før delingen fantes.
+* `supabase/tests/partial-migration-fixture.sql` — den HALVMIGRERTE databasen
+  (nye policyer på plass, backfillen aldri kjørt). Samme testfil kjøres på nytt
+  over den, så reparasjonsveien er dekket like godt som de to ytterpunktene.
 * `supabase/tests/test-users-and-sharing.sql` — grunnflyten (registrering, RLS,
   deling, import, gravsteiner, anon-sperre).
 * `supabase/tests/test-account-deletion.sql` — kontosletting: hva som slettes,

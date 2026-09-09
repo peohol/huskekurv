@@ -9,6 +9,13 @@
 -- tidligere EFFEKTIVE tilgangen er bevart uten at noen har fått tilgang til
 -- søskenlister.
 --
+-- NOTATSIDEN er med av samme grunn, i sin EGEN gamle fasong: bokhylle,
+-- notatbok og notat slik de så ut da `owner_id` var hele autorisasjonen og
+-- det ikke fantes en eneste medlemskapsrad for dem. Uten den delen tester
+-- fixturen en database som aldri har eksistert — og nettopp det slapp
+-- produksjonsfeilen gjennom: backfillen av bokhylleeiere hadde ingen rader å
+-- sette inn, så den gamle, anonyme mål-sjekken ble aldri utfordret.
+--
 -- Skal ALDRI kjøres mot Supabase.
 -- ============================================================
 
@@ -102,6 +109,9 @@ create table public.memberships (
   trashed            boolean not null default false,
   created_at         timestamptz not null default now(),
   updated_at         timestamptz not null default now(),
+  -- ANONYM CHECK, akkurat som i produksjon: PostgreSQL navngir den
+  -- `memberships_check`. Den er selve fellen migreringen må rydde bort før
+  -- notatnivåene kan få medlemskapsrader.
   check (num_nonnulls(universe_id, group_id, card_id) = 1)
 );
 
@@ -116,7 +126,61 @@ create table public.share_invites (
   status        text not null default 'pending'
                 check (status in ('pending', 'accepted', 'declined', 'revoked')),
   created_at    timestamptz not null default now(),
-  responded_at  timestamptz
+  responded_at  timestamptz,
+  -- Produksjons tvilling til `memberships_check`: PostgreSQL kaller den
+  -- `share_invites_check`, og den kjenner heller ikke notatnivåene.
+  check (num_nonnulls(universe_id, group_id, card_id) = 1)
+);
+
+-- NOTATSIDEN slik den var FØR PR 3A: `owner_id` var hele autorisasjonen.
+-- Ingen `locked`/`unlocked`/`invite_policy` (de kom med delingen), og ingen
+-- medlemskapsrader i det hele tatt. users-and-sharing.sql legger på de nye
+-- kolonnene selv — det er nettopp den additive veien som skal bevises.
+create table public.note_projects (
+  id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references public.profiles (id) on delete cascade,
+  name       text not null default '',
+  collapsed  boolean not null default false,
+  trashed    boolean not null default false,
+  ts         bigint not null default 0,
+  org        text   not null default '',
+  pos        double precision not null default 0,
+  pos_ts     bigint not null default 0,
+  pos_org    text   not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.note_folders (
+  id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references public.profiles (id) on delete cascade,
+  project_id uuid not null references public.note_projects (id) on delete cascade deferrable initially deferred,
+  name       text not null default '',
+  trashed    boolean not null default false,
+  ts         bigint not null default 0,
+  org        text   not null default '',
+  pos        double precision not null default 0,
+  pos_ts     bigint not null default 0,
+  pos_org    text   not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table public.notes (
+  id         uuid primary key default gen_random_uuid(),
+  owner_id   uuid not null references public.profiles (id) on delete cascade,
+  project_id uuid not null references public.note_projects (id) on delete cascade deferrable initially deferred,
+  folder_id  uuid references public.note_folders (id) on delete set null deferrable initially deferred,
+  title      text not null default '',
+  body       jsonb not null default '{"v":1,"blocks":[]}'::jsonb,
+  trashed    boolean not null default false,
+  ts         bigint not null default 0,
+  org        text   not null default '',
+  pos        double precision not null default 0,
+  pos_ts     bigint not null default 0,
+  pos_org    text   not null default '',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 -- ------------------------------------------------------------
@@ -128,6 +192,11 @@ create table public.share_invites (
 --   Z  = direkte LISTE-mottaker av en TRASHET liste, i en mappe som har en
 --        ANNEN aktiv liste → må IKKE promoteres inn i mappen (da ville Z fått
 --        se søskenlista); lista skal splittes ut som før.
+--
+-- I tillegg: O har en EKSISTERENDE bokhylle med en notatbok, et notat i
+-- notatboken og et FRITT notat (uten notatbok). Ingen av dem har en
+-- medlemskapsrad — backfillen skal gi O eierrollen på bokhyllen, og de to
+-- nivåene under skal arve.
 -- ------------------------------------------------------------
 
 insert into auth.users (id, email) values
@@ -191,3 +260,21 @@ insert into public.memberships (user_id, card_id, pos) values
 insert into public.share_invites (inviter_id, invitee_email, card_id, status) values
   ('01000000-3333-0000-0000-00000000000a', 'mig-ny@example.com',
    '13000000-3333-0000-0000-000000000002', 'pending');
+
+-- Notatsiden: en bokhylle O opprettet den gangen `owner_id` var alt som
+-- fantes. Ingen medlemskapsrader — nøyaktig som produksjon før PR 3A.
+insert into public.note_projects (id, owner_id, name, pos) values
+  ('15000000-3333-0000-0000-000000000001', '01000000-3333-0000-0000-00000000000a',
+   'Gammel bokhylle', 1);
+insert into public.note_folders (id, owner_id, project_id, name, pos) values
+  ('16000000-3333-0000-0000-000000000001', '01000000-3333-0000-0000-00000000000a',
+   '15000000-3333-0000-0000-000000000001', 'Gammel notatbok', 1);
+insert into public.notes (id, owner_id, project_id, folder_id, title, body, pos) values
+  ('17000000-3333-0000-0000-000000000001', '01000000-3333-0000-0000-00000000000a',
+   '15000000-3333-0000-0000-000000000001', '16000000-3333-0000-0000-000000000001',
+   'Gammelt notat', '{"v":1,"blocks":[{"t":"p","s":"Skrevet før delingen fantes"}]}'::jsonb, 1),
+  -- FRITT notat: ligger rett i bokhyllen. Arven går en annen vei enn for et
+  -- notat i en notatbok, så begge må være med.
+  ('17000000-3333-0000-0000-000000000002', '01000000-3333-0000-0000-00000000000a',
+   '15000000-3333-0000-0000-000000000001', null,
+   'Gammelt fritt notat', '{"v":1,"blocks":[]}'::jsonb, 2);
