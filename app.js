@@ -4706,10 +4706,12 @@
        sin egen detektor tilbake, `dragover` fordi det er DER målet skifter —
        akkurat signalet Smetts egen plugin husker på. */
     const m = b.manager.monitor;
-    m.addEventListener('dragstart', () => { dndSwapForget(); dndTuneSortCollisions(b); });
+    m.addEventListener('dragstart', () => {
+      dndActiveBoard = b; dndSwapForget(); dndTuneSortCollisions(b);
+    });
     m.addEventListener('dragmove', () => dndTuneSortCollisions(b));
     m.addEventListener('dragover', () => dndSwapRemember(b.manager.dragOperation));
-    m.addEventListener('dragend', dndSwapForget);
+    m.addEventListener('dragend', () => { dndSwapForget(); dndActiveBoard = null; });
   }
 
   // Layout-boks uten evt. pågående FLIP-transform, så treffdeteksjon er stabil
@@ -7155,11 +7157,15 @@
      virket avhang av hvor høyt det andre kortet var, altså av tittel- og
      utdragslengde — en sorteringsregel ingen kan se.
 
-     NEVNEREN ER DERFOR DEN MINSTE AV DE TO, nøyaktig som Smett selv gjør på
-     TVERRAKSEN (`crossAxisOverlap`). Da betyr «halvt overlapp» det samme
-     uansett hvem som ble løftet, og formen på det løftede objektet er igjen
-     ren maling. Tersklene selv er URØRT — 0,2 / 0,5 / 300 ms er Smetts, og
-     hentes fra `DEFAULT_HYSTERESIS` så de ikke kan komme i utakt.
+     SVARET ER Å MÅLE MED BOKSEN DRAGET HADDE FØR KRYMPINGEN, ikke å bytte
+     nevner. Formelen er fortsatt Smetts (`overlapp / MÅLETS høyde`), og
+     semantikken blir da nøyaktig den samme som før det kompakte løftet fantes
+     — krympingen er igjen ren maling. Å dele på den minste av de to i stedet
+     var fristende og FEIL: forholdet vokser da raskere enn før, og en kompakt
+     kategori byttet plass med en nabo den så vidt streifet
+     (`dnd-extract-thresholds` F2, målt). Tersklene selv er URØRT — 0,2 / 0,5 /
+     300 ms er Smetts, og hentes fra `DEFAULT_HYSTERESIS` så de ikke kan komme
+     i utakt.
 
      HYSTERESEN FØLGER MED. Smetts egen plugin husker bare bytter der målets
      detektor ER Smetts (`isHysteresisDetector`), så en erstatning ville stille
@@ -7183,39 +7189,79 @@
     if (kilde && t.id === kilde.id) return;
     dndSwapMemo = { targetId: t.id, at: performance.now() };
   }
-  // Overlapp langs én akse, delt på den MINSTE av de to utstrekningene.
+  // Overlapp langs én akse, delt på MÅLETS utstrekning — Smetts egen formel.
   function dndOverlapRatio(a, o, akse) {
     const fra = akse === 'y' ? Math.max(a.top, o.top) : Math.max(a.left, o.left);
     const til = akse === 'y' ? Math.min(a.bottom, o.bottom) : Math.min(a.right, o.right);
-    const spenn = akse === 'y' ? Math.min(a.height, o.height) : Math.min(a.width, o.width);
+    const spenn = akse === 'y' ? o.height : o.width;
     return spenn > 0 ? Math.max(0, til - fra) / spenn : 0;
+  }
+  /* Boksen sorteringen skal måle med: den draget HADDE før krympingen.
+     `.dnd-compact` folder bort kortkroppen, så objektet mister høyde NEDOVER
+     mens toppen står — den opprinnelige boksen strekker seg derfor fra samme
+     topp og ned til `dndFullH`. Tverraksen males som den er: der deler Smett
+     alt på den minste av de to, så den kompakte bredden koster ingenting. */
+  function dndSortRect(a) {
+    const h = Math.max(a.height, dndFullH || 0);
+    if (h === a.height) return a;
+    return { top: a.top, bottom: a.top + h, left: a.left, right: a.right,
+      width: a.width, height: h };
   }
   /* Alle sju board-ene er `axis: 'vertical'`, så hovedaksen er alltid y og
      tverraksen x. Formen på svaret er Smetts egen: nærmest senter vinner. */
-  function dndSortCollision(input) {
-    const op = input.dragOperation;
-    const form = input.droppable && input.droppable.shape;
+  function dndSortTilstand(droppable, op) {
+    const form = droppable && droppable.shape;
     if (!op || !form) return null;
     const rect = Smett.intentRectangle(op);
     if (!rect) return null;
     const a = rect.boundingRectangle || rect;
     const o = form.boundingRectangle;
     if (!o) return null;
-    const tilstand = {
-      ratio: dndOverlapRatio(a, o, 'y'),
-      crossRatio: dndOverlapRatio(a, o, 'x'),
-      reversing: !!dndSwapMemo && dndSwapMemo.targetId === input.droppable.id,
+    const sort = dndSortRect(a);
+    return {
+      ratio: dndOverlapRatio(sort, o, 'y'),
+      // Tverraksen er Smetts egen: den minste av de to, som før.
+      crossRatio: o.width > 0
+        ? Math.max(0, Math.min(a.right, o.right) - Math.max(a.left, o.left))
+          / Math.min(a.width, o.width)
+        : 0,
+      reversing: !!dndSwapMemo && dndSwapMemo.targetId === droppable.id,
       sinceSwapMs: dndSwapMemo ? performance.now() - dndSwapMemo.at : Number.POSITIVE_INFINITY,
+      senter: { dx: (o.left + o.width / 2) - (a.left + a.width / 2),
+        dy: (o.top + o.height / 2) - (a.top + a.height / 2) },
     };
-    if (!Smett.admitsSwap(tilstand, DND_HYST)) return null;
-    const d = Math.hypot((o.left + o.width / 2) - (a.left + a.width / 2),
-                         (o.top + o.height / 2) - (a.top + a.height / 2));
+  }
+  function dndSortCollision(input) {
+    const tilstand = dndSortTilstand(input.droppable, input.dragOperation);
+    if (!tilstand || !Smett.admitsSwap(tilstand, DND_HYST)) return null;
+    const d = Math.hypot(tilstand.senter.dx, tilstand.senter.dy);
     return {
       id: input.droppable.id,
       value: d === 0 ? 1 : 1 / d,
       type: Smett.CollisionType.Collision,
       priority: Smett.CollisionPriority.Normal,
     };
+  }
+  /* HYSTERESEN ER VÅR EGEN NÅ, og da må den kunne måles direkte. Låsen kan
+     ikke leses av DOM-en — mens den holder igjen godtas ingen mål, og
+     forhåndsvisningen faller da tilbake til utgangspunktet, som er nøyaktig
+     den samme rekkefølgen et fullført bytte tilbake ville gitt. Testen leser
+     derfor tilstanden selv (`dnd-sort-reversible`). Ren avlesning: ingen
+     bivirkning, og ingenting i appen kaller den. */
+  let dndActiveBoard = null;
+  function dndSortProbe(id) {
+    const b = dndActiveBoard;
+    if (!b) return null;
+    for (const droppable of b.manager.registry.droppables) {
+      if (droppable.id !== id) continue;
+      const t = dndSortTilstand(droppable, b.manager.dragOperation);
+      if (!t) return null;
+      return { ratio: t.ratio, crossRatio: t.crossRatio, reversing: t.reversing,
+        sinceSwapMs: t.sinceSwapMs, admits: Smett.admitsSwap(t, DND_HYST),
+        lockMs: DND_HYST.reverseLockMs, reverseRatio: DND_HYST.reverseRatio,
+        swapRatio: DND_HYST.swapRatio };
+    }
+    return null;
   }
   /* Smett tildeler sin egen detektor til hvert sorterbart objekt, også på nytt
      ved `sync()` midt i en gest. Vi bytter derfor VÅR inn igjen hver runde —
@@ -7670,9 +7716,13 @@
      står objektet derfor der det sto; det er kollapsen, og
      `navHoldGrab`/`anchorBegin`, som holder layouten i ro. */
   let dndCompactEl = null;
+  /* Høyden objektet HADDE før krympingen. Sorteringen måler mot den, ikke mot
+     den malte (`dndSortCollision`): formen er maling, semantikken skal stå. */
+  let dndFullH = 0;
   function dndCompactLift(el, b) {
     if (!el) return;
     dndCompactEl = el;
+    dndFullH = el.offsetHeight || 0;      // FØR krympingen
     el.classList.add('dnd-compact');
     const op = b && b.manager && b.manager.dragOperation;
     const at = op && op.position && (op.position.initial || op.position.current);
@@ -7692,6 +7742,7 @@
   function dndReleaseCompact() {
     const el = dndCompactEl;
     dndCompactEl = null;
+    dndFullH = 0;
     if (!el) return;
     el.style.translate = '';
     let frames = 0;
@@ -24912,6 +24963,9 @@
     get notesCardBoard() { return notesCardBoard; },
     get notesNavCardBoard() { return notesNavCardBoard; },
     get notesNavRowBoard() { return notesNavRowBoard; },
+    // Sorteringens hysterese-tilstand for ETT mål, lest direkte. Se
+    // `dndSortProbe`: låsen kan ikke observeres av DOM-en.
+    dndSortProbe,
     openAccount, closeAccount,
     canonical, reconcile, emptyDoc, docFromMyState, contentDocFromMy, applyMyDoc, cloudCycle,
     isSchemaMismatch, isTombstoneReject, isNetworkError, tombIds,

@@ -13,17 +13,22 @@
     1. To notater med bevisst svært ulik kompakt form (tittel OG utdrag).
     2. Løft det SMALE/LAVE: A→B→A i ett sammenhengende drag.
     3. Løft det BREDE/HØYE: samme, motsatt vei.
-    4. Terskelen står: en liten bevegelse bytter fortsatt ingenting. Nevneren
-       ble mindre, så forholdet vokser raskere — uten dette leddet kunne
-       fiksen gjort sorteringen overfølsom uten at noe annet merket det.
-    5. `pos` etter slippet stemmer med rekkefølgen på skjermen.
+    4. REVERSERINGSLÅSEN, lest direkte fra tilstanden (`dndSortProbe`).
+       Hysteresen er Huskis' egen nå, ikke Smetts plugin, så den må voktes for
+       seg. Det avgjørende leddet er at naboen i det hele tatt KJENNES IGJEN
+       som reversering: 104 ms-regresjonen var nettopp at hukommelsen ble
+       overskrevet av kolonne-mål, så `reversing` sto usant og låsen forsvant
+       stille. I tillegg påstås låsens kontrakt — bytte tilbake krever både at
+       tiden har løpt og at overlappet er over den høyere terskelen.
+    5. Terskelen står: en liten bevegelse bytter fortsatt ingenting.
+    6. `pos` etter slippet stemmer med rekkefølgen på skjermen.
 
   DEN TILSIKTEDE 300 ms-LÅSEN kan ikke leses av DOM-en, og det er verdt å vite
   hvorfor: så lenge låsen holder igjen, godtas INGEN mål — og da faller
   forhåndsvisningen tilbake til utgangspunktet, som er nøyaktig den samme
   rekkefølgen et fullført bytte tilbake ville gitt. De to er derfor umulige å
-  skille utenfra. Testen venter i stedet låsen ut der returen skal skje (2 og
-  3), slik at en tilsiktet forsinkelse aldri kan bli lest som feilen.
+  skille utenfra. De funksjonelle sjekkene (2 og 3) venter derfor låsen ut der
+  returen skal skje, mens sjekk 4 leser tilstanden direkte.
 
   Kjøres på desktop og touch. Notatfanen er aldri låst til én akse
   (`sideTargets`), så begge pekertypene måler den samme sorteringen.
@@ -96,9 +101,18 @@ const posRekke = (p) => p.evaluate(() => window.__huskis.state.notes
 /* Ett sammenhengende drag: løft, gå forbi den andre, og tilbake igjen — uten å
    slippe. `hvil` er ventetiden før returen, så en TILSIKTET 300 ms
    reverseringslås kan skilles fra en varig, asymmetrisk feil. */
+// Forrige drag skal være HELT ryddet før neste løft: `dndReleaseCompact` tar
+// `.dnd-compact` av først når dnd-kit har sluppet objektet, og et kort som
+// fortsatt er kompakt har en annen boks enn den vi sikter på.
+async function iRo(p) {
+  await p.waitForFunction(() => !document.querySelector('[data-dnd-dragging], .dnd-compact'),
+    null, { timeout: 8000, polling: 100 });
+}
 async function framOgTilbake(p, tittel, touch, opts) {
   const { retning = 1, hvil = 450 } = opts || {};
+  await iRo(p);
   const kort = p.locator('#notes-board .note-card', { hasText: tittel }).first();
+  await kort.scrollIntoViewIfNeeded();
   const b = await kort.boundingBox();
   const x = b.x + Math.min(60, b.width / 2);
   const y0 = b.y + 20;
@@ -168,9 +182,72 @@ async function run(label, viewport, touch) {
     høyt.pos.join('|') === høyt.etterSlipp.join('|') && høyt.pos[0] === KORT,
     JSON.stringify({ skjerm: høyt.etterSlipp, pos: høyt.pos }));
 
-  /* ---------- 4) Terskelen står: en liten bevegelse bytter ingenting ---------- */
-  const smått = await p.evaluate(() => null).then(async () => {
+  /* ---------- 4) REVERSERINGSLÅSEN, lest direkte ----------
+     Hysteresen er Huskis' egen nå (`dndSwapMemo`), ikke Smetts plugin, så den
+     må voktes for seg. Den kan ikke leses av DOM-en — mens låsen holder igjen
+     godtas ingen mål, og forhåndsvisningen faller da tilbake til
+     utgangspunktet, som er nøyaktig den samme rekkefølgen et fullført bytte
+     tilbake ville gitt. Testen leser derfor tilstanden (`dndSortProbe`).
+     Uten dette leddet ville 104 ms-regresjonen — der kolonne-mål overskrev
+     hukommelsen, så låsen forsvant stille — vært grønn. */
+  const lås = await (async () => {
+    await iRo(p);
     const kort = p.locator('#notes-board .note-card', { hasText: KORT }).first();
+    const naboId = await p.locator('#notes-board .note-card', { hasText: LANG })
+      .first().getAttribute('data-id');
+    const b = await kort.boundingBox();
+    const x = b.x + Math.min(60, b.width / 2), y0 = b.y + 20;
+    await G.lift(p, { x, y: y0 }, touch);
+    for (let i = 1; i <= 14; i++) {
+      await G.travel(p, { x, y: y0 + i * 16 }, touch, { steps: 1, settle: 40 });
+    }
+    const byttet = await rekke(p);
+    /* ETT raskt steg tilbake, uten ventetid: låsen er 300 ms, og en vanlig
+       `travel` (som sender mange punkter med opphold) ville brukt dem opp før
+       vi rakk å lese. */
+    const tilbake = y0 + 7 * 16;
+    if (touch) await G.touchMove(p, x, tilbake);
+    else await p.mouse.move(x, tilbake, { steps: 2 });
+    const iLåsen = await p.evaluate((id) => window.__huskis.dndSortProbe(id), naboId);
+    await p.waitForTimeout(420);
+    // Samme sted, bare senere: eneste forskjell er at låsen har løpt ut.
+    if (touch) await G.touchMove(p, x, tilbake - 1);
+    else await p.mouse.move(x, tilbake - 1, { steps: 2 });
+    await p.waitForTimeout(80);
+    const etterLåsen = await p.evaluate((id) => window.__huskis.dndSortProbe(id), naboId);
+    // Tilbake til utgangspunktet før slippet, så neste sjekk starter i ro.
+    await G.travel(p, { x, y: y0 }, touch);
+    await G.drop(p, undefined, touch);
+    await p.waitForTimeout(500);
+    return { byttet, iLåsen, etterLåsen };
+  })();
+  log(label + ' 4: naboen kjennes igjen som REVERSERING etter byttet',
+    !!lås.iLåsen && lås.iLåsen.reversing === true, JSON.stringify(lås.iLåsen));
+  /* … OG DA GJELDER LÅSENS EGEN KONTRAKT: et bytte tilbake godtas bare når
+     BEGGE leddene er oppfylt — låsen utløpt OG overlappet over den høyere
+     terskelen. Påstanden er formulert som kontrakten, ikke som et bestemt
+     tidspunkt: én CDP-berøring pluss en avlesning tar lengre tid enn de 300 ms
+     på touch, så et krav om å lese INNENFOR vinduet ville vært umulig å
+     oppfylle der uten å måle noe annet enn koden. */
+  const kontrakt = (t) => !!t && t.admits === (t.sinceSwapMs >= t.lockMs && t.ratio >= t.reverseRatio);
+  log(label + ' 4: … og låsens kontrakt holder: både tid OG overlapp må til',
+    kontrakt(lås.iLåsen), JSON.stringify(lås.iLåsen));
+  /* ETTER låsen er det overlappet alene som avgjør, mot den HØYERE terskelen.
+     Påstanden er kontrakten, ikke et bestemt tall: hvor stort overlappet blir
+     på akkurat dette punktet avhenger av kortenes høyder, og de er ikke like
+     på de to viewportene. */
+  log(label + ' 4: … mens overlappet ALENE avgjør når låsen har løpt ut',
+    !!lås.etterLåsen && lås.etterLåsen.sinceSwapMs >= lås.etterLåsen.lockMs
+    && kontrakt(lås.etterLåsen), JSON.stringify(lås.etterLåsen));
+
+  /* ---------- 5) Terskelen står: en liten bevegelse bytter ingenting ---------- */
+  const smått = await p.evaluate(() => null).then(async () => {
+    await iRo(p);
+    // Utgangspunktet leses AV SKJERMEN, ikke antatt: de foregående sjekkene
+    // slipper der de slipper, og påstanden her er «ingenting endret seg».
+    const før = await rekke(p);
+    const kort = p.locator('#notes-board .note-card', { hasText: KORT }).first();
+    await kort.scrollIntoViewIfNeeded();
     const b = await kort.boundingBox();
     const x = b.x + Math.min(60, b.width / 2), y0 = b.y + 20;
     await G.lift(p, { x, y: y0 }, touch);
@@ -178,10 +255,11 @@ async function run(label, viewport, touch) {
     const under = await rekke(p);
     await G.drop(p, undefined, touch);
     await p.waitForTimeout(500);
-    return { under, etter: await posRekke(p) };
+    return { før, under, etter: await posRekke(p) };
   });
-  log(label + ' 4: en liten bevegelse bytter fortsatt ingenting',
-    smått.under[0] === KORT && smått.etter[0] === KORT, JSON.stringify(smått));
+  log(label + ' 5: en liten bevegelse bytter fortsatt ingenting',
+    smått.under.join('|') === smått.før.join('|')
+    && smått.etter.join('|') === smått.før.join('|'), JSON.stringify(smått));
 
   log(label + ': ingen JS-feil', errs.length === 0, errs.slice(0, 3).join(' | '));
   await browser.close();

@@ -42,15 +42,22 @@ er hvilket state-tre man slår opp i (`boardScope` / `navScope` / `ideaScope` /
 | `notesNavCardBoard` | `#notes-nav-board .card` (bokhyller) | `#notes-nav-board .board-col` | `.card-head` | `#note-project-trash-btn`, `#note-project-archive-btn` |
 | `notesNavRowBoard` | `#notes-nav-board .item` (notatbøker) | `#notes-nav-board .items-container` | `.item` | `.note-folder-trash-btn`, `.note-folder-archive-btn` |
 
-**Notat-scopene er de enkleste.** Ingen kategorier, ingen låser og ingen
-ekstrahering, så et slipp kan bety tre ting: ny plass i rekka (for en notatbok i
-tillegg en ny bokhylle), SLETTING når det lander i kassen, eller ARKIVERING når
-det lander i arkivet. Notatsiden er den eneste som har to kasser per nivå, og de
-er samme sone-maskineri ([`trash.md`](trash.md)): begge foldes ut av draget,
-begge markeres når man sikter, og bare betydningen skiller dem. Siden notatene
-hører til kontoen alene, er det ingen myndighet å spørre om — begge armes så
-snart objektet finnes, og med den samme retten (den som ikke får slette, får
-heller ikke arkivere ved å dra). NOTATKORTET
+**Notat-scopene har ingen kategorier og ingen ekstrahering**, så et slipp kan
+bety tre ting: ny plass i rekka (for en notatbok i tillegg en ny bokhylle),
+SLETTING når det lander i kassen, eller ARKIVERING når det lander i arkivet.
+Notatsiden er den eneste som har to kasser per nivå, og de er samme
+sone-maskineri ([`trash.md`](trash.md)): begge foldes ut av draget, begge
+markeres når man sikter, og bare betydningen skiller dem.
+
+**Men notatene deles, og da er det myndighet å spørre om.** Alle tre nivåene —
+bokhylle, notatbok og notat — har roller, låser og capabilities som resten av
+appen ([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14). De to
+kassene spør derfor HVER SIN rett, og feiler lukket: arkivet
+`can_edit_content` (`draggedCanBeArchived`), søppelkassen `can_delete_object`
+(`draggedCanBeTrashed`). Et rent direkte medlem som lovlig kan redigere et delt
+notat, men ikke ta det fra alle andre, får arkivmålet foldet ut og
+søppelkassen ikke — den samme forskjellen objektmenyens «Arkiver»- og
+«Slett»-rader gjør. En ren leser får ingen av dem. NOTATKORTET
 er sin egen dra-sone i sin helhet: kortet har ingen indre kontroller å treffe, så
 klikk åpner editoren og klikk-og-hold løfter — dnd-kits egen aktiveringsterskel
 skiller de to, og klikk-vakten svelger klikket som ellers ville fulgt et slipp.
@@ -293,8 +300,12 @@ uten dette ville stille mistet reverseringslåsen og gjort alt til 20 %.
 Låsen kan ikke leses av DOM-en, og det er verdt å vite hvorfor: mens den holder
 igjen, godtas INGEN mål, og forhåndsvisningen faller da tilbake til
 utgangspunktet — nøyaktig den samme rekkefølgen et fullført bytte tilbake ville
-gitt. `dnd-sort-reversible` venter derfor låsen ut der returen skal skje, i
-stedet for å påstå noe om de 300 ms.
+gitt. `dnd-sort-reversible` venter derfor låsen ut i de FUNKSJONELLE sjekkene,
+og leser tilstanden direkte i sin egen (`dndSortProbe`): naboen skal kjennes
+igjen som reversering, en retur innen 300 ms skal avvises, og den SAMME
+geometrien skal godtas når låsen har løpt ut. Hysteresen er Huskis' egen nå, så
+den må voktes for seg — 104 ms-regresjonen over var usynlig for enhver
+DOM-basert test.
 
 - **Retningen er borte, og reverseringslåsen gjør jobben den gjorde.**
   Detektoren har ingen retningsinngang — den tar nærmeste godkjente nabo. Det er
