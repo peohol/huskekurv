@@ -326,6 +326,23 @@ kontrolltegn, gir en adresse uten skjema `https:`, og slipper bare gjennom
 `http:`, `https:` og `mailto:`. Alt annet — `javascript:`, `data:`, `blob:` —
 blir tom streng, både på vei inn i tilstanden og igjen når dokumentet rendres.
 
+#### Ankeret som forlater appen: clipboard-HTML-en
+
+«Kopier alt» skriver notatet til utklippstavlen som `text/html`, og DER er
+lenken et vanlig `<a href>` — ellers ville Word, Outlook og Google Docs fått
+tekst uten lenke ([`notater-plan.md`](notater-plan.md), «Utklippstavlen»).
+Regelen over står likevel: den strengen settes ALDRI inn i Huskis' eget DOM,
+den går rett til utklippstavlen. Appens egne noder bærer fortsatt adressen i
+`data-url`.
+
+Ankeret skrives ett sted — `noteHtmlAnchor()` i `app.js` — og adressen går
+gjennom `safeNoteUrl()` først, så en adresse med et skjema som kan kjøre kode
+aldri forlater appen som en klikkbar lenke. Tekstvakten i
+`tests/capacitor-android.test.js` fritar nøyaktig denne ene forekomsten, på
+dette ene stedet, og KREVER at den finnes — som fritaket for `window.open`.
+`tests/external-links.test.js` ser fra den andre kanten: DOM-et er fortsatt
+uten `<a href>`, også etter en kopiering.
+
 #### Å åpne en lenke: `openExternalUrl()`
 
 Å åpne lenken går gjennom **ÉN funksjon i `app.js`**, og det er den eneste

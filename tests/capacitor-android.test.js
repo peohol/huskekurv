@@ -1774,6 +1774,23 @@ function jsOmråder(tekst, modus) {
    koden. */
 const ÅPNE_FIL = 'app.js';
 const ÅPNE_FORM = "window.open(url, '_blank', 'noopener')";
+/* DET ENE ANKERET, og det ankrer ingenting i Huskis. «Kopier alt» legger
+   notatet på utklippstavlen som `text/html`, slik at Word, Outlook og Google
+   Docs får lenkene med seg (docs/notater-plan.md, «Utklippstavlen»). Strengen
+   går RETT til utklippstavlen: den settes aldri inn i appens eget DOM, og
+   `tests/external-links.test.js` beviser fra den andre kanten at DOM-et
+   fortsatt er uten `<a href>` — også etter en kopiering.
+
+   Fritaket er knyttet til STEDET, som `window.open`-fritaket over: én
+   forekomst, i app.js, inne i `noteHtmlAnchor()`. Mønsteret treffer formen to
+   ganger (`<a ` og `href=`), så begge posisjonene godtas — treffet på `href=`
+   begynner tre tegn ute i formen. Og fritaket er en PÅSTAND: sjekkene under
+   krever at formen finnes, at den står i den funksjonen, og at adressen har
+   vært gjennom `safeNoteUrl` FØRST. */
+const ANKER_FIL = 'app.js';
+const ANKER_FORM = '<a href="';
+const erAnkeret = (tekst, i) =>
+  tekst.startsWith(ANKER_FORM, i) || tekst.startsWith(ANKER_FORM, i - 3);
 /* Treffet begynner PÅ formen når mønsteret matchet linjestart, ellers på tegnet
    foran den — `open()`-mønsteret spiser ett ledetegn. Begge posisjonene godtas,
    så en omformatering ikke gjør fritaket til en gåte. */
@@ -1781,6 +1798,7 @@ const erÅpningen = (tekst, i) =>
   tekst.startsWith(ÅPNE_FORM, i) || tekst.startsWith(ÅPNE_FORM, i + 1);
 const utLenker = [];
 let åpneFritatt = 0;
+let ankerFritatt = 0;
 for (const f of WEB_KILDE) {
   const { tekst, linjeFor } = strippetMedLinjer(les(f), modusFor(f));
   for (const [navn, re] of UT_MØNSTRE) {
@@ -1793,7 +1811,10 @@ for (const f of WEB_KILDE) {
   for (const { del, fra } of jsOmråder(tekst, modusFor(f))) {
     for (const [navn, re] of JS_MARKUP) {
       re.lastIndex = 0;
-      for (const m of del.matchAll(re)) utLenker.push(f + ':' + linjeFor(fra + m.index) + ' (' + navn + ')');
+      for (const m of del.matchAll(re)) {
+        if (f === ANKER_FIL && erAnkeret(del, m.index)) { ankerFritatt++; continue; }
+        utLenker.push(f + ':' + linjeFor(fra + m.index) + ' (' + navn + ')');
+      }
     }
   }
 }
@@ -1816,6 +1837,20 @@ const iOpen = åpneKode.indexOf(ÅPNE_FORM);
 check('åpningen ligger i openExternalUrl, og adressen normaliseres av safeNoteUrl først',
   iFn > -1 && iSafe > iFn && iOpen > iSafe && iOpen - iFn < 1200,
   'openExternalUrl@' + iFn + ' safeNoteUrl@' + iSafe + ' open@' + iOpen);
+
+/* Det samme kravet til ankeret. Mønsteret treffer formen to ganger, så to
+   fritak er nøyaktig ÉN forekomst — og den skal ligge i `noteHtmlAnchor`, med
+   adressen normalisert først. Avstanden holdes kort: funksjonen er fire
+   linjer. */
+const ankerKode = strippet(les(ANKER_FIL), 'js');
+const iAnkerFn = ankerKode.indexOf('function noteHtmlAnchor(');
+const iAnkerSafe = iAnkerFn < 0 ? -1 : ankerKode.indexOf('safeNoteUrl(url)', iAnkerFn);
+const iAnker = ankerKode.indexOf(ANKER_FORM);
+check('nøyaktig ÉTT anker i hele web-kilden, og det står i ' + ANKER_FIL,
+  ankerFritatt === 2, (ankerFritatt / 2) + ' forekomst(er) på den fritatte formen');
+check('ankeret ligger i noteHtmlAnchor, og adressen normaliseres av safeNoteUrl først',
+  iAnkerFn > -1 && iAnkerSafe > iAnkerFn && iAnker > iAnkerSafe && iAnker - iAnkerFn < 400,
+  'noteHtmlAnchor@' + iAnkerFn + ' safeNoteUrl@' + iAnkerSafe + ' anker@' + iAnker);
 
 /* VAKT FOR VAKTEN. Alle sjekkene over hviler på at kommentarfjerneren faktisk
    etterlater koden. Hver feil den har hatt — `<!--` lest som markup i JS, `//`
@@ -1980,6 +2015,7 @@ const distTreff = [];
 let distAntall = 0;
 let guardFritatt = false;
 let distÅpne = 0;
+let distAnker = 0;
 if (byggUt.status === 0 && fs.existsSync(DIST)) {
   for (const q of distFiler(DIST, true)) {
     distAntall++;
@@ -2001,7 +2037,12 @@ if (byggUt.status === 0 && fs.existsSync(DIST)) {
     for (const { del, fra } of jsOmråder(tekst, modusFor(q))) {
       for (const [navn, re] of JS_MARKUP) {
         re.lastIndex = 0;
-        for (const m of del.matchAll(re)) distTreff.push(rel + ':' + linjeFor(fra + m.index) + ' (' + navn + ')');
+        for (const m of del.matchAll(re)) {
+          // Ankeret skal OGSÅ overleve byggesteget, og bare det: fritaket
+          // gjelder per treff, i dist/app.js, på nøyaktig samme form.
+          if (rel === path.join('dist', ANKER_FIL) && erAnkeret(del, m.index)) { distAnker++; continue; }
+          distTreff.push(rel + ':' + linjeFor(fra + m.index) + ' (' + navn + ')');
+        }
       }
     }
     for (const m of tekst.matchAll(/["'`][\x00-\x1f]*(https?:\/\/[^"'`\s]*)/gi)) {
@@ -2056,6 +2097,8 @@ check('den BYGDE dist/ har ingen utgående lenke heller (byggesteget legger inge
   distTreff.join(', ') || distAntall + ' filer skannet');
 check('den ene tillatte åpningen overlevde byggesteget — og fikk ingen selskap',
   byggUt.status === 0 && distÅpne === 1, distÅpne + ' i dist/' + ÅPNE_FIL);
+check('det ene tillatte ankeret overlevde byggesteget — og fikk ingen selskap',
+  byggUt.status === 0 && distAnker === 2, (distAnker / 2) + ' i dist/' + ANKER_FIL);
 /* Fritaket er en PÅSTAND, ikke bare en unnskyldning. Sjekken over feller det
    uventede, men ville stått grønn også hvis guarden FORSVANT ut av bygget —
    ingen treff er ingen treff. Kildesjekkene under ser fortsatt originalen, så

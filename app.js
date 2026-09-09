@@ -15804,6 +15804,633 @@
   }
 
   /* ------------------------------------------------------------
+     UTKLIPPSTAVLEN — HELE NOTATET UT, OG FREMMED INNHOLD INN
+     ------------------------------------------------------------
+     Fire konverteringer, hver med ÉN retning og ett ansvar:
+
+       dokument → HTML       `noteDocToHtml`      («Kopier alt», `text/html`)
+       dokument → ren tekst  `noteDocToPlain`     («Kopier alt», `text/plain`)
+       dokument → Markdown   `noteDocToMarkdown`  («Kopier som Markdown»)
+       fremmed inn → dokument `noteDocFromHtml` / `noteDocFromMarkdown`
+
+     KILDEN ER ALLTID MODELLEN, aldri editorens DOM. Derfor kopieres HELE
+     notatet uansett hvor markøren står, og derfor kan ingenting
+     Huskis-internt følge med ut: klasser, id-er, `data-*`, delingsinfo og
+     tidsstempler finnes ikke i det som serialiseres — bare blokker, markerte
+     kjøringer og adresser.
+
+     ANDRE VEIEN er den samme trakten som alt annet: fremmed markup tolkes i et
+     DØDT dokument (`DOMParser`, uten browsing context — ingen skript kjører og
+     ingen ressurser lastes), oversettes til modellen, og går gjennom
+     `sanitizeNoteDoc` før noe som helst settes inn. Fremmed HTML når aldri
+     appens eget DOM. Autoritativt: docs/notater-plan.md, «Utklippstavlen». */
+
+  const NOTE_HTML_ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+  const noteHtmlEsc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => NOTE_HTML_ESC[c]);
+
+  /* DEN ENE PLASSEN SOM SKRIVER ET ANKER — og det ankeret finnes aldri i
+     Huskis' eget DOM. Strengen går RETT til utklippstavlen, slik at Word,
+     Outlook og Google Docs får lenken med seg; appen selv fortsetter å bære
+     adressen i `data-url` og åpne den gjennom `openExternalUrl`
+     (docs/domains-and-urls.md). Adressen normaliseres på nytt her — et
+     dokument fra serveren er alt gjennom `safeNoteUrl`, men en vakt som bare
+     gjelder én vei inn er ingen vakt, og en `javascript:`-adresse skal aldri
+     kunne forlate appen som en klikkbar lenke. Uten gyldig skjema blir teksten
+     stående som ren tekst. */
+  function noteHtmlAnchor(url, inner) {
+    const safe = safeNoteUrl(url);
+    return safe ? '<a href="' + noteHtmlEsc(safe) + '">' + inner + '</a>' : inner;
+  }
+
+  /* Markeringene som TAGGER, i samme rekkefølge som `noteRunNode` bygger dem:
+     `<sub>` innerst, lenken ytterst. Semantiske tagger (`<strong>`/`<em>`)
+     fordi de er det Word, Outlook og Google Docs leser best. */
+  const NOTE_HTML_MARKS = [['b', 'strong'], ['i', 'em'], ['u', 'u'], ['sup', 'sup'], ['sub', 'sub']];
+  function noteRunToHtml(run) {
+    let out = noteHtmlEsc(run.s).replace(/\n/g, '<br>');
+    for (let i = NOTE_HTML_MARKS.length - 1; i >= 0; i--) {
+      const m = NOTE_HTML_MARKS[i];
+      if (run[m[0]]) out = '<' + m[1] + '>' + out + '</' + m[1] + '>';
+    }
+    return run.url ? noteHtmlAnchor(run.url, out) : out;
+  }
+  const noteRunsToHtml = (runs) => (runs || []).map(noteRunToHtml).join('');
+
+  /* Tittelen er SYNLIG innhold i notatet (den står over arket), så den følger
+     med som dokumentets første overskrift. Et notat uten tittel får ingen. */
+  function noteDocToHtml(doc, title) {
+    const out = [];
+    const t = String(title == null ? '' : title).trim();
+    if (t) out.push('<h1>' + noteHtmlEsc(t) + '</h1>');
+    ((doc && doc.blocks) || []).forEach((b) => {
+      if (b.t === 'hr') { out.push('<hr>'); return; }
+      if (b.t === 'ul' || b.t === 'ol') {
+        out.push('<' + b.t + '>'
+          + (b.items || []).map((it) => '<li>' + noteRunsToHtml(it) + '</li>').join('')
+          + '</' + b.t + '>');
+        return;
+      }
+      const tag = NOTE_TEXT_BLOCKS.indexOf(b.t) === -1 ? 'p' : b.t;
+      out.push('<' + tag + '>' + noteRunsToHtml(b.c) + '</' + tag + '>');
+    });
+    return out.join('\n');
+  }
+
+  /* Ren tekst: det samme dokumentet for et program som ikke kan formatering.
+     Kulepunkt og nummer skrives ut, fordi lista ellers blir usynlig. */
+  function noteDocToPlain(doc, title) {
+    const lines = [];
+    const t = String(title == null ? '' : title).trim();
+    if (t) { lines.push(t); lines.push(''); }
+    ((doc && doc.blocks) || []).forEach((b) => {
+      if (b.t === 'hr') { lines.push('---'); return; }
+      if (b.t === 'ul' || b.t === 'ol') {
+        (b.items || []).forEach((it, i) => {
+          lines.push((b.t === 'ul' ? '• ' : (i + 1) + '. ') + noteRunsText(it));
+        });
+        return;
+      }
+      lines.push(noteRunsText(b.c));
+    });
+    return lines.join('\n');
+  }
+
+  /* ---- Markdown ----
+     Tre markeringer har ingen universell Markdown-form: understrek, hevet og
+     senket skrift. Alle tre skrives som den INLINE HTML-en Markdown selv
+     tillater — `<u>`, `<sup>`, `<sub>` — fordi den er lesbar for et menneske,
+     forstås av Pandoc/GitHub/de fleste editorer, og aldri mister tekst.
+     Gjennomstreking finnes ikke i Huskis' modell og skrives derfor ikke. */
+  const noteMdEsc = (s) => String(s == null ? '' : s).replace(/([\\`*_[\]])/g, '\\$1');
+  /* Et avsnitt som TILFELDIGVIS begynner som en Markdown-blokk («1. januar»,
+     «- og så») skal ikke bli en liste når teksten leses tilbake. */
+  function noteMdLineSafe(s) {
+    return String(s)
+      .replace(/^(\s*)(#{1,6}\s|[-+]\s|>|\|)/, '$1\\$2')
+      .replace(/^(\s*)(\d+)([.)]\s)/, '$1$2\\$3');
+  }
+  // Parenteser i en adresse ville lukket `[tekst](…)` for tidlig.
+  const noteMdUrl = (url) => String(url).replace(/[()]/g, '\\$&');
+  function noteRunToMd(run) {
+    const raw = String(run.s || '');
+    const m = raw.match(/^(\s*)([\s\S]*?)(\s*)$/) || ['', '', raw, ''];
+    let core = noteMdEsc(m[2]);
+    // Markeringen legges rundt TEKSTEN, ikke rundt mellomrommene: `** fet **`
+    // er ikke fet i noen Markdown-motor.
+    if (core) {
+      if (run.sub) core = '<sub>' + core + '</sub>';
+      if (run.sup) core = '<sup>' + core + '</sup>';
+      if (run.u) core = '<u>' + core + '</u>';
+      if (run.i) core = '*' + core + '*';
+      if (run.b) core = '**' + core + '**';
+      const url = run.url ? safeNoteUrl(run.url) : '';
+      if (url) core = '[' + core + '](' + noteMdUrl(url) + ')';
+    }
+    return m[1] + core + m[3];
+  }
+  // Linjeskift INNE i en blokk er et hardt linjeskift i Markdown (to
+  // mellomrom), ikke et nytt avsnitt.
+  const noteRunsToMd = (runs) => (runs || []).map(noteRunToMd).join('').replace(/\n/g, '  \n');
+  function noteDocToMarkdown(doc, title) {
+    const parts = [];
+    const t = String(title == null ? '' : title).trim();
+    if (t) parts.push('# ' + noteMdEsc(t));
+    ((doc && doc.blocks) || []).forEach((b) => {
+      if (b.t === 'hr') { parts.push('---'); return; }
+      if (b.t === 'ul' || b.t === 'ol') {
+        const items = (b.items || []).map((it, i) =>
+          (b.t === 'ul' ? '- ' : (i + 1) + '. ') + noteRunsToMd(it));
+        if (items.length) parts.push(items.join('\n'));
+        return;
+      }
+      const s = noteRunsToMd(b.c);
+      if (!s.trim()) return;   // en tom linje ER avstanden mellom blokkene
+      const h = NOTE_TEXT_BLOCKS.indexOf(b.t);
+      parts.push(h > 0 ? '#'.repeat(h) + ' ' + s : noteMdLineSafe(s));
+    });
+    return parts.join('\n\n');
+  }
+
+  /* ---- Fremmed HTML → dokument ----
+     Taggene som aldri skal bidra med noe — heller ikke med teksten sin.
+     `<style>` og `<script>` står gjerne MIDT I kroppen i det Word legger på
+     utklippstavlen, og uten dette ville CSS-en blitt lesbar tekst i notatet. */
+  const NOTE_HTML_DROP = ['script', 'style', 'noscript', 'template', 'iframe',
+    'object', 'embed', 'svg', 'math', 'head', 'title', 'link', 'meta', 'img',
+    'picture', 'source', 'video', 'audio', 'canvas', 'input', 'select',
+    'textarea', 'option', 'button', 'map', 'area'];
+  // Blokknivå i FREMMED markup — videre enn modellens egne typer, fordi et
+  // fremmed dokument bygger avsnitt av hva som helst.
+  const NOTE_HTML_BLOCK = ['p', 'div', 'section', 'article', 'aside', 'header',
+    'footer', 'main', 'nav', 'figure', 'figcaption', 'blockquote', 'pre',
+    'address', 'details', 'summary', 'dl', 'dt', 'dd', 'li', 'form', 'fieldset'];
+  const NOTE_HTML_HEADS = { h1: 'h1', h2: 'h2', h3: 'h3', h4: 'h3', h5: 'h3', h6: 'h3' };
+  const NOTE_HTML_BLOCKISH = NOTE_HTML_BLOCK.concat(Object.keys(NOTE_HTML_HEADS),
+    ['ul', 'ol', 'table', 'tr', 'td', 'th', 'hr']).join(',');
+
+  const noteEl = (n) => n && n.nodeType === 1;
+  const noteTag = (n) => (noteEl(n) ? n.tagName.toLowerCase() : '');
+  const noteKids = (n) => Array.prototype.slice.call(n.childNodes);
+  /* Words FALSKE kulepunkt: `<span style='mso-list:Ignore'>·<span …>&nbsp;
+     </span></span>` er tegnet Word maler lista med, ikke innhold. Den forteller
+     oss likevel om lista er punktmerket eller nummerert. */
+  const noteMsoIgnore = (el) =>
+    !!(noteEl(el) && /mso-list\s*:\s*ignore/i.test(el.getAttribute('style') || ''));
+  function noteMsoList(el) {
+    if (!noteEl(el)) return '';
+    if (!/mso-list/i.test(el.getAttribute('style') || '')
+      && !/\bMsoList/i.test(el.getAttribute('class') || '')) return '';
+    let marker = '';
+    Array.prototype.forEach.call(el.querySelectorAll('span'), (sp) => {
+      if (!marker && noteMsoIgnore(sp)) marker = (sp.textContent || '').trim();
+    });
+    return /^(?:\d+|[a-z]|[ivx]+)[.)]?$/i.test(marker) ? 'ol' : 'ul';
+  }
+
+  /* Markeringene et fremmed element bærer. Både TAGG og INLINE-STIL leses:
+     Word og Google Docs skriver `<span style="font-weight:700">` like ofte som
+     `<b>`, og Google Docs pakker dessuten hele utklippet i en
+     `<b style="font-weight:normal">` som IKKE er fet. Derfor vinner den
+     NÆRMESTE definisjonen — en stil som sier «normal» slår av en `<b>` lenger
+     ute. Klasser (Words `MsoNormal` + et `<style>`-blokk) følges ikke: reglene
+     er kastet sammen med taggen. */
+  /* Stilattributtet leses som TEKST, ikke gjennom CSSOM (`el.style`):
+     innholdssikkerhetspolicyen tillater ingen inline-stiler
+     (docs/sikkerhetsheadere.md), og et blokkert `style`-attributt gir en tom
+     CSSOM — men strengen står der fortsatt, og det er den Word og Google Docs
+     skriver formateringen i. */
+  function noteStyleOf(el) {
+    const raw = (noteEl(el) && el.getAttribute('style')) || '';
+    if (!raw) return null;
+    const out = {};
+    raw.split(';').forEach((bit) => {
+      const i = bit.indexOf(':');
+      if (i < 1) return;
+      out[bit.slice(0, i).trim().toLowerCase()] = bit.slice(i + 1).trim().toLowerCase();
+    });
+    return out;
+  }
+  function noteForeignMarks(node) {
+    const seen = {};
+    const set = (k, v) => { if (!(k in seen)) seen[k] = v; };
+    for (let n = node; noteEl(n) && noteTag(n) !== 'body' && noteTag(n) !== 'html'; n = n.parentNode) {
+      const tag = noteTag(n);
+      const st = noteStyleOf(n) || {};
+      const w = st['font-weight'] || '';
+      if (w) set('b', /^(bold|bolder)$/.test(w) || parseInt(w, 10) >= 600);
+      else if (tag === 'b' || tag === 'strong') set('b', true);
+      const fs = st['font-style'] || '';
+      if (fs) set('i', /^(italic|oblique)/.test(fs));
+      else if (tag === 'i' || tag === 'em' || tag === 'cite' || tag === 'var') set('i', true);
+      const td = st['text-decoration-line'] || st['text-decoration'] || '';
+      if (td) set('u', /underline/.test(td));
+      else if (tag === 'u' || tag === 'ins') set('u', true);
+      const va = st['vertical-align'] || '';
+      if (/^super/.test(va) || tag === 'sup') set('sup', true);
+      if (/^sub/.test(va) || tag === 'sub') set('sub', true);
+      if (!seen.url) {
+        const raw = tag === 'a' ? n.getAttribute('href')
+          : (n.dataset && n.dataset.url ? n.dataset.url : '');
+        const u = raw ? safeNoteUrl(raw) : '';
+        if (u) seen.url = u;
+      }
+    }
+    const out = {};
+    NOTE_MARKS.forEach((k) => { if (seen[k]) out[k] = 1; });
+    if (seen.url) out.url = seen.url;
+    return out;
+  }
+
+  /* Inline-innholdet i et sett fremmede noder. HTML kollapser mellomrom, og et
+     Word-utklipp er fullt av linjeskift og innrykk mellom taggene — uten denne
+     normaliseringen ville de blitt SYNLIGE i notatet, som er `pre-wrap`.
+     `<pre>` er unntaket: der er linjeskiftene innholdet. */
+  function noteForeignRuns(nodes, pre) {
+    const runs = [];
+    const walk = (node) => {
+      if (node.nodeType === 3) {
+        let s = String(node.nodeValue || '').replace(/\u00a0/g, ' ');
+        if (!s) return;
+        if (pre) s = s.replace(/\r\n?/g, '\n');
+        else s = s.replace(/[\r\n\t]+/g, ' ').replace(/ {2,}/g, ' ');
+        if (!s) return;
+        runs.push(Object.assign({ s }, noteForeignMarks(node.parentNode)));
+        return;
+      }
+      if (!noteEl(node)) return;
+      const tag = noteTag(node);
+      if (NOTE_HTML_DROP.indexOf(tag) > -1 || noteMsoIgnore(node)) return;
+      if (tag === 'br') { runs.push({ s: '\n' }); return; }
+      noteKids(node).forEach(walk);
+    };
+    nodes.forEach(walk);
+    return runs;
+  }
+  // Blokkens egne ytterkanter trimmes; mellomrommene mellom taggene er layout,
+  // ikke tekst.
+  function noteTrimRuns(runs) {
+    const out = runs.map((r) => Object.assign({}, r));
+    while (out.length) {
+      out[0].s = out[0].s.replace(/^\s+/, '');
+      if (out[0].s) break;
+      out.shift();
+    }
+    while (out.length) {
+      const last = out[out.length - 1];
+      last.s = last.s.replace(/\s+$/, '');
+      if (last.s) break;
+      out.pop();
+    }
+    return out;
+  }
+
+  function noteForeignItems(listEl) {
+    const items = [];
+    Array.prototype.forEach.call(listEl.children, (li) => {
+      if (noteTag(li) !== 'li') return;
+      const egne = noteKids(li).filter((k) => noteTag(k) !== 'ul' && noteTag(k) !== 'ol');
+      const runs = noteTrimRuns(noteForeignRuns(egne));
+      if (runs.length) items.push(runs);
+      // Nøstede lister flates ut: modellen har ett nivå, og ingenting skal
+      // forsvinne fordi kilden hadde flere.
+      Array.prototype.forEach.call(li.children, (kid) => {
+        if (noteTag(kid) === 'ul' || noteTag(kid) === 'ol') {
+          noteForeignItems(kid).forEach((x) => items.push(x));
+        }
+      });
+    });
+    return items;
+  }
+  /* Tabeller finnes ikke i modellen. Hver RAD blir ett avsnitt med cellene
+     skilt av tabulator — teksten beholdes, og radformen er fortsatt lesbar. */
+  function noteForeignTable(el, out) {
+    Array.prototype.forEach.call(el.rows || [], (row) => {
+      const runs = [];
+      Array.prototype.forEach.call(row.cells || [], (cell) => {
+        const r = noteTrimRuns(noteForeignRuns(noteKids(cell)));
+        if (!r.length) return;
+        if (runs.length) runs.push({ s: '\t' });
+        r.forEach((x) => runs.push(x));
+      });
+      if (runs.length) out.push({ t: 'p', c: runs });
+    });
+  }
+
+  const NOTE_FOREIGN_DEPTH = 40;
+  function noteForeignBlocks(root, out, depth) {
+    depth = depth || 0;
+    let inline = [];
+    let list = null;
+    const push = (t, runs) => { const r = noteTrimRuns(runs); if (r.length) out.push({ t, c: r }); };
+    const flushInline = () => { if (inline.length) { push('p', noteForeignRuns(inline)); inline = []; } };
+    const closeList = () => { if (list && list.items.length) out.push(list); list = null; };
+    const flush = () => { flushInline(); closeList(); };
+    noteKids(root).forEach((node) => {
+      if (node.nodeType === 3) { if (String(node.nodeValue || '').trim()) inline.push(node); return; }
+      if (!noteEl(node)) return;
+      const tag = noteTag(node);
+      if (NOTE_HTML_DROP.indexOf(tag) > -1 || noteMsoIgnore(node)) return;
+      if (tag === 'hr') { flush(); out.push({ t: 'hr' }); return; }
+      if (tag === 'ul' || tag === 'ol') {
+        flush();
+        const items = noteForeignItems(node);
+        if (items.length) out.push({ t: tag, items });
+        return;
+      }
+      if (tag === 'table') { flush(); noteForeignTable(node, out); return; }
+      if (NOTE_HTML_HEADS[tag]) { flush(); push(NOTE_HTML_HEADS[tag], noteForeignRuns(noteKids(node))); return; }
+      // Words listeavsnitt: flere `<p mso-list>` på rad ER én liste.
+      const mso = noteMsoList(node);
+      if (mso) {
+        flushInline();
+        if (list && list.t !== mso) closeList();
+        list = list || { t: mso, items: [] };
+        const runs = noteTrimRuns(noteForeignRuns(noteKids(node)));
+        if (runs.length) list.items.push(runs);
+        return;
+      }
+      /* Et element som INNEHOLDER blokker er en beholder, uansett hva taggen
+         heter: Google Docs pakker hele utklippet i en `<b>`, Word i lag på lag
+         med `<div>`. Da er det innmaten som er dokumentet. */
+      const harBlokk = depth < NOTE_FOREIGN_DEPTH && node.querySelector
+        && node.querySelector(NOTE_HTML_BLOCKISH);
+      if (harBlokk) { flush(); noteForeignBlocks(node, out, depth + 1); return; }
+      if (NOTE_HTML_BLOCK.indexOf(tag) > -1) {
+        flush();
+        push('p', noteForeignRuns(noteKids(node), tag === 'pre'));
+        return;
+      }
+      inline.push(node);
+    });
+    flush();
+  }
+
+  /* Fremmed HTML inn. `DOMParser` gir et DØDT dokument: ingen browsing
+     context, så skript kjører ikke og ressurser lastes ikke — og resultatet
+     settes uansett aldri inn noe sted. Det oversettes til modellen, og
+     `sanitizeNoteDoc` har siste ord. */
+  function noteDocFromHtml(html) {
+    const doc = emptyNoteDoc();
+    let body = null;
+    try { body = new DOMParser().parseFromString(String(html || ''), 'text/html').body; }
+    catch (e) { body = null; }
+    if (!body) return doc;
+    noteForeignBlocks(body, doc.blocks, 0);
+    while (doc.blocks.length && isEmptyNoteBlock(doc.blocks[0])) doc.blocks.shift();
+    while (doc.blocks.length && isEmptyNoteBlock(doc.blocks[doc.blocks.length - 1])) doc.blocks.pop();
+    return sanitizeNoteDoc(doc);
+  }
+
+  /* ---- Markdown → dokument ----
+     Ingen full Markdown-motor: nettopp de kodene Huskis selv skriver ut, og
+     bare når teksten FAKTISK ser ut som Markdown. Ellers ville en stjerne i et
+     vanlig avsnitt begynt å bety noe. */
+  const NOTE_MD_SIGNS = /(?:^|\n)[ ]{0,3}(?:#{1,6} |[-*+] |\d+[.)] |> |\u0060{3}|(?:-{3,}|\*{3,}|_{3,})[ ]*(?:\n|$))|\[[^\]\n]*\]\([^)\s]+\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|<\/(?:u|sup|sub)>/;
+  const noteLooksLikeMarkdown = (text) => NOTE_MD_SIGNS.test(String(text == null ? '' : text));
+
+  // Tegnene en Markdown-kode kan begynne med (\u0060 = bakkevendt apostrof).
+  const NOTE_MD_START = /[\\[*_~\u0060<]/;
+  const NOTE_MD_TOKENS = [
+    ['esc', /\\([\\`*_{}[\]()#+\-.!~<>|])/y],
+    ['link', /\[((?:[^[\]\\]|\\.)*)\]\(\s*<?([^\s)<>]*)>?(?:\s+"[^"]*")?\s*\)/y],
+    ['b', /\*\*(\S(?:[\s\S]*?\S)?)\*\*/y],
+    ['b', /__(\S(?:[\s\S]*?\S)?)__/y],
+    ['i', /\*(\S(?:[^*\n]*?\S)?)\*/y],
+    ['i', /_(\S(?:[^_\n]*?\S)?)_/y],
+    // Gjennomstreking og kode har ingen markering i Huskis: kodene fjernes,
+    // teksten blir stående.
+    ['plain', /~~([\s\S]*?)~~/y],
+    ['plain', /\u0060([^\u0060\n]+)\u0060/y],
+    ['u', /<u>([\s\S]*?)<\/u>/iy],
+    ['sup', /<sup>([\s\S]*?)<\/sup>/iy],
+    ['sub', /<sub>([\s\S]*?)<\/sub>/iy],
+    ['b', /<(?:b|strong)>([\s\S]*?)<\/(?:b|strong)>/iy],
+    ['i', /<(?:i|em)>([\s\S]*?)<\/(?:i|em)>/iy],
+    ['auto', /<((?:https?|mailto):[^>\s]+)>/iy],
+  ];
+  function noteMdInlineRuns(src, base, depth) {
+    base = base || {};
+    depth = depth || 0;
+    const s = String(src == null ? '' : src);
+    const runs = [];
+    let text = '';
+    const flush = () => { if (text) { runs.push(Object.assign({ s: text }, base)); text = ''; } };
+    for (let i = 0; i < s.length;) {
+      if (!NOTE_MD_START.test(s[i]) || depth > 12) { text += s[i++]; continue; }
+      let hit = null, kind = '';
+      for (let k = 0; k < NOTE_MD_TOKENS.length; k++) {
+        const re = NOTE_MD_TOKENS[k][1];
+        re.lastIndex = i;
+        const m = re.exec(s);
+        if (m) { hit = m; kind = NOTE_MD_TOKENS[k][0]; break; }
+      }
+      if (!hit) { text += s[i++]; continue; }
+      flush();
+      i += hit[0].length;
+      if (kind === 'esc') { text += hit[1]; continue; }
+      if (kind === 'auto') {
+        const u = safeNoteUrl(hit[1]);
+        runs.push(Object.assign({ s: hit[1] }, base, u ? { url: u } : {}));
+        continue;
+      }
+      let neste = base;
+      if (kind === 'link') {
+        const u = safeNoteUrl(hit[2]);
+        // En lenke uten brukbar adresse mister lenken, aldri teksten.
+        neste = u ? Object.assign({}, base, { url: u }) : base;
+      } else if (kind !== 'plain') {
+        neste = Object.assign({}, base);
+        neste[kind] = 1;
+      }
+      noteMdInlineRuns(hit[1], neste, depth + 1).forEach((r) => runs.push(r));
+    }
+    flush();
+    return runs;
+  }
+  function noteDocFromMarkdown(text) {
+    const doc = emptyNoteDoc();
+    const lines = String(text == null ? '' : text).replace(/\r\n?/g, '\n').split('\n');
+    let para = null;
+    let list = null;
+    let fence = false;
+    const flushPara = () => {
+      if (para && para.length) {
+        const runs = noteMdInlineRuns(para.join('\n'));
+        if (runs.length) doc.blocks.push({ t: 'p', c: runs });
+      }
+      para = null;
+    };
+    const closeList = () => { if (list && list.items.length) doc.blocks.push(list); list = null; };
+    const flush = () => { flushPara(); closeList(); };
+    lines.forEach((raw) => {
+      const line = String(raw).replace(/\t/g, '    ');
+      if (/^\s*\u0060{3}/.test(line)) { flush(); fence = !fence; return; }
+      if (fence) { para = para || []; para.push(raw); return; }
+      if (!line.trim()) { flush(); return; }
+      if (/^[ ]{0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { flush(); doc.blocks.push({ t: 'hr' }); return; }
+      const h = line.match(/^[ ]{0,3}(#{1,6})\s+(.*)$/);
+      if (h) {
+        flush();
+        doc.blocks.push({ t: 'h' + Math.min(3, h[1].length), c: noteMdInlineRuns(h[2].replace(/\s+#+\s*$/, '')) });
+        return;
+      }
+      const ul = line.match(/^\s*[-*+•]\s+(.*)$/);
+      const ol = ul ? null : line.match(/^\s*\d+[.)]\s+(.*)$/);
+      if (ul || ol) {
+        const t = ul ? 'ul' : 'ol';
+        flushPara();
+        if (list && list.t !== t) closeList();
+        list = list || { t, items: [] };
+        list.items.push(noteMdInlineRuns((ul || ol)[1]));
+        return;
+      }
+      closeList();
+      const q = line.match(/^[ ]{0,3}>\s?(.*)$/);
+      para = para || [];
+      para.push(q ? q[1] : line);
+    });
+    flush();
+    return sanitizeNoteDoc(doc);
+  }
+
+  /* ---- Dokument → EDITORENS markup (innliming) ----
+     Nodene bygges av den SAMME `noteBlockNode()` som rendringen bruker, og
+     strengen leses ut av nettleserens egen serialisering. Ingen markup settes
+     sammen av biter her: innlimt tekst er et tekstnode-innhold når nettleseren
+     skriver den ut, og escapes av nettleseren selv. Lenkene blir `.note-link`
+     med `data-url` som alle andre lenker i et notat — clipboard-HTML-ens
+     `<a href>` hører hjemme UTENFOR appen.
+
+     Hvorfor i det hele tatt en streng: `insertHTML` er den ene innsettingen
+     nettleseren gjør SELV — den deler blokken markøren står i, setter markøren
+     etter det innsatte, og legger hele operasjonen på angre-stabelen editorens
+     angreknapp bruker. En egen DOM-operasjon ville vært usynlig for den. */
+  function noteBreaksToBr(root) {
+    noteKids(root).forEach((node) => {
+      if (node.nodeType === 3) {
+        const s = String(node.nodeValue || '');
+        if (s.indexOf('\n') === -1) return;
+        const frag = document.createDocumentFragment();
+        s.split('\n').forEach((del, i) => {
+          if (i) frag.appendChild(document.createElement('br'));
+          if (del) frag.appendChild(document.createTextNode(del));
+        });
+        node.parentNode.replaceChild(frag, node);
+        return;
+      }
+      if (noteEl(node)) noteBreaksToBr(node);
+    });
+  }
+  function noteEditorHtml(doc) {
+    const blocks = (doc && doc.blocks) || [];
+    if (!blocks.length) return '';
+    const box = document.createElement('div');
+    // ÉN tekstblokk limes inn INNE i avsnittet markøren står i — et innlimt
+    // ord skal ikke dele avsnittet i to.
+    if (blocks.length === 1 && NOTE_TEXT_BLOCKS.indexOf(blocks[0].t) > -1) {
+      if (!(blocks[0].c || []).length) return '';
+      noteRunsInto(box, blocks[0].c);
+    } else {
+      blocks.forEach((b) => box.appendChild(noteBlockNode(b)));
+    }
+    noteBreaksToBr(box);
+    return box.innerHTML;
+  }
+
+  /* ---- Å SKRIVE TIL UTKLIPPSTAVLEN ----
+     Tre trinn ned, fordi utklippstavlen er ulik i hver nettleser og hver
+     WebView — men aldri et trinn ned til ingenting:
+
+       1. `ClipboardItem`: `text/html` + `text/plain` i samme skriving. Det er
+          denne som gir Word, Outlook og Google Docs formateringen.
+       2. Den gamle veien: en `copy`-hendelse vi fyller selv. Den tar også
+          begge formatene, og finnes der `ClipboardItem` ikke gjør det.
+       3. `writeText`: ren tekst. Brukeren får notatet, og toasten sier at
+          formateringen ikke fulgte med.
+
+     Svaret sier hvilket trinn som gikk gjennom (`rich`/`plain`/tom), slik at
+     tilbakemeldingen er sann. */
+  function noteClipboardLegacy(html, text) {
+    const box = document.createElement('textarea');
+    box.value = text;
+    box.setAttribute('aria-hidden', 'true');
+    box.style.cssText = 'position:fixed;top:0;left:-9999px;opacity:0';
+    document.body.appendChild(box);
+    const sel = window.getSelection();
+    const før = sel && sel.rangeCount ? sel.getRangeAt(0).cloneRange() : null;
+    const fokusFør = document.activeElement;
+    const onCopy = (ev) => {
+      if (!ev.clipboardData) return;
+      ev.preventDefault();
+      try {
+        if (html) ev.clipboardData.setData('text/html', html);
+        ev.clipboardData.setData('text/plain', text);
+      } catch (e) { /* ignorer — da står nettleserens egen kopi igjen */ }
+    };
+    document.addEventListener('copy', onCopy, true);
+    let ok = false;
+    try { box.focus(); box.select(); ok = !!document.execCommand('copy'); }
+    catch (e) { ok = false; }
+    document.removeEventListener('copy', onCopy, true);
+    box.remove();
+    // Fokus og markering skal overleve at vi lånte begge et øyeblikk.
+    if (fokusFør && fokusFør.focus) { try { fokusFør.focus(); } catch (e) { /* ignorer */ } }
+    if (før && sel) { try { sel.removeAllRanges(); sel.addRange(før); } catch (e) { /* ignorer */ } }
+    return ok;
+  }
+  function noteClipboardPlain(text) {
+    const nav = navigator.clipboard;
+    if (nav && nav.writeText) {
+      return nav.writeText(text).then(() => 'plain',
+        () => (noteClipboardLegacy('', text) ? 'plain' : ''));
+    }
+    return Promise.resolve(noteClipboardLegacy('', text) ? 'plain' : '');
+  }
+  function noteClipboardWrite(html, text) {
+    const nav = navigator.clipboard;
+    if (html && window.ClipboardItem && nav && nav.write) {
+      try {
+        const item = new window.ClipboardItem({
+          'text/html': new Blob([html], { type: 'text/html' }),
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+        });
+        return nav.write([item]).then(() => 'rich', () => noteClipboardPlain(text));
+      } catch (e) { /* faller ned et trinn */ }
+    }
+    if (html && noteClipboardLegacy(html, text)) return Promise.resolve('rich');
+    return noteClipboardPlain(text);
+  }
+
+  /* «Kopier alt» og «Kopier som Markdown» — begge på HELE notatet, uavhengig av
+     markeringen, og begge tilgjengelige også i et SKRIVEBESKYTTET notat: det
+     som kan leses, kan kopieres. Editoren tømmer autosave-køen først, slik at
+     det som kopieres er det som står på skjermen akkurat nå. */
+  function noteForCopy(id) {
+    if (noteOpenId === id) flushNoteSave();
+    const n = findNoteById(id);
+    if (!n) return null;
+    return { doc: sanitizeNoteDoc(n.doc), title: String(n.title || '').trim() };
+  }
+  function copyNoteAll(id) {
+    const n = noteForCopy(id);
+    if (!n) return Promise.resolve('');
+    return noteClipboardWrite(noteDocToHtml(n.doc, n.title), noteDocToPlain(n.doc, n.title))
+      .then((how) => {
+        showToast(tr(how === 'rich' ? 'notes.copied'
+          : (how === 'plain' ? 'notes.copiedPlain' : 'notes.copyFailed')));
+        return how;
+      });
+  }
+  function copyNoteMarkdown(id) {
+    const n = noteForCopy(id);
+    if (!n) return Promise.resolve('');
+    return noteClipboardPlain(noteDocToMarkdown(n.doc, n.title)).then((how) => {
+      showToast(tr(how ? 'notes.copiedMarkdown' : 'notes.copyFailed'));
+      return how;
+    });
+  }
+
+  /* ------------------------------------------------------------
      OPPSLAG OG AKTIV POSISJON
      ------------------------------------------------------------ */
   const noteProjects = () => state.noteProjects || [];
@@ -16783,6 +17410,22 @@
       },
       extraRows: [
         linksMenuRow(kind, id),
+        /* HELE notatet ut av Huskis, uavhengig av markeringen — og uavhengig
+           av om notatet kan REDIGERES: det som kan leses, kan kopieres. Begge
+           er vanlige menyrader, på kortet og inne i editoren
+           (docs/notater-plan.md, «Utklippstavlen»). */
+        kind === 'note' ? {
+          icon: ICONS.copy,
+          label: tr('notes.copyAll'),
+          hint: tr('notes.copyAllHint'),
+          fn: () => copyNoteAll(id),
+        } : null,
+        kind === 'note' ? {
+          icon: ICONS.copyMarkdown,
+          label: tr('notes.copyMarkdown'),
+          hint: tr('notes.copyMarkdownHint'),
+          fn: () => copyNoteMarkdown(id),
+        } : null,
         canEdit ? {
           icon: ICONS.archive,
           label: tr(obj && obj.archived ? 'notes.unarchive' : 'notes.archive'),
@@ -18438,18 +19081,51 @@
   }
 
   /* ---- Innliming ----
-     Innlimt markup går gjennom den samme trakten som alt annet, men FØR den
-     havner i dokumentet: vi limer inn ren tekst og lar linjeskift bli
-     linjeskift. Alternativet — å slippe fremmed HTML inn og rydde etterpå —
-     ville gitt et vindu der markup fra utsiden faktisk sto i DOM-en. */
+     Fremmed markup havner ALDRI i editorens DOM. Den tolkes i et dødt
+     dokument, oversettes til Huskis' egen modell, og det som settes inn er
+     modellen bygget opp igjen med appens egne noder («UTKLIPPSTAVLEN»). Det
+     som kommer inn er dermed alltid et gyldig Huskis-dokument: skript,
+     hendelses-attributter, fremmed CSS og `javascript:`-adresser finnes ikke
+     lenger når innsettingen skjer.
+
+     Tre kilder, i denne rekkefølgen:
+       1. `text/html` — Word, Outlook, Google Docs og ethvert riktekstfelt;
+       2. `text/plain` som SER UT som Markdown — koder Huskis selv skriver ut;
+       3. `text/plain` ellers — ren tekst, limt inn der markøren står.
+     Faller en av dem sammen (tom eller uten støttet innhold), går vi ned på
+     neste: en innliming skal aldri ende i ingenting. */
   function noteOnPaste(ev) {
     const data = ev.clipboardData;
     if (!data) return;
     ev.preventDefault();
+    const html = data.getData('text/html') || '';
     const text = data.getData('text/plain') || '';
+    let doc = null;
+    if (html) doc = noteDocFromHtml(html);
+    else if (noteLooksLikeMarkdown(text)) doc = noteDocFromMarkdown(text);
+    if (doc && doc.blocks.length && noteInsertDoc(doc)) {
+      scheduleNoteSave();
+      refreshNoteTools();
+      return;
+    }
     if (!text) return;
     noteExec('insertText', text);
     scheduleNoteSave();
+  }
+  /* Innsettingen er nettleserens egen (`insertHTML`): den deler blokken
+     markøren står i, flytter markøren etter det innsatte og legger hele
+     operasjonen på den angre-stabelen editorens angreknapp bruker. Markupen
+     er Huskis' egen — se `noteEditorHtml`. Uten støtte for kommandoen svarer
+     vi nei, og innlimingen faller ned på ren tekst. */
+  function noteInsertDoc(doc) {
+    const html = noteEditorHtml(doc);
+    if (!html) return false;
+    let ok = true;
+    try { if (document.queryCommandSupported) ok = document.queryCommandSupported('insertHTML'); }
+    catch (e) { ok = true; }
+    if (!ok) return false;
+    noteExec('insertHTML', html);
+    return true;
   }
 
   function wireNoteEditor() {
@@ -25220,6 +25896,13 @@
     openNoteEditor, closeNoteEditor, flushNoteSave, runNoteCommand,
     notesIn, noteDocText, noteExcerpt, noteDisplayTitle,
     sanitizeNoteDoc, safeNoteUrl, noteDocFromEl, noteDocIntoEl, emptyNoteDoc,
+    /* UTKLIPPSTAVLEN (docs/notater-plan.md). Konverteringene eksponeres hver
+       for seg, slik at testene kan stille dem spørsmål et klikk ikke kan
+       svare på — hva Word-markup blir, hva en `javascript:`-adresse blir —
+       ved siden av den ekte kopier-flyten. */
+    noteDocToHtml, noteDocToPlain, noteDocToMarkdown,
+    noteDocFromHtml, noteDocFromMarkdown, noteLooksLikeMarkdown,
+    copyNoteAll, copyNoteMarkdown,
     // Appens ENE vei ut (docs/domains-and-urls.md). Eksponert så testen kan
     // stille den spørsmål et klikk ikke kan svare på — hva den gjør med et
     // `mailto:` eller et `javascript:` — uten å måtte lese en ny fane.

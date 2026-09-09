@@ -473,6 +473,19 @@ window.ICONS = {
      Samme tegning som lenkeverktøyet i notat-editoren, men med Huskis'
      ikonstrek og uten `currentColor` — den står i chips og menyrader, ikke i
      en verktøylinje. */
+  /* «Kopier alt» og «Kopier som Markdown» i notatets objektmeny: to ark over
+     hverandre, og det samme arket med Markdown-merket (M + pil ned). Begge er
+     ren strek — ingen fyll, som resten av settet (docs/design-system.md). */
+  copy: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="9" y="8.5" width="11" height="12" rx="2"></rect>' +
+    '<path d="M15.5 8.5V5.5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"></path>' +
+    '</svg>',
+  copyMarkdown: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<rect x="2" y="5.5" width="20" height="13" rx="2.5"></rect>' +
+    '<path d="M5.5 15.5v-7l3 3.5 3-3.5v7"></path>' +
+    '<path d="M15.5 8.5v7"></path>' +
+    '<path d="M13 13l2.5 2.5L18 13"></path>' +
+    '</svg>',
   link: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<path d="M10 13.5a3.6 3.6 0 0 0 5.1 0l2.6-2.6a3.6 3.6 0 0 0-5.1-5.1L11.4 7"></path>' +
     '<path d="M14 10.5a3.6 3.6 0 0 0-5.1 0l-2.6 2.6a3.6 3.6 0 0 0 5.1 5.1L12.6 17"></path>' +
