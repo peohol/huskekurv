@@ -272,40 +272,58 @@ slipper gjennom:
   og objektene hopper frem og tilbake. Reverseringen av forrige bytte — samme
   nabo, motsatt side — møter derfor to hindre; vanlige bytter er urørt:
   (a) **tidslås** — reverseringen avvises i 300 ms etter byttet; (b)
-  **overlapp-hysterese** — etterpå krever den ≥ 50 % overlapp, ikke bare 20 %.
+  **overlapp-hysterese** — etterpå krever den ≥ 50 % overlapp, ikke bare 20 %
+  (med ett unntak: er 50 % uoppnåelig for paret, senkes den — se under).
   Asymmetrien er poenget: én høy terskel ville kjøpt den samme stabiliteten ved å
   gjøre HVER omrokkering treg, mens dette bare krever noe av det tilfellet som
   vanligvis er en rykning. Det er dessuten bevisst mildere enn full
   senter-kryssing (som overskjøt inn i NESTE nabo), så en bevisst tilbakeføring
   er fortsatt lett.
-**NEVNEREN ER DEN MINSTE AV DE TO, ikke naboens.** Smetts egen detektor deler
-overlappet på NABOENS utstrekning, og det holder så lenge de to er omtrent like
-store. Det er de ikke: `dndCompactLift` krymper det løftede objektet til hodet
-sitt, mens naboen står i full høyde. Da er det HØYESTE oppnåelige forholdet
+
+**RETUR-TERSKELEN MÅ VÆRE OPPNÅELIG.** Smetts egen detektor deler overlappet på
+NABOENS utstrekning, og det holder så lenge de to er omtrent like store. Det er
+de ikke: `dndCompactLift` krymper det løftede objektet til hodet sitt, mens
+naboen står i full høyde. Da er det HØYESTE oppnåelige forholdet
 `kompaktHøyde / naboHøyde` — MÅLT på to notatkort: 53/226 = 0,23. Det er over
 de 20 % som trengs fremover, men under de 50 % som trengs tilbake, så et bytte
 gikk den ene veien og var **umulig å angre i det samme draget**. Hvilken vei
 som virket avhang av hvor høy naboen var, altså av tittel- og utdragslengde — en
 sorteringsregel ingen kan se.
 
-`dndSortCollision` deler derfor på den minste av de to utstrekningene, nøyaktig
-som Smett selv gjør på TVERRAKSEN. Da betyr «halvt overlapp» det samme uansett
-hvem som ble løftet, og formen på det løftede objektet er igjen ren maling.
-Tersklene er URØRT og hentes fra Smetts `DEFAULT_HYSTERESIS`, så de ikke kan
-komme i utakt. Hysteresen føres av Huskis selv (`dndSwapRemember`, av det samme
-`dragover`-signalet og med den samme avgrensningen til sorterbare mål), fordi
-Smetts egen plugin bare husker bytter der detektoren ER Smetts — en erstatning
-uten dette ville stille mistet reverseringslåsen og gjort alt til 20 %.
+**Nevneren står, men RETUR-TERSKELEN senkes når den er uoppnåelig.**
+`dndSortCollision` regner overlappet som Smett selv gjør — på NABOENS
+utstrekning — og `dndHyst` senker `reverseRatio` for akkurat det paret der
+taket `min(dragHøyde, naboHøyde) / naboHøyde` ligger under den, ned til
+`taket × 0,9`, men aldri under fremover-terskelen: da ville det vært lettere å
+angre et bytte enn å gjøre det, og hysteresen sto på hodet. Fremover-terskelen
+og tidslåsen er urørt i alle tilfeller, og ligger taket over terskelen — det
+normale — står Smetts egen 0,5.
+
+Å SKALERE ALLTID var galt, og det er målt: en kompakt kategori som ikke trengte
+hjelp fikk retur-terskelen senket fra 0,5 til 0,34, byttet forbi naboen og sprang
+rett tilbake igjen. Å DELE PÅ DEN MINSTE AV DE TO var også galt: det gjorde
+sorteringen mer ivrig over hele linja, og en bevisst liten dytt begynte å bytte.
+Hjelpen skal treffe bare det tilfellet som faktisk er ute av rekkevidde.
+Tersklene ellers hentes fra Smetts `DEFAULT_HYSTERESIS`, så de ikke kan komme i
+utakt.
+
+Hysteresen føres av Huskis selv (`dndSwapRemember`, av det samme
+`dragover`-signalet og med avgrensning til sorterbare mål), fordi Smetts egen
+plugin bare husker bytter der detektoren ER Smetts — en erstatning uten dette
+ville stille mistet reverseringslåsen og gjort alt til 20 %.
 
 Låsen kan ikke leses av DOM-en, og det er verdt å vite hvorfor: mens den holder
 igjen, godtas INGEN mål, og forhåndsvisningen faller da tilbake til
 utgangspunktet — nøyaktig den samme rekkefølgen et fullført bytte tilbake ville
-gitt. `dnd-sort-reversible` venter derfor låsen ut i de FUNKSJONELLE sjekkene,
-og leser tilstanden direkte i sin egen (`dndSortProbe`): naboen skal kjennes
-igjen som reversering, en retur innen 300 ms skal avvises, og den SAMME
-geometrien skal godtas når låsen har løpt ut. Hysteresen er Huskis' egen nå, så
-den må voktes for seg — 104 ms-regresjonen over var usynlig for enhver
-DOM-basert test.
+gitt. Avgjørelsen ligger derfor i ÉN ren funksjon, `dndSortAdmits`, som både
+sorteringen, proben og testen kaller: tilstanden inn, svaret ut. Da kan
+`dnd-sort-reversible` sette klokken selv og kreve nøyaktig svar — rikelig
+overlapp innenfor 300 ms avvises, over 300 ms med overlapp over terskelen
+godtas, og et uoppnåelig tak senker terskelen, men ikke tiden. Ekte pekertiming
+duger ikke til det: én CDP-berøring pluss en avlesning tar lengre tid enn låsen
+på touch. `dndSortProbe` leser den samme tilstanden fra et ekte drag, og vokter
+det andre leddet — at naboen i det hele tatt kjennes igjen som reversering.
+104 ms-regresjonen over var usynlig for enhver DOM-basert test.
 
 - **Retningen er borte, og reverseringslåsen gjør jobben den gjorde.**
   Detektoren har ingen retningsinngang — den tar nærmeste godkjente nabo. Det er
