@@ -2122,6 +2122,7 @@ const synketTreff = [];
 let synketAntall = 0;
 let synketGuard = false;
 let synketÅpne = 0;
+let synketAnker = 0;
 if (fs.existsSync(SYNKET)) {
   for (const q of distFiler(SYNKET, true)) {
     synketAntall++;
@@ -2138,7 +2139,13 @@ if (fs.existsSync(SYNKET)) {
     for (const { del, fra } of jsOmråder(tekst, modusFor(q))) {
       for (const [navn, re] of JS_MARKUP) {
         re.lastIndex = 0;
-        for (const m of del.matchAll(re)) synketTreff.push(rel + ':' + linjeFor(fra + m.index) + ' (' + navn + ')');
+        for (const m of del.matchAll(re)) {
+          // Clipboard-ankeret skal OGSÅ overleve `cap sync`, og bare det:
+          // fritaket gjelder per treff, i den synkede app.js, på samme form.
+          if (rel === path.join(path.relative(ROOT, SYNKET), ANKER_FIL)
+            && erAnkeret(del, m.index)) { synketAnker++; continue; }
+          synketTreff.push(rel + ':' + linjeFor(fra + m.index) + ' (' + navn + ')');
+        }
       }
     }
     /* Og adressesjekken. Den manglet her, og det er nettopp den som fanger en
@@ -2168,6 +2175,8 @@ if (fs.existsSync(SYNKET)) {
     synketTreff.join(', ') || synketAntall + ' filer skannet');
   check('… og nøyaktig ÉN tillatt åpning i den kopierte builden',
     synketÅpne === 1, synketÅpne + ' i den synkede ' + ÅPNE_FIL);
+  check('… og nøyaktig ÉTT tillatt anker i den kopierte builden',
+    synketAnker === 2, (synketAnker / 2) + ' i den synkede ' + ANKER_FIL);
 
   /* Sterkere enn å skanne kopien med de samme mønstrene: å BEVISE at kopien er
      bygget. `build.js` kopierer hver fil uendret og rører bare to av dem —
