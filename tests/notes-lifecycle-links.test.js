@@ -42,6 +42,9 @@
        navnløst tabbstopp
    16. Utdraget i en kasse-/arkivrad er KORT. Med kortets 160 tegn ble raden
        fire linjer høy på telefon, og radens to knapper havnet midt i teksten
+   17. MODALEN EIER FOKUS mens den er åpen: en gjenoppretting (eller et
+       «Slett») derfra legger ikke fokus på objektet BAK dialogen, som er
+       `aria-modal` og dermed ikke finnes for tastaturet — det blir i modalen
 
   Kjøres på BÅDE desktop- og mobil-viewport der oppførselen avhenger av layout.
 
@@ -1025,6 +1028,52 @@ async function run(navn, viewport, touch) {
     JSON.stringify(radMål));
   log(M('16 … og radens knapper ligger ikke oppå teksten'),
     !!radMål && radMål.overlapp === false && radMål.knapper === 2, JSON.stringify(radMål));
+
+  /* ---------- 17. Fokus blir i modalen ---------- */
+  /* To arkiverte notater, så det finnes en rad igjen å gå til. Deretter
+     trykkes «Hent ut av arkivet» på den FØRSTE — med ekte klikk, for det er
+     nettopp knappen i modalen som er handlingen. */
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(250);
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    (H.state.notes || []).slice(0, 2).forEach((n) => { n.archived = true; n.trashed = false; });
+    H.renderNotes();
+    H.openNotesArchive();
+  });
+  await p.waitForTimeout(400);
+  const førAntall = await p.evaluate(() => document.querySelectorAll('#trash-modal .trash-row').length);
+  await p.locator('#trash-modal .trash-row').first().locator('.btn').last().click();
+  await p.waitForTimeout(400);
+  const etterHent = await p.evaluate(() => {
+    const a = document.activeElement;
+    const modal = document.getElementById('trash-modal');
+    return {
+      modalÅpen: !modal.hidden,
+      fokusIModalen: !!(a && modal.contains(a)),
+      hva: a ? (a.id || a.className || a.tagName) : 'ingen',
+      rader: document.querySelectorAll('#trash-modal .trash-row').length,
+    };
+  });
+  log(M('17 en gjenoppretting fra arkivmodalen lar fokus bli INNE i dialogen'),
+    førAntall === 2 && etterHent.modalÅpen === true && etterHent.fokusIModalen === true,
+    JSON.stringify(Object.assign({ førAntall: førAntall }, etterHent)));
+  // … og når siste rad er borte, er det fortsatt modalens egne kontroller.
+  const sisteKnapp = p.locator('#trash-modal .trash-row .btn').last();
+  if (await sisteKnapp.count()) {
+    await sisteKnapp.click();
+    await p.waitForTimeout(400);
+  }
+  const etterSiste = await p.evaluate(() => {
+    const a = document.activeElement;
+    const modal = document.getElementById('trash-modal');
+    return { modalÅpen: !modal.hidden, fokusIModalen: !!(a && modal.contains(a)),
+      hva: a ? (a.id || a.className || a.tagName) : 'ingen',
+      rader: document.querySelectorAll('#trash-modal .trash-row').length };
+  });
+  log(M('17 … også når den siste raden er hentet ut'),
+    etterSiste.modalÅpen === true && etterSiste.fokusIModalen === true && etterSiste.rader === 0,
+    JSON.stringify(etterSiste));
   await p.keyboard.press('Escape');
   await p.waitForTimeout(250);
 

@@ -9327,6 +9327,24 @@
     modalOpenedAt = Date.now();
     updateModalOpenClass();
   }
+  /* MODALEN EIER FOKUS MENS DEN ER ÅPEN. Radhandlingene («Gjenopprett», «Hent
+     ut av arkivet», arkivets «Slett») kaller den samme koden board-et bruker,
+     og den legger igjen et fokusønske på objektet — som nå står BAK en
+     `aria-modal`-dialog. Fokus ville dermed havnet på noe brukeren verken ser
+     eller kan nå, og et `Enter` ville truffet det tildekkede kortet. */
+  const trashModalOpen = () => !!trashModal && !trashModal.hidden;
+  /* … og etter at raden er borte, velger modalen selv hvor fokus går: raden
+     som tok plassen, ellers den siste som ble igjen, ellers «Tøm», ellers ✕.
+     Samme trapp som `focusTargetAfterRemoval` går på board-et. */
+  function focusInTrashModal(i) {
+    if (!trashModalOpen()) return;
+    const knapper = [...trashList.querySelectorAll('.trash-row > .btn:last-child')]
+      .filter((b) => !b.disabled);
+    const mål = knapper[Math.min(i, knapper.length - 1)]
+      || (trashEmptyBtn && !trashEmptyBtn.disabled ? trashEmptyBtn : null)
+      || trashClose;
+    if (mål) { try { mål.focus(); } catch (e) { /* noden kan ha rukket å forsvinne */ } }
+  }
   function renderTrashModalBody() {
     if (!modalCfg) return;
     const rows = modalCfg.rows();
@@ -9345,7 +9363,7 @@
     // `purge` skiller seg fra `manage` kun for områder/mapper, der «Tøm» også
     // kan bety å FORLATE; ellers er det samme svar.
     trashEmptyBtn.disabled = !rows.some((r) => (r.purge !== undefined ? r.purge : r.manage) !== false);
-    rows.forEach((r) => {
+    rows.forEach((r, i) => {
       const row = document.createElement('div');
       row.className = 'trash-row';
       if (r.color) {
@@ -9381,7 +9399,7 @@
         ex.type = 'button';
         ex.textContent = r.extra.label;
         if (r.extra.aria) ex.setAttribute('aria-label', r.extra.aria);
-        ex.addEventListener('click', () => { r.extra.fn(); renderTrashModalBody(); });
+        ex.addEventListener('click', () => { r.extra.fn(); renderTrashModalBody(); focusInTrashModal(i); });
         row.appendChild(ex);
       }
       const restore = document.createElement('button');
@@ -9410,6 +9428,7 @@
         if (r.pending) undoBufferedDelete(r.id);
         else r.restore();
         renderTrashModalBody();
+        focusInTrashModal(i);
       });
       row.appendChild(restore);
       trashList.appendChild(row);
@@ -15591,6 +15610,19 @@
   /* ---- Dokument → DOM ----
      Bygger nodene selv. Ingen `innerHTML`, ingen strengbygget markup: et notat
      er brukerinnhold, og det skal aldri kunne bli til markup underveis. */
+  /* ÉN plass som gjør et element til en notatlenke: klassen, adressen,
+     hjelpeteksten og rollen. Både rendringen av et lagret dokument og
+     lenkeknappen i editoren går gjennom den — en lenke som nettopp ble laget
+     skal være en lenke for skjermleseren MED EN GANG, ikke først etter at
+     editoren er lukket og åpnet igjen. `tabindex` settes ikke her: det er
+     `applyNoteEditorAccess` som vet om dokumentet kan redigeres. */
+  function stampNoteLink(el, url) {
+    el.className = 'note-link';
+    el.dataset.url = url;
+    el.title = url;
+    el.setAttribute('role', 'link');
+    return el;
+  }
   function noteRunNode(run) {
     let node = document.createTextNode(run.s);
     const wrap = (tag) => { const el = document.createElement(tag); el.appendChild(node); node = el; };
@@ -15611,11 +15643,7 @@
          den bare i et SKRIVEBESKYTTET notat (`applyNoteEditorAccess`): i et
          redigerbart dokument eier markøren tastaturet, og et tabbstopp midt i
          teksten ville kjempet mot skrivingen. */
-      const el = document.createElement('span');
-      el.className = 'note-link';
-      el.dataset.url = run.url;
-      el.title = run.url;
-      el.setAttribute('role', 'link');
+      const el = stampNoteLink(document.createElement('span'), run.url);
       el.appendChild(node);
       node = el;
     }
@@ -16479,7 +16507,9 @@
        dem — da finner den ingen nabo og faller rett til ＋-knappen. Den
        motsatte veien er enklere: objektet kommer tilbake, og da er det
        objektet selv fokus skal lande på. */
-    keepFocus(on ? focusTargetAfterRemoval(kind, id, null) : handleSelector(kind, id));
+    if (!trashModalOpen()) {
+      keepFocus(on ? focusTargetAfterRemoval(kind, id, null) : handleSelector(kind, id));
+    }
     o.archived = !!on;
     stampContent(o);
     validateActiveNotes(state);
@@ -16513,7 +16543,8 @@
        bokhyllen skal derfor utvides til `.card`. */
     const node = sel && host ? host.querySelector(sel) : null;
     const ghost = ghostFrom(kind === 'noteProject' ? ((node && node.closest('.card')) || node) : node);
-    keepFocus(focusTargetAfterRemoval(kind, id, null));
+    // Arkivmodalens «Slett» går hit med modalen åpen; da eier den fokus.
+    if (!trashModalOpen()) keepFocus(focusTargetAfterRemoval(kind, id, null));
     bufferDelete(obj, kind, (o) => setTrashed(o, kind, true));
     validateActiveNotes(state);
     renderNotesNav();   // kassene blir synlige FØR animasjonen starter
@@ -18112,8 +18143,7 @@
     if (!url) { showToast(tr('notes.linkInvalid')); return; }
     const cur = noteCurrentLink();
     if (cur) {
-      cur.dataset.url = url;
-      cur.title = url;
+      stampNoteLink(cur, url);
     } else {
       noteRestoreRange();
       const sel = window.getSelection();
@@ -18121,10 +18151,7 @@
         showToast(tr('notes.linkNeedsSelection'));
         return;
       }
-      const span = document.createElement('span');
-      span.className = 'note-link';
-      span.dataset.url = url;
-      span.title = url;
+      const span = stampNoteLink(document.createElement('span'), url);
       try { sel.getRangeAt(0).surroundContents(span); }
       catch (e) {
         // Markeringen krysser en elementgrense: pakk innholdet i stedet.
@@ -18150,11 +18177,15 @@
   }
   /* «Åpne» virker på det som STÅR i feltet, ikke bare på en eksisterende
      lenke: har man skrevet inn en adresse for å sjekke den, er det den man
-     mener. Panelet lukkes etterpå — man er på vei ut av notatet. */
+     mener. Og den regelen gjelder BEGGE veier — et felt brukeren har tømt er
+     et svar, ikke et fravær, så det skal ikke falle tilbake på adressen som
+     nettopp ble strøket. Uten feltet (skulle det mangle i DOM-en) er lenkens
+     egen adresse det eneste vi har. Panelet lukkes etterpå — man er på vei ut
+     av notatet. */
   function openNoteLink() {
     const cur = noteCurrentLink();
-    const url = (noteLinkInput && noteLinkInput.value.trim()) || (cur ? cur.dataset.url : '');
-    if (!url) return;
+    const url = noteLinkInput ? noteLinkInput.value.trim() : (cur ? cur.dataset.url : '');
+    if (!url) { showToast(tr('notes.linkInvalid')); return; }
     if (openExternalUrl(url)) closeNotePanels();
   }
   function copyNoteLink() {

@@ -320,6 +320,11 @@ gulvet.
   forsvinner. **Å ARKIVERE teller som det samme**: objektet forlater visningen,
   og fokus må ha et sted å gå — den motsatte veien (ut av arkivet) lander på
   objektet som kom tilbake.
+- **Men en åpen modal eier fokus.** Kasse- og arkivmodalen kaller den samme
+  koden som board-et, og et fokusønske derfra ville pekt på et objekt BAK en
+  `aria-modal`-dialog — usynlig for den som bruker tastatur, og et `Enter`
+  ville truffet det tildekkede kortet. Ønsket settes derfor ikke mens modalen
+  står åpen; den velger selv neste rad, ellers «Tøm», ellers ✕.
 - **Notat-editoren** er ingen modal, men den følger den samme regelen: den
   lukkes tilbake til NOTATKORTET man åpnet, ikke til breadcrumben. Er kortet
   borte (arkivert, slettet, en annen mappe), er breadcrumben fallbacken.

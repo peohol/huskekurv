@@ -30,6 +30,11 @@
     8. Escape i lenke-panelet lukker BARE panelet — ikke hele editoren
        (regresjon: feltets egen Escape-lytter lukket panelet, hendelsen boblet
        videre, og editorens lytter så to lukkede paneler og lukket bildet)
+    9. Et TØMT adressefelt er et svar, ikke et fravær: «Åpne» faller ikke
+       tilbake på adressen brukeren nettopp strøk
+   10. En lenke laget i editoren er en lenke for skjermleseren MED EN GANG —
+       `role="link"` og adressen settes i den direkte opprettelsesveien, ikke
+       bare når et lagret dokument rendres
 
   Den eneste ruteinngripen i suiten står her, og med vilje: testen skal bevise
   at appen faktisk sender nettleseren til en FREMMED adresse, og den adressen
@@ -98,6 +103,9 @@ async function byggNotat(p, mål) {
     n.doc = { v: 1, blocks: [
       { t: 'p', c: [{ s: 'Se ' }, { s: 'håndboken', url: adresse }, { s: ' for referanseområder.' }] },
       { t: 'p', c: [{ s: 'Skriv til ' }, { s: 'laben', url: 'mailto:lab@example.com' }] },
+      // Rent avsnitt: her lages en NY lenke i punkt 10, uten å pakke en
+      // eksisterende lenke inn i en annen.
+      { t: 'p', c: [{ s: 'Referanseområdene revideres årlig.' }] },
     ] };
     H.save();
     H.renderNotes();
@@ -226,6 +234,54 @@ async function run(navn, viewport, touch) {
     await p.evaluate(() => document.getElementById('note-link-panel').hidden === true));
   await tømFaner();
 
+  /* ---------- 9. Et tømt felt åpner ingenting ---------- */
+  /* Står FØR skjemavakten under: den skriver med vilje et farlig `data-url`
+     rett inn i DOM-en, og dokumentet er ikke rent etterpå. */
+  await p.locator('#note-doc .note-link').first().click();
+  await p.waitForTimeout(300);
+  await p.locator('#note-link-input').fill('');
+  await p.locator('#note-link-open').click();
+  const urlerTomt = await åpnet();
+  log(M('9: et TØMT adressefelt åpner ikke den gamle adressen'),
+    urlerTomt.length === 0, JSON.stringify(urlerTomt));
+  const toastTomt = await p.evaluate(() => (document.querySelector('.toast') || {}).textContent || '');
+  log(M('9: … og brukeren får beskjed i stedet for stillhet'),
+    /kan ikke brukes/i.test(toastTomt), toastTomt || 'ingen toast');
+  await tømFaner();
+  const uendret = await p.evaluate(() => document.querySelector('#note-doc .note-link').dataset.url);
+  log(M('9: … og lenken i dokumentet er urørt'), uendret === MÅL, uendret);
+  // Panelet står åpent (en ugyldig adresse lukker det ikke) — lukk det, ellers
+  // ville verktøyknappen under bare vekslet det igjen.
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(250);
+
+  /* ---------- 10. En NY lenke har rollen med en gang ---------- */
+  /* Ekte vei: marker tekst, åpne panelet med verktøyknappen (som er det som
+     husker markeringen), skriv adressen, trykk «Bruk». */
+  await p.evaluate(() => {
+    const doc = document.getElementById('note-doc');
+    const r = document.createRange();
+    r.selectNodeContents(doc.lastElementChild);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  });
+  await p.waitForTimeout(150);
+  await p.locator('.note-tool[data-cmd="link"]').click();
+  await p.waitForTimeout(250);
+  await p.locator('#note-link-input').fill('https://eksempel.test/ny');
+  await p.locator('#note-link-apply').click();
+  await p.waitForTimeout(300);
+  const nyLenke = await p.evaluate(() => {
+    const el = document.querySelector('#note-doc .note-link[data-url="https://eksempel.test/ny"]');
+    return el ? { role: el.getAttribute('role'), title: el.title, klasse: el.className,
+      tab: el.getAttribute('tabindex'), tekst: (el.textContent || '').slice(0, 20) } : null;
+  });
+  log(M('10: en lenke laget i editoren har `role="link"` og adressen med en gang'),
+    !!nyLenke && nyLenke.role === 'link' && nyLenke.title === 'https://eksempel.test/ny'
+    && nyLenke.klasse === 'note-link' && nyLenke.tab === null, JSON.stringify(nyLenke));
+  await tømFaner();
+
   /* ---------- 4+5. Skjemavakten, målt på funksjonen selv ---------- */
   const skjema = await p.evaluate(() => {
     const H = window.__huskis;
@@ -299,9 +355,9 @@ async function run(navn, viewport, touch) {
     verktøySkjult: document.getElementById('note-tools').hidden,
     tab: [...document.querySelectorAll('#note-doc .note-link')].map((el) => el.getAttribute('tabindex')),
   }));
-  log(M('7b: et skrivebeskyttet notat gjør lenkene til tabbstopp (verktøylinjen er borte)'),
+  log(M('7b: et skrivebeskyttet notat gjør ALLE lenkene til tabbstopp (verktøylinjen er borte)'),
     lesemodus.redigerbar === false && lesemodus.verktøySkjult === true
-    && lesemodus.tab.length === 2 && lesemodus.tab.every((t) => t === '0'),
+    && lesemodus.tab.length >= 2 && lesemodus.tab.every((t) => t === '0'),
     JSON.stringify(lesemodus));
   if (lesemodus.tab[0] === '0') {
     await p.evaluate(() => document.querySelector('#note-doc .note-link').focus());
