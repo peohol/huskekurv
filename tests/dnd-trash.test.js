@@ -156,14 +156,24 @@ async function dragOnto(p, fromSel, targetSel, opts = {}) {
     const el = document.querySelector(s);
     const d = document.querySelector('[data-dnd-dragging]');
     const cs = d && getComputedStyle(d);
-    // Rødvasken males som `background-image` OVER den halvgjennomsiktige flaten.
-    // «Her slettes det» kan IKKE uttrykkes med mer gjennomsikt: alt som dras er
-    // allerede gjennomsiktig, og de to tilstandene ville lest likt. Derfor leser
-    // vi fargen, og krever samtidig at objektet står i full styrke.
-    const rgb = cs && /(\d+),\s*(\d+),\s*(\d+)/.exec(cs.backgroundImage);
+    /* MÅLFARGEN ERSTATTER palettfargen i alle lagene av det løftede objektet
+       (`--card-bg`/`--surface`/… byttes ut), den vaskes ikke over det ytterste
+       laget. Fargen leses derfor av `background-color` på selve flaten. «Her
+       slettes det» kan IKKE uttrykkes med mer gjennomsikt: alt som dras er
+       allerede gjennomsiktig, og de to tilstandene ville lest likt — derfor
+       kreves i tillegg full styrke. Den FAKTISK malte sluttfargen, med to
+       ulike kortfarger og i begge drakter, måles i `dnd-drop-colour`. */
+    /* Flaten er en `color-mix()`, og Chromium serialiserer den som
+       `color(srgb r g b / a)` med kanaler i 0-1 — ikke som `rgb()` med 0-255.
+       Begge formene leses, og kanalene normaliseres til 0-255. */
+    const tall = cs ? (cs.backgroundColor.match(/-?\d*\.?\d+/g) || []).map(Number) : [];
+    const srgb = cs && /^color\(/.test(cs.backgroundColor);
+    const rgb = tall.length >= 3
+      ? [0, 1, 2].map((i) => Math.round(srgb ? tall[i] * 255 : tall[i]))
+      : null;
     return { sikter: !!el && el.classList.contains('drop-target'),
       merket: !!document.querySelector('[data-dnd-dragging].to-trash'),
-      vask: rgb ? rgb.slice(1, 4).map(Number) : null,
+      vask: rgb,
       opacity: cs ? cs.opacity : null };
   }, targetSel);
   // Bredden mens draget står på (punkt 11: kassen skal vokse for å bli et
@@ -203,7 +213,7 @@ async function run(label, viewport) {
     it.armed.synlig === true && it.armed.armert === true, JSON.stringify(it.armed));
   log(label + ' 8: den avdekkede element-kassen viser ingen «0»-teller',
     it.armed.tellerSkjult === true, JSON.stringify(it.armed));
-  log(label + ' 2: sikting markerer kassen og gir objektet RØD bakgrunn',
+  log(label + ' 2: sikting markerer kassen og gir objektet RØD flate',
     it.aiming.sikter === true && it.aiming.merket === true &&
     !!it.aiming.vask && it.aiming.vask[0] > it.aiming.vask[1] + 60 &&
     it.aiming.vask[0] > it.aiming.vask[2] + 60, JSON.stringify(it.aiming));

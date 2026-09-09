@@ -7157,15 +7157,19 @@
      virket avhang av hvor høyt det andre kortet var, altså av tittel- og
      utdragslengde — en sorteringsregel ingen kan se.
 
-     SVARET ER Å MÅLE MED BOKSEN DRAGET HADDE FØR KRYMPINGEN, ikke å bytte
-     nevner. Formelen er fortsatt Smetts (`overlapp / MÅLETS høyde`), og
-     semantikken blir da nøyaktig den samme som før det kompakte løftet fantes
-     — krympingen er igjen ren maling. Å dele på den minste av de to i stedet
-     var fristende og FEIL: forholdet vokser da raskere enn før, og en kompakt
-     kategori byttet plass med en nabo den så vidt streifet
-     (`dnd-extract-thresholds` F2, målt). Tersklene selv er URØRT — 0,2 / 0,5 /
+     FEILEN ER RENT AT `reverseRatio` LIGGER OVER TAKET, og bare det rettes:
+     ligger taket under terskelen, senkes terskelen ned innenfor rekkevidde
+     (`dndHyst`) — ellers står Smetts egen 0,5 urørt. Formelen,
+     fremover-terskelen og tidslåsen er URØRT i alle tilfeller: 0,2 / 0,5 /
      300 ms er Smetts, og hentes fra `DEFAULT_HYSTERESIS` så de ikke kan komme
      i utakt.
+
+     TO NÆRLIGGENDE RETTELSER ER PRØVD OG FORKASTET, begge fordi de flyttet
+     FREMOVER-terskelen og dermed presisjonen det kompakte løftet vant: å dele
+     på den minste av de to utstrekningene, og å måle med boksen draget hadde
+     før krympingen. Begge gjorde sorteringen mer ivrig — målt: en kompakt
+     kategori byttet plass med en nabo den så vidt streifet
+     (`dnd-extract-thresholds` F2, `dnd-separators-preview` 1).
 
      HYSTERESEN FØLGER MED. Smetts egen plugin husker bare bytter der målets
      detektor ER Smetts (`isHysteresisDetector`), så en erstatning ville stille
@@ -7196,17 +7200,6 @@
     const spenn = akse === 'y' ? o.height : o.width;
     return spenn > 0 ? Math.max(0, til - fra) / spenn : 0;
   }
-  /* Boksen sorteringen skal måle med: den draget HADDE før krympingen.
-     `.dnd-compact` folder bort kortkroppen, så objektet mister høyde NEDOVER
-     mens toppen står — den opprinnelige boksen strekker seg derfor fra samme
-     topp og ned til `dndFullH`. Tverraksen males som den er: der deler Smett
-     alt på den minste av de to, så den kompakte bredden koster ingenting. */
-  function dndSortRect(a) {
-    const h = Math.max(a.height, dndFullH || 0);
-    if (h === a.height) return a;
-    return { top: a.top, bottom: a.top + h, left: a.left, right: a.right,
-      width: a.width, height: h };
-  }
   /* Alle sju board-ene er `axis: 'vertical'`, så hovedaksen er alltid y og
      tverraksen x. Formen på svaret er Smetts egen: nærmest senter vinner. */
   function dndSortTilstand(droppable, op) {
@@ -7217,9 +7210,16 @@
     const a = rect.boundingRectangle || rect;
     const o = form.boundingRectangle;
     if (!o) return null;
-    const sort = dndSortRect(a);
+    /* DET HØYESTE OPPNÅELIGE FORHOLDET for akkurat dette paret. Smetts
+       terskler forutsetter at det som dras kan dekke naboen helt (maks = 1).
+       Etter `dndCompactLift` kan det ikke: et notatkort på 53 px dras over et
+       mål på 226, og da er 53/226 = 0,23 taket. `reverseRatio` (0,5) ligger
+       over taket, og bytte TILBAKE i samme drag blir umulig uansett hvor man
+       drar — MÅLT: 0,197 ned, 0,232 opp. */
+    const maks = o.height > 0 ? Math.min(a.height, o.height) / o.height : 1;
     return {
-      ratio: dndOverlapRatio(sort, o, 'y'),
+      ratio: dndOverlapRatio(a, o, 'y'),
+      maks,
       // Tverraksen er Smetts egen: den minste av de to, som før.
       crossRatio: o.width > 0
         ? Math.max(0, Math.min(a.right, o.right) - Math.max(a.left, o.left))
@@ -7231,9 +7231,30 @@
         dy: (o.top + o.height / 2) - (a.top + a.height / 2) },
     };
   }
+  /* Bare RETUR-terskelen røres, og bare når den ellers er UOPPNÅELIG. Ligger
+     taket over terskelen, står Smetts egen 0,5 urørt — det er det normale, og
+     der virker hysteresen som den skal. Ligger taket under, senkes terskelen
+     akkurat nok til å komme innenfor (med litt margin, så returen ikke krever
+     en perfekt piksel), men aldri under fremover-terskelen: da ville det vært
+     lettere å angre et bytte enn å gjøre det, og hysteresen sto på hodet.
+
+     Å SKALERE ALLTID var galt, og målt: en kompakt kategori som ikke trengte
+     hjelp fikk retur-terskelen senket fra 0,5 til 0,34, byttet forbi naboen og
+     sprang rett tilbake igjen (`dnd-extract-thresholds` F2). Hjelpen skal
+     treffe bare det tilfellet som faktisk er ute av rekkevidde.
+
+     Fremover-terskelen og tidslåsen er urørt i alle tilfeller. */
+  const DND_REACH = 0.9;          // margin under taket, så returen er nåbar
+  function dndHyst(tilstand) {
+    const tak = tilstand.maks;
+    if (!(tak < DND_HYST.reverseRatio)) return DND_HYST;
+    return Object.assign({}, DND_HYST, {
+      reverseRatio: Math.max(DND_HYST.swapRatio, tak * DND_REACH),
+    });
+  }
   function dndSortCollision(input) {
     const tilstand = dndSortTilstand(input.droppable, input.dragOperation);
-    if (!tilstand || !Smett.admitsSwap(tilstand, DND_HYST)) return null;
+    if (!tilstand || !Smett.admitsSwap(tilstand, dndHyst(tilstand))) return null;
     const d = Math.hypot(tilstand.senter.dx, tilstand.senter.dy);
     return {
       id: input.droppable.id,
@@ -7256,10 +7277,11 @@
       if (droppable.id !== id) continue;
       const t = dndSortTilstand(droppable, b.manager.dragOperation);
       if (!t) return null;
+      const h = dndHyst(t);
       return { ratio: t.ratio, crossRatio: t.crossRatio, reversing: t.reversing,
-        sinceSwapMs: t.sinceSwapMs, admits: Smett.admitsSwap(t, DND_HYST),
-        lockMs: DND_HYST.reverseLockMs, reverseRatio: DND_HYST.reverseRatio,
-        swapRatio: DND_HYST.swapRatio };
+        sinceSwapMs: t.sinceSwapMs, admits: Smett.admitsSwap(t, h),
+        maks: t.maks, lockMs: h.reverseLockMs, reverseRatio: h.reverseRatio,
+        swapRatio: h.swapRatio };
     }
     return null;
   }
@@ -7716,13 +7738,9 @@
      står objektet derfor der det sto; det er kollapsen, og
      `navHoldGrab`/`anchorBegin`, som holder layouten i ro. */
   let dndCompactEl = null;
-  /* Høyden objektet HADDE før krympingen. Sorteringen måler mot den, ikke mot
-     den malte (`dndSortCollision`): formen er maling, semantikken skal stå. */
-  let dndFullH = 0;
   function dndCompactLift(el, b) {
     if (!el) return;
     dndCompactEl = el;
-    dndFullH = el.offsetHeight || 0;      // FØR krympingen
     el.classList.add('dnd-compact');
     const op = b && b.manager && b.manager.dragOperation;
     const at = op && op.position && (op.position.initial || op.position.current);
@@ -7742,7 +7760,6 @@
   function dndReleaseCompact() {
     const el = dndCompactEl;
     dndCompactEl = null;
-    dndFullH = 0;
     if (!el) return;
     el.style.translate = '';
     let frames = 0;

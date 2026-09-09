@@ -209,11 +209,11 @@ async function run(label, viewport, touch) {
     if (touch) await G.touchMove(p, x, tilbake);
     else await p.mouse.move(x, tilbake, { steps: 2 });
     const iLåsen = await p.evaluate((id) => window.__huskis.dndSortProbe(id), naboId);
+    /* Samme sted, bare senere: pekeren står HELT stille, så geometrien er
+       identisk og `dragover` ikke fyrer på nytt. Én bevegelse til ville
+       nullstilt hukommelsen om målet skiftet, og da måler vi tiden fra feil
+       øyeblikk (målt: 101 ms i stedet for 420). */
     await p.waitForTimeout(420);
-    // Samme sted, bare senere: eneste forskjell er at låsen har løpt ut.
-    if (touch) await G.touchMove(p, x, tilbake - 1);
-    else await p.mouse.move(x, tilbake - 1, { steps: 2 });
-    await p.waitForTimeout(80);
     const etterLåsen = await p.evaluate((id) => window.__huskis.dndSortProbe(id), naboId);
     // Tilbake til utgangspunktet før slippet, så neste sjekk starter i ro.
     await G.travel(p, { x, y: y0 }, touch);
