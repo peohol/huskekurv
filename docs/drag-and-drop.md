@@ -255,9 +255,9 @@ alltid har lovet.
 
 ## Plassering underveis
 
-Bytte utløses av **overlapp**, ikke av et punkt (Smetts hysterese-detektor). Den
-måler hvor mye av NABOEN det løftede objektet dekker langs dra-aksen, og tar den
-nærmeste naboen som slipper gjennom:
+Bytte utløses av **overlapp**, ikke av et punkt. Den måler hvor mye av naboen
+det løftede objektet dekker langs dra-aksen, og tar den nærmeste naboen som
+slipper gjennom:
 
 - **Fremover er ivrig**: ≥ **20 %** av naboen er nok.
 - **Å angre siste bytte er det ikke.** Rett etter et bytte ligger geometrien ofte
@@ -271,6 +271,31 @@ nærmeste naboen som slipper gjennom:
   vanligvis er en rykning. Det er dessuten bevisst mildere enn full
   senter-kryssing (som overskjøt inn i NESTE nabo), så en bevisst tilbakeføring
   er fortsatt lett.
+**NEVNEREN ER DEN MINSTE AV DE TO, ikke naboens.** Smetts egen detektor deler
+overlappet på NABOENS utstrekning, og det holder så lenge de to er omtrent like
+store. Det er de ikke: `dndCompactLift` krymper det løftede objektet til hodet
+sitt, mens naboen står i full høyde. Da er det HØYESTE oppnåelige forholdet
+`kompaktHøyde / naboHøyde` — MÅLT på to notatkort: 53/226 = 0,23. Det er over
+de 20 % som trengs fremover, men under de 50 % som trengs tilbake, så et bytte
+gikk den ene veien og var **umulig å angre i det samme draget**. Hvilken vei
+som virket avhang av hvor høy naboen var, altså av tittel- og utdragslengde — en
+sorteringsregel ingen kan se.
+
+`dndSortCollision` deler derfor på den minste av de to utstrekningene, nøyaktig
+som Smett selv gjør på TVERRAKSEN. Da betyr «halvt overlapp» det samme uansett
+hvem som ble løftet, og formen på det løftede objektet er igjen ren maling.
+Tersklene er URØRT og hentes fra Smetts `DEFAULT_HYSTERESIS`, så de ikke kan
+komme i utakt. Hysteresen føres av Huskis selv (`dndSwapRemember`, av det samme
+`dragover`-signalet og med den samme avgrensningen til sorterbare mål), fordi
+Smetts egen plugin bare husker bytter der detektoren ER Smetts — en erstatning
+uten dette ville stille mistet reverseringslåsen og gjort alt til 20 %.
+
+Låsen kan ikke leses av DOM-en, og det er verdt å vite hvorfor: mens den holder
+igjen, godtas INGEN mål, og forhåndsvisningen faller da tilbake til
+utgangspunktet — nøyaktig den samme rekkefølgen et fullført bytte tilbake ville
+gitt. `dnd-sort-reversible` venter derfor låsen ut der returen skal skje, i
+stedet for å påstå noe om de 300 ms.
+
 - **Retningen er borte, og reverseringslåsen gjør jobben den gjorde.**
   Detektoren har ingen retningsinngang — den tar nærmeste godkjente nabo. Det er
   en bevisst forenkling i Smett, og den koster ikke noe her: låsen er nettopp det

@@ -4701,6 +4701,15 @@
     b.manager.registry.plugins.unregister(Smett.Cursor);
     b.manager.registry.plugins.unregister(Smett.PreventSelection);
     b.manager.modifiers = dndModifiers();
+    /* Sorteringsdetektoren og hysterese-hukommelsen, ett sted for alle
+       board-ene: `dragmove` fordi Smett kan synke midt i gesten og da legger
+       sin egen detektor tilbake, `dragover` fordi det er DER målet skifter —
+       akkurat signalet Smetts egen plugin husker på. */
+    const m = b.manager.monitor;
+    m.addEventListener('dragstart', () => { dndSwapForget(); dndTuneSortCollisions(b); });
+    m.addEventListener('dragmove', () => dndTuneSortCollisions(b));
+    m.addEventListener('dragover', () => dndSwapRemember(b.manager.dragOperation));
+    m.addEventListener('dragend', dndSwapForget);
   }
 
   // Layout-boks uten evt. pågående FLIP-transform, så treffdeteksjon er stabil
@@ -7134,8 +7143,95 @@
      `hysteresisCollision` melder seg selv inn hos `Hysteresis`-pluginen, så
      reverseringslåsen fortsatt teller byttene. Aksen er loddrett i begge scopene
      (`axis: 'vertical'`). */
-  const dndRowHysteresis = (typeof Smett !== 'undefined' && Smett.hysteresisCollision)
-    ? Smett.hysteresisCollision(() => 'y') : null;
+  /* ---------- SORTERINGEN SKAL IKKE AVHENGE AV HVOR LITEN VI MALTE DRAGET ----------
+     Smetts egen terskel måler overlappet langs sorteringsaksen mot MÅLETS
+     utstrekning (`overlapRatio`: `overlapp / mål.height`). Det holder så lenge
+     det som dras og det man drar over er omtrent like store. Det er de ikke
+     lenger: `dndCompactLift` krymper det løftede objektet til hodet sitt, mens
+     målet står i full høyde. Da er det HØYESTE oppnåelige forholdet
+     `kompaktHøyde / målHøyde` — MÅLT på to notatkort: 53/226 = 0,23. Det er
+     over `swapRatio` (0,2), men under `reverseRatio` (0,5), så et bytte gikk
+     den ene veien og var UMULIG tilbake i det samme draget. Hvilken vei som
+     virket avhang av hvor høyt det andre kortet var, altså av tittel- og
+     utdragslengde — en sorteringsregel ingen kan se.
+
+     NEVNEREN ER DERFOR DEN MINSTE AV DE TO, nøyaktig som Smett selv gjør på
+     TVERRAKSEN (`crossAxisOverlap`). Da betyr «halvt overlapp» det samme
+     uansett hvem som ble løftet, og formen på det løftede objektet er igjen
+     ren maling. Tersklene selv er URØRT — 0,2 / 0,5 / 300 ms er Smetts, og
+     hentes fra `DEFAULT_HYSTERESIS` så de ikke kan komme i utakt.
+
+     HYSTERESEN FØLGER MED. Smetts egen plugin husker bare bytter der målets
+     detektor ER Smetts (`isHysteresisDetector`), så en erstatning ville stille
+     mistet reverseringslåsen og gjort alt til `swapRatio`. Vi fører derfor den
+     samme hukommelsen selv, av det samme signalet (`dragover`, målet som ikke
+     er kilden), og bruker Smetts `admitsSwap` til å avgjøre.
+     `dnd-sort-reversible.test.js` er nettet. */
+  const DND_HYST = (typeof Smett !== 'undefined' && Smett.DEFAULT_HYSTERESIS)
+    ? Smett.DEFAULT_HYSTERESIS : { swapRatio: 0.2, reverseRatio: 0.5, reverseLockMs: 300, crossAxisRatio: 0.5 };
+  let dndSwapMemo = null;                 // { targetId, at } — vår egen hysterese-hukommelse
+  function dndSwapForget() { dndSwapMemo = null; }
+  function dndSwapRemember(op) {
+    const t = op && op.target;
+    const kilde = op && op.source;
+    /* BARE SORTERBARE MÅL, som Smetts egen plugin (`isHysteresisDetector`).
+       Kolonnene og kassene er også mål, og de skifter fritt under et drag — en
+       hukommelse som talte dem ville blitt overskrevet i det samme øyeblikket
+       byttet skjedde, og reverseringslåsen var da borte. MÅLT: retur etter 104
+       ms byttet tilbake, altså midt i de 300 ms som skulle holdt igjen. */
+    if (!t || t.collisionDetector !== dndSortCollision) return;
+    if (kilde && t.id === kilde.id) return;
+    dndSwapMemo = { targetId: t.id, at: performance.now() };
+  }
+  // Overlapp langs én akse, delt på den MINSTE av de to utstrekningene.
+  function dndOverlapRatio(a, o, akse) {
+    const fra = akse === 'y' ? Math.max(a.top, o.top) : Math.max(a.left, o.left);
+    const til = akse === 'y' ? Math.min(a.bottom, o.bottom) : Math.min(a.right, o.right);
+    const spenn = akse === 'y' ? Math.min(a.height, o.height) : Math.min(a.width, o.width);
+    return spenn > 0 ? Math.max(0, til - fra) / spenn : 0;
+  }
+  /* Alle sju board-ene er `axis: 'vertical'`, så hovedaksen er alltid y og
+     tverraksen x. Formen på svaret er Smetts egen: nærmest senter vinner. */
+  function dndSortCollision(input) {
+    const op = input.dragOperation;
+    const form = input.droppable && input.droppable.shape;
+    if (!op || !form) return null;
+    const rect = Smett.intentRectangle(op);
+    if (!rect) return null;
+    const a = rect.boundingRectangle || rect;
+    const o = form.boundingRectangle;
+    if (!o) return null;
+    const tilstand = {
+      ratio: dndOverlapRatio(a, o, 'y'),
+      crossRatio: dndOverlapRatio(a, o, 'x'),
+      reversing: !!dndSwapMemo && dndSwapMemo.targetId === input.droppable.id,
+      sinceSwapMs: dndSwapMemo ? performance.now() - dndSwapMemo.at : Number.POSITIVE_INFINITY,
+    };
+    if (!Smett.admitsSwap(tilstand, DND_HYST)) return null;
+    const d = Math.hypot((o.left + o.width / 2) - (a.left + a.width / 2),
+                         (o.top + o.height / 2) - (a.top + a.height / 2));
+    return {
+      id: input.droppable.id,
+      value: d === 0 ? 1 : 1 / d,
+      type: Smett.CollisionType.Collision,
+      priority: Smett.CollisionPriority.Normal,
+    };
+  }
+  /* Smett tildeler sin egen detektor til hvert sorterbart objekt, også på nytt
+     ved `sync()` midt i en gest. Vi bytter derfor VÅR inn igjen hver runde —
+     og bare der Smetts egen står, så ingen Huskis-detektor røres. */
+  function dndTuneSortCollisions(b) {
+    if (!b || typeof Smett === 'undefined' || !Smett.isHysteresisDetector) return;
+    for (const droppable of b.manager.registry.droppables) {
+      if (Smett.isHysteresisDetector(droppable.collisionDetector)) {
+        droppable.collisionDetector = dndSortCollision;
+      }
+    }
+  }
+  // Kategori-raden låner den samme sorteringen (den er selv et sorterbart
+  // objekt som i tillegg holder en container).
+  const dndRowHysteresis = (typeof Smett !== 'undefined' && Smett.intentRectangle)
+    ? dndSortCollision : null;
   function dndCategoryRowCollision(input) {
     const el = input.droppable.element;
     if (!el || !el.classList) return null;
