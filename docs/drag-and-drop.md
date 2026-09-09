@@ -1002,7 +1002,8 @@ den SLETTER objektet i stedet for å flytte det.
 **På notatsiden gjelder nøyaktig det samme for ARKIVET** (`armDragArchive`), som
 står ved siden av kassen på alle tre nivåene. Det er den samme knappen, den
 samme sonen og den samme utfoldingen — bare betydningen og fargen er en annen:
-`--drag-archive` i stedet for `--drag-danger`, fordi arkivering ikke er en fare.
+`--drag-archive-face` i stedet for `--drag-danger-face`, fordi arkivering ikke er
+en fare.
 RETTEN ER EN ANNEN. Å arkivere er å legge bort — reversibelt INNHOLD, og det
 krever redigeringsrett (`draggedCanBeArchived` → `canEditNoteObj`). Å slette er
 destruktivt og tar objektet fra alle andre med tilgang, og krever sletterett
@@ -1479,11 +1480,34 @@ nesten hele kortet. De indre lagene får derfor det samme sløret, og hvor mye s
 slipper gjennom står ett sted for hele appen (`--dnd-veil`).
 
 **Tilstander må derfor uttrykkes i FARGE, ikke i mer gjennomsikt.** Sikter man på
-søppelkassen, males en rødvask (`--drag-danger`) over flaten som
-`background-image`, altså oppå `background-color`: gjennomsikten og sløret står
-urørt, kassen synes fortsatt gjennom objektet, og «her slettes det» leses som en
-farge. Uttrykt som enda et lag gjennomsikt ville de to tilstandene lest likt.
-Målt i `dnd-drop-animation` (sjekk 6, alle fem nivåene) og `dnd-trash` (sjekk 2).
+søppelkassen, skal objektet lese umiskjennelig RØDT; over arkivet umiskjennelig
+GULT — uansett hvilken palettfarge kortet har. Uttrykt som enda et lag
+gjennomsikt ville de to tilstandene lest likt.
+
+**Målfargen ERSTATTER palettfargen; den vaskes ikke over den.** Et kort er flere
+flater oppå hverandre — kortflaten, korthodets eget hakk, platene innholdet står
+på — og hver males av sitt eget palett-token. En vask på det ytterste laget lot
+derfor de indre lagene stå i kortets egen farge, og på et KOMPAKT løft er det
+nettopp hodet som ER hele den synlige flaten: et grønt kort leste grønt over
+søppelkassen (MÅLT: `#7b997d`). `.to-trash`/`.to-archive` bytter derfor ut selve
+TOKENENE (`--card-bg`, `--card-head`, `--surface`, `--plate`, `--ink` …) på det
+løftede objektet, så alle lagene arver den semantiske fargen med én gang.
+`--dnd-veil` og `backdrop-filter` står urørt over dem: dragets egen gjennomsikt
+og slør er de samme som ellers, og kassen synes fortsatt gjennom objektet — det
+er bare hvilken farge som slipper gjennom, som skifter.
+
+`!important` er nødvendig, ikke pynt: `paintCardColor` setter `--card-bg` og
+`--card-head` som INLINE-stil på kortet, og en inline-stil slår enhver vanlig
+regel på det samme elementet.
+
+Blekket pinnes i samme slengen. `.card-title` er hvit-med-skygge PÅ
+kortfargen, en kontrakt valgt for paletten — hvit på arkivets gule ga 2,5:1
+(MÅLT). Tittelen bruker derfor det semantiske blekket, uten skygge og strek.
+
+Målt i `dnd-drop-colour` (den FAKTISK malte fargen, lest av et skjermbilde
+piksel for piksel — `getComputedStyle` ville bare gjentatt tokenet vi selv
+skrev, og ikke sett at et indre lag maler over det), `dnd-drop-animation`
+(sjekk 6, alle fem nivåene) og `dnd-trash` (sjekk 2).
 
 ## Auto-scroll
 

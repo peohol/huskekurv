@@ -122,7 +122,8 @@ Fire ting snur som ikke er flater:
   |---|---|---|
   | `--check-hover` | avkryssingsboksens kant ved hover | `--primary` klarer så vidt 3:1 mot den mørke platen (min 3,13:1) — men med langt mindre margin enn dette dedikerte tokenet gir (min 5,94:1), og en hover-kant skal ikke bli utydeligere enn hvilekanten i det øyeblikket man sikter på den. |
   | `--scrim` | drag-placeholderens flate | en mørkning på en mørk board-bakgrunn er 1,03:1; et *løft* gir 1,45:1. |
-  | `--drag-danger` | rødvasken over et objekt som slettes ved slipp | vasken males på en halvgjennomsiktig dra-flate ([`drag-and-drop.md`](drag-and-drop.md)). Den mørke drakten løfter i stedet for å mørkne, så vasken er den LYSE rødfargen — og svakere, fordi lys tar mer plass på en mørk flate. |
+  | `--drag-danger-face` / `--drag-archive-face` | flaten et løftet objekt males i når det holdes over søppelkassen respektive arkivet | fargen ERSTATTER palettfargen i alle lagene av objektet, og `--dnd-veil` gir gjennomsikten ([`drag-and-drop.md`](drag-and-drop.md)). Den mørke drakten løfter i stedet for å mørkne, så flatene er de LYSE tonene. |
+  | `--drag-danger-ink` / `--drag-archive-ink` | blekket på den flaten | rød bærer hvit tekst i lys drakt og mørk i mørk; gul bærer mørk tekst i begge. Måles i `dnd-drop-colour` (≥ 4,5:1 mot den faktisk malte flaten). |
 
   `--scrim` når ikke 3:1 — og har aldri gjort det, heller ikke i lys drakt
   (1,22:1). Det er en flate som kommer sammen med andre signaler. Kravet testen

@@ -352,19 +352,24 @@
      ligger på board-bakgrunnen ELLER inne i et kort, og må være synlig begge
      steder: en mørkning på en mørk board-bakgrunn er ingenting (1,03:1). */
   --scrim: rgba(0, 0, 0, 0.12);
-  /* Rødvasken over det LØFTEDE objektet når et slipp ville slettet det. Den
-     males OVER dra-flaten (som `background-image`), så gjennomsikten og
-     bakgrunnssløret står urørt — det er bare fargen som skifter. Egen fra
-     --danger-soft: den er en flate under mørk tekst på hvitt, denne er et lag
-     over en halvgjennomsiktig flate og må bære signalet alene. */
-  --drag-danger: rgba(192, 56, 77, 0.45);
+  /* FLATEN den semantiske fargen males som når objektet holdes over
+     søppelkassen: et slipp der sletter. Den er UGJENNOMSIKTIG med vilje: den erstatter palettfargen i alle
+     lagene av det løftede objektet i stedet for å vaskes over dem, og
+     gjennomsikten kommer fra `--dnd-veil` som før. En vask alene lot kortets
+     egen farge bestemme sluttfargen — og på et KOMPAKT løft malte korthodet
+     sin egen palettfarge rett over vasken, så et grønt kort leste grønt. */
+  --drag-danger-face: #b8394c;
+  --drag-danger-ink: #ffffff;
   /* Samme lag, men for ARKIVET: et slipp der arkiverer, og arkivering er ingen
      fare — fargen er derfor arkivikonets egen manilagule, ikke rødt. Litt
      sterkere alfa enn rødvasken fordi tonen er lysere og ellers ville forsvunnet
      i kortfargene. `--archive-soft` er søsteren under knappen selv, som
      `--danger-soft` er det for kassen. */
   --archive-soft: rgba(201, 160, 106, 0.22);
-  --drag-archive: rgba(201, 160, 106, 0.55);
+  /* Arkivets tilsvarende flate. Gul bærer ikke hvit tekst (se
+     kontrast-kontrakten), så blekket er det mørke. */
+  --drag-archive-face: #d9a441;
+  --drag-archive-ink: #2a2118;
   /* Avkryssingsboksens kant ved hover. Egen fra --primary fordi hvilekanten
      (--card-accent) regnes ut fra kortfargen og treffer 3:1 — en hover som
      bytter til en fast farge må klare det samme, ellers blir kontrollen
@@ -474,14 +479,13 @@
      Innover-skyggen blir stående svart i begge drakter; det er den som gir
      «hull», og et hull er mørkt uansett drakt. */
   --scrim: rgba(255, 255, 255, 0.13);
-  /* Speilingen av --drag-danger: den mørke drakten løfter i stedet for å
-     mørkne, så vasken er den LYSE rødfargen — og svakere, fordi den ligger på
-     en mørk flate der lys tar mer plass. */
-  --drag-danger: rgba(240, 143, 160, 0.34);
-  /* Speilingen av --drag-archive/--archive-soft, av samme grunn: den mørke
-     drakten løfter, så tonen er den lyse manilagule og svakere. */
+  /* Den mørke drakten LØFTER: flatene er de LYSE tonene, og blekket det mørke
+     — motsatt av lys drakt, som alle andre løftede flater her. */
+  --drag-danger-face: #ee8397;
+  --drag-danger-ink: #2a1418;
   --archive-soft: rgba(230, 200, 150, 0.20);
-  --drag-archive: rgba(230, 200, 150, 0.34);
+  --drag-archive-face: #e6c896;
+  --drag-archive-ink: #2a2118;
   /* --primary mot den mørke platen (nå en color-mix() mot palettfargen, se
      `.card` lenger ned) klarer så vidt 3:1 i verste hjørne — men med langt
      mindre margin (min 3,13:1) enn dette dedikerte tokenet gir (min 5,94:1),
@@ -2520,18 +2524,70 @@ body.is-dragging * {
 /* Sikter man på søppelkassen, skifter det løftede objektet BAKGRUNNSFARGE til
    rødt: et slipp her sletter. Gjennomsikten og sløret er allerede signalet for
    «dette dras», så tilstanden kan ikke uttrykkes med mer gjennomsikt — da hadde
-   de to lest likt. Vasken males som `background-image`, altså OVER
-   `background-color`, så flaten fortsatt slipper kassen (med sin
-   `.drop-target`-markering) gjennom. `to-trash` settes fra JS
-   (`setDragTrashTarget`). */
+   de to lest likt.
+
+   MÅLFARGEN ERSTATTER PALETTFARGEN; den vaskes ikke over den. Et kort er flere
+   flater oppå hverandre — kortflaten, korthodets eget hakk, platene innholdet
+   står på — og hver av dem males av sitt eget palett-token. En vask på det
+   ytterste laget lot derfor de indre lagene stå i kortets egen farge, og på et
+   KOMPAKT løft er det nettopp hodet som ER hele den synlige flaten: et grønt
+   kort leste grønt over søppelkassen. Vi bytter derfor ut selve TOKENENE på
+   det løftede objektet, så alle lagene arver den semantiske fargen med én
+   gang. `--dnd-veil` og `backdrop-filter` står urørt over dem, så dragets egen
+   gjennomsikt og slør er de samme som ellers — det er bare hvilken farge som
+   slipper gjennom, som skifter.
+
+   Blekket pinnes samtidig: rødt bærer hvit tekst, gult bærer mørk (se
+   kontrast-kontrakten øverst). Uten pinningen fulgte tittelen kortets eget
+   blekk, som er valgt for palettfargen og ikke for denne.
+
+   `!important` er nødvendig, ikke pynt: `paintCardColor` setter `--card-bg` og
+   `--card-head` som INLINE-stil på kortet, og en inline-stil slår enhver
+   vanlig regel på det samme elementet. Uten den sto palettfargen igjen og hele
+   overstyringen var en vakt som ikke voktet noe (MÅLT: et grønt kort leste
+   fortsatt grønt over søppelkassen).
+
+   `to-trash`/`to-archive` settes fra JS (`setDragTrashTarget` /
+   `setDragArchiveTarget`). `dnd-drop-colour.test.js` måler den FAKTISKE malte
+   fargen, ikke tokenet. */
 .dnd-surface [data-dnd-dragging].to-trash {
-  background-image: linear-gradient(var(--drag-danger), var(--drag-danger));
+  --card-bg: var(--drag-danger-face) !important;
+  --card-head: var(--drag-danger-face) !important;
+  --card-head-face: var(--drag-danger-face) !important;
+  --card-accent: var(--drag-danger-face) !important;
+  --surface: var(--drag-danger-face) !important;
+  --plate: var(--drag-danger-face) !important;
+  --ink: var(--drag-danger-ink) !important;
+  --ink-soft: var(--drag-danger-ink) !important;
+  --icon-ink: var(--drag-danger-ink) !important;
 }
 /* Sikter man på ARKIVET, skifter objektet til arkivfargen på nøyaktig samme
-   måte — samme lag, samme grunn, bare en annen betydning. `to-archive` settes
-   fra JS (`setDragArchiveTarget`). */
+   måte — samme lag, samme grunn, bare en annen betydning. */
+/* Tittelen er hvit-med-skygge PÅ KORTFARGEN (`.card-title`), en kontrakt som
+   er valgt for paletten — ikke for disse to flatene. Hvit på arkivets gule ga
+   2,5:1 (MÅLT). Blekket er derfor det semantiske, og skyggen og streken faller
+   bort: de finnes for å bære hvit tekst mot en vilkårlig kortfarge, og her er
+   flaten kjent. */
+.dnd-surface [data-dnd-dragging].to-trash .card-title,
+.dnd-surface [data-dnd-dragging].to-trash .item-text,
+.dnd-surface [data-dnd-dragging].to-trash .cat-title,
+.dnd-surface [data-dnd-dragging].to-archive .card-title,
+.dnd-surface [data-dnd-dragging].to-archive .item-text,
+.dnd-surface [data-dnd-dragging].to-archive .cat-title {
+  color: var(--ink);
+  text-shadow: none;
+  -webkit-text-stroke: none;
+}
 .dnd-surface [data-dnd-dragging].to-archive {
-  background-image: linear-gradient(var(--drag-archive), var(--drag-archive));
+  --card-bg: var(--drag-archive-face) !important;
+  --card-head: var(--drag-archive-face) !important;
+  --card-head-face: var(--drag-archive-face) !important;
+  --card-accent: var(--drag-archive-face) !important;
+  --surface: var(--drag-archive-face) !important;
+  --plate: var(--drag-archive-face) !important;
+  --ink: var(--drag-archive-ink) !important;
+  --ink-soft: var(--drag-archive-ink) !important;
+  --icon-ink: var(--drag-archive-ink) !important;
 }
 /* … OG DEN SIER HVA SOM SKJER. En fargeendring alene er et svakt signal — den
    forutsetter at man kjenner fargen fra før — så det løftede objektet får i
