@@ -104,7 +104,19 @@
        få hundre byte fra samme opphav. Se docs/mork-drakt.md. -->
   <script src="theme.js"></script>
 </head>
-<body class="locked">
+<!-- `no-auth` STÅR HER, FRA FØRSTE MALING — ikke først når app.js har kjørt.
+     Klassen skjuler alt app-innhold (regelen i styles.css: .topbar, .app-main,
+     .corner-controls), og den er appens LÅSTE utgangspunkt: siden vet ingenting
+     om noen sesjon før app.js er lastet og Supabase har svart, og skal derfor
+     ikke vise noe av appen i mellomtiden. Sattes den først i `initAccounts()`,
+     rakk toppmenyen, breadcrumben og hjørnekontrollene å bli malt bak
+     innloggingsmuren mens app.js (over 1 MB) fortsatt var underveis.
+     Bakgrunnen er den samme fargen som innloggingsskjermens, så ventingen ser
+     ut som en innloggingsskjerm som ennå ikke er ferdig — aldri som appen.
+     KUN `cloudStart()` fjerner klassen, og den kjører bare med en innlogget
+     bruker: gaten feiler LUKKET om noe skulle gå galt underveis.
+     Se docs/accounts.md, «Den låste oppstarten». -->
+<body class="locked no-auth">
   <!-- Toppkontrollene: ÉN responsiv gruppe fast i øvre høyre hjørne av
        VIEWPORTET, utenfor toppmenyens flyt. Knappene ligger i DOM-rekkefølge
        venstre → høyre og får plassen sin av flex — ingen av dem kjenner

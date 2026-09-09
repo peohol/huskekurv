@@ -80,6 +80,28 @@ Sesjonen styres av `supabase.auth.onAuthStateChange` (erstatter
 `cloudStop()`. En eksisterende sesjon hentes ved oppstart med `getSession()`.
 `authUser` bærer `{ id, email, meta }` der `meta` = `user.user_metadata`.
 
+### Den låste oppstarten
+
+Den som ikke er innlogget skal ALDRI se noe annet enn innloggingsskjermen.
+Gaten er `body.no-auth`, som skjuler toppmenyen, board-et og hjørnekontrollene
+(regelen ligger i `styles.css`).
+
+Klassen står på `<body>` i `index.html`, altså fra FØRSTE MALING — ikke fra
+`initAccounts()`. Stilarket lastes i `<head>` og er dermed på plass før noe
+males, mens `app.js` er over 1 MB: settes gaten først derfra, rekker toppmenyen,
+breadcrumben og hjørnekontrollene å bli malt bak innloggingsmuren så lenge fila
+er underveis. Bakgrunnen bak gaten er den samme fargen som innloggingsskjermens,
+så ventingen ser ut som en innloggingsskjerm som ennå ikke er ferdig — aldri som
+appen.
+
+`cloudStart()` er det ENESTE som fjerner klassen, og den kjører bare med en
+innlogget bruker: gaten feiler LUKKET. Det gjelder også mens sesjonen hentes —
+med et token nær utløp på en enhet uten nett kan `getSession()` bruke opptil 30
+sekunder, og appen skal ikke vises i påvente av svaret. `cloudStop()` setter
+klassen tilbake ved utlogging.
+
+Vokter: `tests/auth-gate.test.js`.
+
 **Demonstrasjonen på kontoen**: om den er fullført eller avsluttet, og med
 hvilken versjon (`user_metadata.onboarding`) — og hvilke gest-tips som er vist
 (`user_metadata.tips`) lagres på samme måte som posisjonen under — se

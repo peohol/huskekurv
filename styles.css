@@ -3515,9 +3515,15 @@ body.tour-demo .trash-row button:not(.tour-live) { opacity: 0.35; }
    flate-mønstre fra designsystemet over.
    ============================================================ */
 
-/* Skjul app-innhold også i kontomodus (før innlogging). Hele
+/* Skjul app-innhold før innlogging. Hele
    toppkontrollgruppen (kalender, søk, drakt, konto) går med — innloggingsskjermens egen
-   draktknapp (#auth-theme-toggle-btn) dekker draktvalget der. */
+   draktknapp (#auth-theme-toggle-btn) dekker draktvalget der.
+
+   REGELEN GJELDER FRA FØRSTE MALING: klassen står på `<body>` i index.html,
+   ikke bare fra `initAccounts()`. Stilarket lastes i <head> og er dermed på
+   plass før noe males, mens app.js er over 1 MB — settes klassen først derfra,
+   rekker toppmenyen og hjørnekontrollene å synes bak innloggingsmuren så lenge
+   app.js er underveis. `cloudStart()` er det ENESTE som fjerner den. */
 body.no-auth .topbar,
 body.no-auth .app-main,
 body.no-auth .corner-controls { display: none; }
