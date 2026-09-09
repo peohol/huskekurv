@@ -164,6 +164,14 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
 
+  /* Slippfoten nederst (søppelkasse/arkiv): luften rundt kassene, og høyden
+     board-et må holde av for dem når de er synlige. Kassene dobler høyden
+     under et drag (se `.trashcan.drag-trash`); reservasjonen følger HVILE-
+     høyden — draget vokser nedenfra og over foten, ikke inn i board-et. */
+  --dock-pad: 10px;
+  --dock-gap: 10px;
+  --dock-h: calc(var(--control-h) + 2 * var(--dock-pad));
+
   /* Sidepolstring i toppmenyen — viewport-relativ. Kontoknappen (fast i
      viewportets hjørne) bruker samme token, så den flukter med toppmenyens
      høyre kant. */
@@ -1121,8 +1129,14 @@ body {
      landskap: --board-gap er fortsatt luften, inset-en er strimmelen som ikke
      kan brukes. */
   padding: var(--board-pad-top, 160px) calc(var(--board-gap) + var(--safe-right))
-           var(--safe-bottom) calc(var(--board-gap) + var(--safe-left));
+           calc(var(--safe-bottom) + var(--dock-reserve, 0px))
+           calc(var(--board-gap) + var(--safe-left));
 }
+/* Er slippfoten synlig, holder board-et av høyden dens nederst — ellers ville
+   den lagt seg over det siste kortet. Polstringen ligger på BUNNEN, så den
+   flytter ingenting som allerede står: et drag som folder ut en tom kasse gjør
+   siden litt lengre, ikke innholdet forskjøvet. */
+body:has(.drop-dock:not([hidden]) .item-trash:not([hidden])) { --dock-reserve: var(--dock-h); }
 
 /* Listefunksjonene i toppmenyen (er også .panel-actions): rett til høyre for
    nav-knappen, og krymper aldri — det er breadcrumben som gir fra seg plass.
@@ -1336,6 +1350,42 @@ body {
   justify-content: center;
   padding: 0 10px;
 }
+
+/* ---------------- Slippfoten (søppelkasse + arkiv) ----------------
+   Hovedsidens og notatfanens kasser står i en FAST fot nederst i viewportet,
+   ikke i topplinjas knapperad. En kasse som deler rad med ＋-knappen er ~48 px
+   bred og ligger inntil noe annet man kan treffe; her har den hele bredden for
+   seg selv, langt fra alt annet. Det er den samme løsningen som område-kassen
+   i nav-modalens fot (`.nav-foot`), og de to deler derfor reglene under.
+
+   Foten er BORTE når den er tom: kassene er skjult når de ikke har innhold, og
+   et drag folder dem ut (`data-drag-revealed`). Uten `:has()`-regelen ville en
+   tom fot ligget som en stripe over board-et hele tiden. */
+.drop-dock {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Over board-et og de faste toppkontrollene (35), under modaler (200) og
+     toaster (300) — foten er en del av flaten, ikke et lag over den. */
+  z-index: 40;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--dock-gap);
+  padding: var(--dock-pad) calc(var(--dock-pad) + var(--safe-right))
+           calc(var(--dock-pad) + var(--safe-bottom)) calc(var(--dock-pad) + var(--safe-left));
+  /* Innholdet som ruller forbi under foten skal ikke lese gjennom kassene.
+     Toning, ikke en massiv stripe: foten er et mål, ikke et panel. */
+  background: linear-gradient(to top, var(--bg) 55%, transparent);
+  pointer-events: none;                /* selve stripa fanger ingen klikk … */
+}
+.drop-dock > * { pointer-events: auto; }   /* … men kassene i den gjør det */
+/* Kassene i en fot (både `.drop-dock` og modalenes `.nav-foot`) deler bredden
+   likt: er det to av dem — arkivet og søppelkassen — tar de en halvdel hver,
+   med luft rundt og mellom. Er bare den ene synlig, får den hele bredden. */
+.drop-dock .item-trash { flex: 1 1 0; padding: 0; }
+/* En tom fot skal ikke ligge som en stripe over board-et. */
+.drop-dock:not(:has(.item-trash:not([hidden]))) { display: none; }
 
 /* ---------------- Board (kolonner) ----------------
    Kolonnene er EKTE containere (`.board-col`), ikke CSS multi-column. Grunnen er
@@ -2413,6 +2463,49 @@ body.is-dragging * { cursor: grabbing !important; }
 .dnd-surface [data-dnd-dragging].sep-above::before,
 .dnd-surface [data-dnd-dragging].sep-below::after { content: none; }
 
+/* ---- DET LØFTEDE OBJEKTET ER KOMPAKT ----
+   Alt som dras krymper i BEGGE retninger ved løft (`dndCompactLift` i app.js):
+   objektet ligger oppå det man sikter mot, og alt det dekker er svar man
+   trenger. Igjen står TITTELEN og ikonene til VENSTRE for den — typeikonet,
+   delt-merket og avkryssingsboksen — for det er de som sier HVA man holder i.
+   Alt til høyre for tittelen (menyknapp, kollaps-teller, «sist endret»,
+   meta-chips) og hele kortkroppen foldes bort.
+
+   Bredden er innholdets egen. `fit-content` har containerens bredde som tak, så
+   en lang tittel brytes som før og objektet blir aldri BREDERE enn det var —
+   bare smalere når det kan.
+
+   Reglene står på klassen, ikke på `[data-dnd-dragging]`, og det er ikke en
+   smakssak: dnd-kit forankrer det løftede objektets geometri (`--dnd-width`/
+   `--dnd-height`/`--dnd-left`/`--dnd-top`) i KLONENS boks. Et hull som ble
+   tvunget tilbake til full bredde ville dermed blåst objektet opp igjen —
+   krympingen ville vært borte, og skiftet som sentrerte det på grepet med den.
+   Klonen arver derfor klassen som alt annet, og hullet er like stort som det
+   som lander i det.
+
+   `overflow: visible` er nødvendig for slipp-etiketten («Slett»/«Arkiver»),
+   som males OVER objektet — se `[data-drop-label]` under. Kortet klipper
+   ellers alt utenfor sin egen boks, og da ville etiketten forsvunnet. Hodet
+   overtar derfor kortets avrunding, siden det nå ER hele den synlige flaten. */
+.dnd-compact {
+  width: -moz-fit-content;
+  width: fit-content;
+  overflow: visible;
+}
+/* Alt til høyre for tittelen, og hele kortkroppen. */
+.dnd-compact > .card-body,
+.dnd-compact > .cat-items,
+.dnd-compact .meta-row,
+.dnd-compact .collapse-count,
+.dnd-compact .note-card-meta,
+.dnd-compact .obj-menu-btn,
+.dnd-compact .idea-del-btn { display: none !important; }
+.dnd-compact > .card-head,
+.dnd-compact > .cat-head { border-radius: var(--radius); }
+/* Kategorien er allerede foldet sammen ved løft (`dndCollapseCategory`); her
+   nulles bare luften hylla ellers holder av. */
+.dnd-compact.category { padding: 6px; }
+
 /* Sikter man på søppelkassen, skifter det løftede objektet BAKGRUNNSFARGE til
    rødt: et slipp her sletter. Gjennomsikten og sløret er allerede signalet for
    «dette dras», så tilstanden kan ikke uttrykkes med mer gjennomsikt — da hadde
@@ -2429,6 +2522,44 @@ body.is-dragging * { cursor: grabbing !important; }
 .dnd-surface [data-dnd-dragging].to-archive {
   background-image: linear-gradient(var(--drag-archive), var(--drag-archive));
 }
+/* … OG DEN SIER HVA SOM SKJER. En fargeendring alene er et svakt signal — den
+   forutsetter at man kjenner fargen fra før — så det løftede objektet får i
+   tillegg en etikett («Slett» / «Arkiver») rett over seg. Den males på selve
+   OBJEKTET, ikke på kassen: objektet ligger i top layer og kan ikke dekkes av
+   noe, mens en etikett på kassen ville havnet under både fingeren og det man
+   drar. Teksten kommer fra `data-drop-label` (i18n, satt av
+   `setDragTrashTarget`/`setDragArchiveTarget`), så den finnes bare på det ene
+   objektet som faktisk sikter — og bare så lenge det sikter.
+
+   Flaten er TOASTENS: appens egen «etikett som svever over hva som helst», med
+   den kontrasten den allerede er målt på. Fargen som skiller sletting fra
+   arkivering bærer objektet selv. */
+.dnd-surface [data-dnd-dragging][data-drop-label]::after {
+  content: attr(data-drop-label);
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 10px);
+  translate: -50% 0;
+  padding: 5px 14px;
+  border-radius: 999px;
+  background: var(--glass-dark);
+  -webkit-backdrop-filter: blur(14px) saturate(1.3);
+  backdrop-filter: blur(14px) saturate(1.3);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: var(--fs-sm);
+  font-weight: 700;
+  white-space: nowrap;
+  box-shadow: var(--shadow-md);
+  pointer-events: none;
+}
+/* Klonen speiler attributtene til det løftede objektet, og en etikett på hullet
+   ville lovet en handling der ingenting skjer. `.sep-above`/`.sep-below` bruker
+   de samme pseudo-elementene til skillelinjene sine, så unntaket er snevret inn
+   til nøyaktig etiketten — og den finnes bare mens man sikter på en kasse, der
+   hullet uansett ikke lover noe (`body.is-over-trash`). */
+.dnd-surface [data-dnd-placeholder][data-drop-label]::after { content: none !important; }
+
 /* Lista sikter på 📁-breadcrumben (flytt til en annen mappe). Den ENESTE
    dra-tilstanden som fortsatt tones ut i stedet for å skifte farge: en flytting
    har ingen egen farge i paletten slik slettingen har rødt, og signalet den
@@ -2456,6 +2587,10 @@ body.is-dragging * { cursor: grabbing !important; }
    `!important` til; uten det er regelen en vakt som ikke vokter noe (en bred,
    lav rad fikk et hull dobbelt så høyt som seg selv). */
 .dnd-surface [data-dnd-placeholder] { rotate: none !important; scale: none !important; }
+/* … og av samme grunn skiftet som sentrerte den KRYMPEDE boksen på grepet
+   (`dndCompactLift`): det ligger allerede i målingen dnd-kit tok, så et hull
+   som bar det en gang til ville stått forskjøvet i lista. */
+.dnd-surface [data-dnd-placeholder] { translate: none !important; }
 .dnd-surface [data-dnd-placeholder] > * { visibility: hidden; }
 /* HULLET SOM IKKE LOVER NOE: verken maling eller plass.
 
@@ -2761,7 +2896,10 @@ body.modal-open { overflow: hidden; }
      `translate(-50%)`: sveip-for-å-lukke legger draget inn i den samme
      transformen (`calc(-50% + Npx)`, se attachToastSwipe i app.js). */
   left: calc(50% + (var(--safe-left) - var(--safe-right)) / 2);
-  bottom: calc(24px + var(--safe-bottom));   /* over gestelinjen, ikke under den */
+  /* Over gestelinjen — og over SLIPPFOTEN når den er framme: den lever nederst
+     i viewportet, og en toast som la seg oppå søppelkassen ville dekket nettopp
+     det man nettopp brukte. `--dock-reserve` er 0 når foten er borte. */
+  bottom: calc(24px + var(--safe-bottom) + var(--dock-reserve, 0px));
   transform: translate(-50%, 16px);
   z-index: 300;
   display: flex;
@@ -2951,7 +3089,7 @@ body.modal-open { overflow: hidden; }
 .sync-status {
   position: fixed;
   left: calc(12px + var(--safe-left));
-  bottom: calc(16px + var(--safe-bottom));
+  bottom: calc(16px + var(--safe-bottom) + var(--dock-reserve, 0px));
   z-index: 290;                      /* under toasten (300) og banneret (410) */
   display: inline-flex;
   align-items: center;
@@ -3046,7 +3184,7 @@ body.modal-open { overflow: hidden; }
      bredde, og teksten brekker da til én ordkolonne på mobil. */
   left: calc(12px + var(--safe-left));
   right: calc(12px + var(--safe-right));
-  bottom: calc(24px + var(--safe-bottom));
+  bottom: calc(24px + var(--safe-bottom) + var(--dock-reserve, 0px));
   margin: 0 auto;
   width: fit-content;
   transform: translateY(16px);
@@ -4895,6 +5033,27 @@ body.no-auth .corner-controls { display: none; }
   flex: 1 1 auto;
   justify-content: center;
 }
+/* … OG DOBBELT SÅ HØY, alle sammen. En kasse er det ene stedet i appen der et
+   bom betyr at handlingen ikke skjer, og en finger som drar noe dekker selv
+   målet sitt. Veksten er MOMENTAN (ingen overgang): dnd-kit måler sonen ÉN gang,
+   idet draget starter, og en kasse som fortsatt vokste ville blitt målt for
+   liten. Foten nederst på siden og modalenes fot er festet i bunnen, så kassene
+   der vokser OPPOVER — bort fra kanten og inn mot fingeren. */
+.trashcan.drag-trash { height: calc(var(--control-h) * 2); }
+/* Kassen INNE I ET KORT vokser oppover UTEN å gjøre kortet høyere: den ekstra
+   høyden tas av en negativ toppmarg, så knappen legger seg over ＋-raden i
+   stedet for å skyve bunnen av kortet ned. Grunnen er dra-ankeret
+   (`docs/drag-and-drop.md`): kasseraden som dukker opp og forsvinner er
+   allerede en høydeendring ankeret må sette av, og en kasse som ga kortet enda
+   en knapperad ville flyttet både ekstraher-terskelen og alt under kortet midt
+   under fingeren. ＋-raden er ingen ting man sikter på under et drag, så
+   overlappet koster ingenting. */
+.card .item-trash .trashcan.drag-trash { margin-top: calc(var(--control-h) * -1); }
+/* … og ＋-raden viker for den. Kassen ligger nå OPPÅ knappene, og de skinner
+   gjennom den halvgjennomsiktige flaten — to knapper midt i et slippmål leser
+   som noe man kan treffe. Plassen beholdes (`visibility`), så kortet står
+   nøyaktig like høyt som før. */
+.card:has(.item-trash .trashcan.drag-trash) .add-item-row { visibility: hidden; }
 /* Den radbrede kassen vokser ikke i tillegg: 12 % av den stikker utenfor kortet,
    som klipper (`overflow: hidden`). Siktemarkeringen bæres av flaten, skyggen
    og rødvasken på det som dras. */
@@ -5230,6 +5389,24 @@ body.no-auth .corner-controls { display: none; }
   outline-offset: 2px;
 }
 .note-card-head { align-items: flex-start; }
+/* Ikonet står på FØRSTE tittellinje, slik det gjør på alle andre objekttyper —
+   der er hodet `align-items: center` og tittelen én linje, så de to havner på
+   samme skriftlinje av seg selv. Notatkortets hode er topp-justert fordi
+   tittelen kan gå over flere linjer, og et rent `flex-start` la ikonet på
+   TOPPEN av tittelblokka i stedet for midt på dens første linje. Ikonet får
+   derfor høyden til den linjeboksen (tittelens skriftstørrelse × linjefall +
+   dens egen polstring) og sentreres i den. Størrelsen er den samme som
+   type-ikonene i nav-modalen (`.nav-board .kind-icon`), så et notat leser likt
+   uansett hvor det står. */
+.note-card-head > .note-card-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  font-size: var(--fs-lg);
+  line-height: 1;
+  height: calc(var(--fs-lg) * 1.2 + 8px);
+}
 .note-card-title {
   /* `.card-title` gir hvit skrift med skygge på korthodet; her bare linjefallet
      for en tittel som kan gå over flere linjer. */
@@ -5623,9 +5800,6 @@ body.note-editing .corner-controls { display: none; }
 .item-main > .meta-chip.meta-link { align-self: flex-start; margin-top: 2px; }
 .meta-chip.meta-link > .icon { width: 15px; height: 15px; }
 
-/* Notatfanens kasser. `.note-can` er en inline-innpakning (topplinja er en
-   rad, ikke en kolonne som kortkroppen), ellers er alt `.item-trash`s eget. */
-.item-trash.note-can { display: inline-flex; margin: 0; }
 /* Bokhyllekortets to knapper står side om side, som ÉN rad nederst i kortet. */
 .note-folder-cans { display: flex; justify-content: center; gap: 8px; }
 .nav-foot { gap: 8px; }

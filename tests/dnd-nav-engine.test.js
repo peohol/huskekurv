@@ -225,9 +225,13 @@ async function run(label, viewport, mobile) {
   /* ---------- 1) Motorens egne kroker ---------- */
   const rows = await groupRows(p);
   const rowSel = (i) => '#nav-board .item[data-id="' + rows[i] + '"]';
-  // Sikt på et punkt målt FØR løftet: klonen holder plassen, så geometrien står
-  // stille selv om radene bytter plass under gesten (se tests/dnd-gestures.js).
-  const target = await G.past(p, rowSel(1), 0.9);
+  /* Sikt på SENTERET av sloten mappen skal ende i, målt FØR løftet: klonen
+     holder plassen, så geometrien står stille selv om radene bytter plass under
+     gesten. Senteret — ikke et punkt FORBI naboen: en rad som bytter plass med
+     naboen TAR naboens slot, så et sikte nede ved naboens underkant ligger
+     etter byttet i sloten under, og raden fortsetter nedover (se
+     tests/dnd-gestures.js, og `swapRatio` i docs/drag-and-drop.md). */
+  const target = await G.centre(p, rowSel(1));
   await G.lift(p, await G.centre(p, rowSel(0)), touch);
   const lifted = await p.evaluate(() => {
     const el = document.querySelector('#nav-board [data-dnd-dragging]');

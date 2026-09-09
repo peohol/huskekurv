@@ -520,6 +520,27 @@ async function run(navn, viewport, touch) {
     kort.tittel === 'Utvalg' && kort.utdrag.indexOf('Vanlig tekst') > -1 && kort.meta.length > 3,
     JSON.stringify(kort));
 
+  /* … og TYPEIKONET står på tittelens FØRSTE LINJE, slik ikonet gjør på alle
+     andre objekttyper. Hodet her er topp-justert (tittelen kan gå over flere
+     linjer), og et rent `flex-start` la ikonet på toppen av tittelblokka i
+     stedet for midt på dens første linje. Måles som senter mot senter: ikonets
+     midtpunkt skal ligge på den første tekstlinjens midtpunkt. */
+  const ikon = await p.evaluate(() => {
+    const el = document.querySelector('#notes-board .note-card');
+    const i = el.querySelector('.note-card-icon').getBoundingClientRect();
+    const t = el.querySelector('.note-card-title');
+    // Første linjeboks i tittelen — ikke hele elementet, som kan ha flere linjer.
+    const linje = t.getClientRects()[0] || t.getBoundingClientRect();
+    return {
+      ikonSenter: +(i.top + i.height / 2).toFixed(1),
+      linjeSenter: +(linje.top + linje.height / 2).toFixed(1),
+      ikonH: Math.round(i.height),
+    };
+  });
+  log(navn + ': notatikonet står på tittelens første linje',
+    Math.abs(ikon.ikonSenter - ikon.linjeSenter) <= 2 && ikon.ikonH >= 16,
+    JSON.stringify(ikon));
+
   /* ---------- 10. Synk mot mock-backenden ---------- */
   /* Vent på at DOKUMENTET er pushet, ikke bare at raden finnes: insert-en kan
      ha gått av gårde før autosaven skrev innholdet, og oppdateringen kommer da
