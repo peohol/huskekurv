@@ -34,7 +34,10 @@ fortsatt hadde masse plass.
   fordelingen holder etterpå. (Å variere kolonneantallet med FYLLINGEN ville gitt
   en tilbakekobling: færre kolonner → bredere kort → lavere kort → plass i færre
   kolonner …) En tom kolonne til høyre er derfor forventet når listene får plass
-  til venstre.
+  til venstre — men den er ingen PLASS: pakkingen er grådig, så et kort sluppet
+  der faller tilbake til den siste kolonnen som har innhold. Et drag kan derfor
+  ikke legge en plassholder i den (`dndLiveColumns`, se
+  [`drag-and-drop.md`](drag-and-drop.md)).
 - **Kolonnebudsjettet** = skjermhøyden under toppmenyen (minus luften over og
   under, og minus `--safe-bottom` — gestelinjens strimmel er ikke skjerm man kan
   bruke). Får ikke alt plass i de kolonnene vinduet har rom til, økes budsjettet

@@ -99,9 +99,9 @@ registeret — to board som registrerer det samme elementet kjemper om det.
 nav-board-ene har HELE nav-modalen (område-kassen ligger i modalens egen fot,
 utenfor både `#nav-board` og modalens rullende kropp).
 
-`notesCardBoard` er det samme tilfellet som `boardCardBoard`: notat-kassen står
-i TOPPLINJA, så roten er `document.body` og selektorene er scopet til
-`#notes-board`. Notat-nav-board-ene har hele `#notes-nav-modal` (bokhylle-kassen
+`notesCardBoard` er det samme tilfellet som `boardCardBoard`: notatenes arkiv og
+søppelkasse står i den FASTE FOTEN nederst på siden, så roten er `document.body`
+og selektorene er scopet til `#notes-board`. Notat-nav-board-ene har hele `#notes-nav-modal` (bokhylle-kassen
 ligger i modalens egen fot; notatbok-kassen inne i bokhyllekortet). Ligger roten
 for trangt, blir sonen aldri MÅLT, og et slipp i kassen leses som en helt
 vanlig omrokkering — uten et eneste signal om at noe gikk galt.
@@ -199,6 +199,59 @@ lista/området, mapperaden navigerer) fyrer likevel. Vakten tar klikket på
 DOKUMENTET, i capture-fasen, for det første klikket etter et drag
 (`dndInstallClickGuard`, delt av alle board-ene). En vakt på KILDENS sone holder
 ikke: et ekte slipp over en ANNEN rad gir et tiltrodd klikk på DEN raden.
+
+## Det som dras er KOMPAKT (`dndCompactLift`)
+
+Det løftede objektet krymper i BEGGE retninger ved løft. Det ligger oppå det man
+sikter mot, og alt det dekker er svar man trenger — hullet, ny-liste-stripa,
+skillelinja, søppelkassen — så jo mindre det er, jo mer ser man.
+
+Igjen står **tittelen og ikonene til VENSTRE for den**: typeikonet, delt-merket,
+avkryssingsboksen. Det er de som sier HVA man holder i. Alt til høyre for
+tittelen (menyknappen, «(N)»-telleren, «sist endret», meta-chipene) og hele
+kortkroppen foldes bort. Bredden faller til innholdets egen (`fit-content`), som
+har containerens bredde som tak — objektet blir aldri BREDERE enn det var, bare
+smalere når det kan. Reglene står i `styles.css` på klassen `.dnd-compact`.
+
+**Krympingen er ASYMMETRISK vannrett.** Tar man tak i høyre kant av en bred rad,
+ville en symmetrisk krymping revet raden ut av fingeren og lagt den til venstre
+for den. Boksen sentreres derfor på GREPET — dnd-kits eget aktiveringspunkt
+(`position.initial`), altså nøyaktig det punktet dnd-kit regner sin forflytning
+fra, så senteret blir liggende under pekeren hele draget.
+
+Skiftet skrives som `translate` FØR dnd-kit måler:
+
+- en marg ville flyttet naboene i det ene bildet før løftet; `translate` er ren
+  maling og rører ingen layout, men er likevel med i `getBoundingClientRect()` —
+  altså i den ene målingen dnd-kit gjør;
+- det som males og det politikken regner på blir da det SAMME: `--dnd-left`,
+  `intentRectangle` (og dermed `draggedRect`, 1/3-tersklene, kolonnevalget) og
+  viewport-klemma ser alle den sentrerte boksen;
+- klonen får `translate: none !important` (som `rotate` og `scale` over den), og
+  objektet får skiftet fjernet i det draget er over — ellers ville det blitt lagt
+  på en gang til.
+
+**Kun VANNRETT.** Et loddrett skift ville flyttet objektet langs SORTERINGENS
+egen akse: dnd-kit måler den forskjøvne boksen som objektets utgangspunkt, og et
+grep nede i et høyt notatkort ville byttet plass med naboen i samme øyeblikk som
+løftet — uten at fingeren hadde beveget seg. Loddrett står objektet der det sto;
+det er kollapsen og [dra-ankeret](#dra-ankeret-layouten-flytter-seg-bort-fra-siktet)
+som holder layouten i ro.
+
+**Hullet er like stort som det som dras.** Det er ikke en smakssak: dnd-kit
+forankrer det løftede objektets geometri i KLONENS boks, så et hull tvunget
+tilbake til full bredde ville blåst objektet opp igjen og tatt sentreringen med
+seg. Klonen arver `.dnd-compact` som alt annet.
+
+**Naboene kollapser som før, og bare LODDRETT** (`navCollapseCardsForDrag`,
+`boardCollapseCardsForDrag`, `dndCollapseCategory`): det er kortere vei å dra.
+Vannrett krymping gjelder kun objektet man holder i.
+
+En følge er verdt å kjenne: den kompakte boksen er nær kvadratisk, mens en bred
+rad ble målt med en ROTERT boks som var titalls piksler høyere enn seg selv.
+Sorteringen treffer derfor nå Smetts egen `swapRatio` (0.2) mye nøyaktigere — et
+objekt bytter plass når det har flyttet seg en femtedel inn i naboen, slik tallet
+alltid har lovet.
 
 ## Plassering underveis
 
@@ -443,11 +496,23 @@ skal stå der.
   «sist i den kolonnen», ikke «ingenting» — og `pointerIntersection` mot
   kolonnens egen boks sier «ingenting» der, for kolonnen slutter der innholdet
   slutter. Nav-modalen har nøyaktig én kolonne og kan svare ubetinget
-  (`navColumnCollision`); hovedsidens board har flere, og bare ÉN av dem kan være
-  svaret, ellers ville alle meldt seg samtidig for et slipp i lufta under
-  board-et. Hvilken avgjøres av KORTETS EGEN BOKS (`boardPickColumn`, regnet ut
-  én gang per bevegelse), ikke av pekeren. Prioriteten er den lavest mulige, så
-  kolonnen aldri vinner over et kort eller en sone.
+  (`navColumnCollision`); hovedsidens to kortboard har flere, og bare ÉN av dem
+  kan være svaret, ellers ville alle meldt seg samtidig for et slipp i lufta
+  under board-et. Hvilken avgjøres av KORTETS EGEN BOKS (`dndPickColumn`, regnet
+  ut én gang per bevegelse), ikke av pekeren. Prioriteten er den lavest mulige,
+  så kolonnen aldri vinner over et kort eller en sone.
+
+- **En kolonne som ikke finnes er ikke et mål** (`dndLiveColumns`). Kolonnene
+  lages av BREDDEN (`boardColumnCount`), ikke av innholdet, så et bredt vindu har
+  flere `.board-col` enn det er kort å fylle dem med — de tomme står helt til
+  høyre. Pakkingen er grådig (kolonne 1 fylles helt før kolonne 2 oppstår), så et
+  kort sluppet i en tom kolonne faller tilbake til den siste som HAR innhold: en
+  plassholder der lover en plassering som ikke finnes. Grensen måles ÉN gang, ved
+  løft, og fryses som resten av fordelingen — den siste kolonnen som hadde et
+  kort da draget startet. Kolonner utenfor den melder seg aldri, heller ikke på
+  et pekertreff. Regelen er DELT av listeboardet og notatboardet
+  (`dndColumnCollision`); de fordeles av den samme kolonnemotoren
+  ([`board-layout.md`](board-layout.md)) og skal oppføre seg likt.
 
 - **Kortet legges tilbake BLANT kortene** (`navSettleCardInColumn`) — ikke en
   detektor, men den samme saken: sluttplasseringen legger kortet sist i
@@ -923,17 +988,24 @@ tilbake dit den kom fra FØR handlingen kalles — nøyaktig semantikken vi vil 
 ingen ny `pos` skrives, slettingen tar over. Treffsonen er knappen selv; sonen er
 en droppable, og dnd-kit måler dens egen boks.
 
-**Kassene som har en HEL rad for seg selv er radbrede mens draget står på** —
-listepunkt-kassen nederst i lista, mappe-kassen nederst i området, OG
-område-kassen i nav-modalens faste fot (`.nav-foot .item-trash` i
-`styles.css` gir wrapperen full bredde, siden foten der ikke deler rad med
-noe ＋-knapp). Knappen er ~48 px i hvile: den forsvinner under en fingertupp,
-og på berøring finnes ingen peker som viser hvor man egentlig sikter. Bare
-BREDDEN endres, så høyden — kortets, eller nav-modalens fot — står stille, og
-for kortene betyr det at `cardBand` og ekstraher-terskelen står stille. Kun
-topplinjas liste-kasse er annerledes: den deler rad med ＋-knappen og har ingen
-ledig bredde å ta av. `dnd-trash` sjekk 11 måler bredden og treffer ytterkanten
-av raden (kortene) og feltet (nav-modalen).
+**ALLE kassene er radbrede OG dobbelt så høye mens draget står på.** Knappen er
+~48 px i hvile: den forsvinner under en fingertupp, og på berøring finnes ingen
+peker som viser hvor man egentlig sikter. Bredden tar hele raden — listepunkt-
+kassen nederst i lista, mappe-kassen nederst i området, og kassene i fotene
+(`.item-trash` i `styles.css`); står det TO kasser i en fot, deler de bredden
+likt. Høyden dobles oppover, mot fingeren.
+
+For KORTENE tas den ekstra høyden av en negativ toppmarg, så kortets egen boks
+er uendret: `cardBand` og ekstraher-terskelen står stille, og dra-ankeret slipper
+å sette av enda en knapperad midt i draget. Kassen legger seg da over ＋-raden,
+som skjules imens (`visibility`, plassen består). `dnd-trash` sjekk 11 måler både
+bredden og høyden, og treffer ytterkanten av raden (kortene) og feltet (fotene).
+
+Sikter man på en kasse, får det løftede objektet i tillegg en ETIKETT
+(`data-drop-label`): «Slett», eller «Arkiver» i notatenes arkiv. Den males på
+objektet, som ligger i top layer og derfor ikke kan dekkes av noe — en etikett på
+kassen ville havnet under både fingeren og det man drar. Se
+[`trash.md`](trash.md).
 
 - **Kassen FØLGER objektet**: for et listepunkt/en mappe står den i containeren
   objektet er i NÅ (`retargetDragTrash` flytter `drag.trashHost` på hver
@@ -1013,8 +1085,8 @@ av raden (kortene) og feltet (nav-modalen).
   var — det er ingen container å flytte den til, og en kasse må finnes til enhver
   tid. `dnd-trash` sjekk 12 måler at den står i ro gjennom 60 frames.
 
-  En LISTE og et OMRÅDE har ingen vert å bytte: de slippes i kassen i topplinja
-  respektive nav-modalens bunnrad.
+  En LISTE og et OMRÅDE har ingen vert å bytte: de slippes i kassen i sidens
+  faste fot respektive nav-modalens.
 - **Kategorier har ingen kasse.** En kategori slettes ikke — den LØSES OPP
   (listepunktene blir stående), fra objektmenyen. `dragTrashBtn()` svarer null for
   dem, og ingenting armes.
@@ -1276,17 +1348,37 @@ Låsen spør derfor det SAMME regnestykket som layouten fordeler kortene etter
 | `navCardBoard`, `navRowBoard` | alltid — nav-modalen er `singleColumn` |
 | `ideaRowBoard` | alltid — idémodalen er `singleColumn` |
 | `boardCardBoard`, `boardRowBoard` | når board-et FAKTISK står i én kolonne |
+| `notesCardBoard`, `notesNavCardBoard`, `notesNavRowBoard` | aldri — scopet har `sideTargets` |
 
-Grensen er altså kolonnetallet, ikke skjermbredden og ikke pekertypen: en bred
+Grensen er ellers kolonnetallet, ikke skjermbredden og ikke pekertypen: en bred
 skjerm som likevel bare får plass til én kolonne er låst
 (`dnd-vertical-axis` sjekk 3).
 
+**Unntaket er scopene med TO SLIPPMÅL ved siden av hverandre** (`sideTargets` på
+`notesScope` og `notesNavScope`). Notatene har både et arkiv og en søppelkasse,
+og de står side om side — nederst på siden og i notatenes nav-modal. Der BETYR
+sidelengs bevegelse noe også i én kolonne: den er hele forskjellen på «legg bort»
+og «slett». Listesiden og nav-modalen har bare den ene kassen, og der er låsen
+som før.
+
 **Avgjørelsen tas ÉN gang per drag**, i `beforedragstart` (`dndLockAxis` →
-`drag.oneAxis`) — før dnd-kit har malt en eneste frame. Selve nullingen av x
+`drag.oneAxis`) — før dnd-kit har malt en eneste frame. Selve låsingen av x
 gjør en modifikator som leser det flagget, og alle fem board-ene får den samme
 listen (`dndModifiers`, installert av `dndTuneManager`). Listen ERSTATTER Smetts
 standardliste, så viewport-klemma må skrives ut igjen der; rekkefølgen er
 virksom — klemma først, akselåsen sist.
+
+**Låsen er en LEDESNOR, ikke en spiker.** En ren nulling av x holdt objektet i ro
+uansett hvor fingeren gikk, og det holdt så lenge objektet var like bredt som
+kolonnen. Det løftede objektet er nå kompakt og sentrert på grepet
+([«Det som dras er KOMPAKT»](#det-som-dras-er-kompakt-dndcompactlift)), og en
+nulling slapp da fingeren ut av objektet så snart den flyttet seg en halv
+objektbredde sidelengs: man drar noe som ligger et godt stykke ved siden av
+fingeren. Snoren gir det samme som før for det låsen faktisk er til for —
+fingerskjelvet flytter ingenting — og gir etter først når fingeren ellers ville
+forlatt objektet; da følger objektet akkurat så mye at pekeren blir liggende
+innenfor kanten (`DND_LEASH_PAD`). MÅLT i `dnd-vertical-axis`: en liten gest
+flytter ingenting, en stor lar objektet henge etter uten å slippe fingeren.
 
 **Låsen er MALINGEN, ikke politikken.** Smetts `intentRectangle` er regnet ut av
 `position.delta`, som ingen modifikator rører: `draggedRect()` og `drag.lastX`

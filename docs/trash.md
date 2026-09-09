@@ -8,14 +8,15 @@ grå sirkel) og samme oppførsel; **alle vises kun når de har innhold** (`hidde
 — ELLER, for hierarkinivåene og de tre notatnivåene, når et drag på det nivået
 pågår (se under):
 
-- **Områder**: nederst i nav-modalen, ved siden av «＋ [område-ikon]».
+- **Områder**: i nav-modalens egen, faste fot (`#uni-trash-btn`).
 - **Mapper**: i hvert OMRÅDE-KORT i nav-modalen (`.group-trash-btn`) — akkurat
   som listepunkt-søppelkassen ligger i lista si. Én kasse per område.
-- **Lister**: i toppmenyens listefunksjons-rad (per aktiv mappe).
+- **Lister**: i en FAST FOT nederst på siden (`.drop-dock#lists-dock`), per
+  aktiv mappe.
 - **Listepunkter**: midtstilt nederst i hvert listekort (`ICONS.trash`, samme
   SVG som de statiske knappene — aldri emoji).
-- **Notater**: i notatfanens topplinje (`#note-trash-btn`), per aktiv
-  plassering — nøyaktig som liste-kassen står i den aktive mappen.
+- **Notater**: i notatfanens egen faste fot (`.drop-dock#notes-dock`), ved
+  siden av arkivet — per aktiv plassering.
 - **Notatbøker**: i hvert BOKHYLLEKORT i notat-nav-modalen
   (`.note-folder-trash-btn`) — som mappe-kassen i et områdekort.
 - **Bokhyller**: i notat-nav-modalens egen fot (`#note-project-trash-btn`) —
@@ -30,6 +31,25 @@ Kassene som ligger INNE i en beholder (`.item-trash`-innpakningen i listekortet
 og i områdekortet) **bygges alltid**, men står `hidden` når de er tomme. Noden
 må finnes for at et drag skal kunne vise den fram — se under.
 
+## Kassene som ikke ligger i et kort står i en FAST FOT
+
+Hovedsidens to faner har hver sin `.drop-dock` nederst i viewportet — listenes
+kasse i den ene, notatenes arkiv OG kasse i den andre — og modalene har sin
+`.nav-foot`. De deler oppskrift: feltet er festet i bunnen, det er så bredt som
+skjermen, og det ligger der ingenting annet kan treffes.
+
+Grunnen er treffsikkerheten. En kasse som deler knapperad med ＋-knappen er
+~48 px bred og ligger inntil noe annet man kan trykke på; en finger som drar et
+objekt dekker dessuten sitt eget mål. I foten har kassen hele bredden for seg
+selv. Er det TO kasser der — arkivet og søppelkassen på notatsiden — deler de
+bredden likt, med luft rundt og mellom seg, på både mobil og desktop.
+
+Foten **finnes bare når en kasse i den er synlig** (`:has()` i `styles.css`), og
+board-et holder av høyden dens nederst (`--dock-reserve`) så den aldri legger
+seg over det siste kortet. Det samme leddet flytter toasten, synk-pillen og
+oppdateringsbanneret opp: de bor i det samme hjørnet av viewportet, og en toast
+oppå søppelkassen ville dekket nøyaktig det man nettopp brukte.
+
 ## Slett ved å DRA objektet i kassen
 
 **Dette er den ene slettegesten** på de fire hierarkinivåene og de tre
@@ -39,13 +59,33 @@ nøyaktig den samme funksjonen:
 
 1. Løft objektet (trykk-og-hold på touch, dra på mus — samme motor som all annen
    flytting, `docs/drag-and-drop.md`). Kassen for NIVÅET dukker opp med én gang
-   (`armDragTrash`), også når den er tom.
+   (`armDragTrash`), også når den er tom — og den er **dobbelt så høy** mens
+   draget står på (se under).
 2. Sikt på den: kassen markeres (`.drop-target`, samme markering som
-   📁-breadcrumben) og det løftede objektet blir gjennomskinnelig (`.to-trash`)
-   så kassen synes gjennom det.
+   📁-breadcrumben), det løftede objektet skifter farge (`.to-trash`), og en
+   ETIKETT over objektet sier hva slippet betyr — «Slett», eller «Arkiver» på
+   notatsiden (se under).
 3. Slipp: objektet havner i kassen — samme vei som objektmenyens «Slett», med
    fly-i-kassen-animasjonen og den samlende angre-toasten.
 4. Deretter tømmes den SAMME kassen permanent med hold-og-sveip, som før.
+
+**Kassen dobler høyden mens draget varer.** En kasse er det ene stedet i appen
+der et bom betyr at handlingen ikke skjer, og fingeren som drar noe dekker selv
+målet sitt. Veksten er momentan — dnd-kit måler sonen ÉN gang, idet draget
+starter — og den går OPPOVER, mot fingeren, både i foten (som er festet i
+bunnen) og i et kort. I et kort tas den ekstra høyden av en negativ toppmarg, så
+KORTET er like høyt som før: kasseraden som dukker opp og forsvinner er allerede
+en høydeendring dra-ankeret må sette av, og en kasse som ga kortet enda en
+knapperad ville flyttet både ekstraher-terskelen og alt under kortet midt under
+fingeren. ＋-raden under kassen skjules imens (`visibility`, plassen består) —
+den ligger uansett bak kassen, og to knapper som skinner gjennom et slippmål
+leser som noe man kan treffe.
+
+**Etiketten sier hva slippet betyr.** Fargeendringen alene forutsetter at man
+kjenner fargen fra før. Teksten males på det LØFTEDE OBJEKTET
+(`data-drop-label`, satt av `setDragTrashTarget`/`setDragArchiveTarget`), ikke på
+kassen: objektet ligger i top layer og kan ikke dekkes av noe, mens en etikett på
+kassen ville havnet under både fingeren og det man drar.
 
 Detaljer som er lette å bryte:
 
@@ -67,10 +107,10 @@ Detaljer som er lette å bryte:
   del 14): en ren leser får ingen kasse å sikte på, og den virtuelle «Delt med
   meg»-bokhyllen kan aldri slettes.
 - **Kassen må ligge under board-ets ROT for å bli registrert som sone.** Både
-  liste-kassen og notat-kassen står i TOPPLINJA, utenfor selve board-et, så de
-  to board-ene har `document.body` som rot (selektorene er fortsatt scopet).
-  Ligger roten for trangt, måles sonen aldri, og slippet blir en helt vanlig
-  omrokkering uten et eneste signal.
+  liste-kassen og notat-kassene står i den FASTE FOTEN, utenfor selve board-et,
+  så de to board-ene har `document.body` som rot (selektorene er fortsatt
+  scopet). Ligger roten for trangt, måles sonen aldri, og slippet blir en helt
+  vanlig omrokkering uten et eneste signal.
 - **KATEGORIER har ingen kasse.** En kategori slettes ikke, den LØSES OPP
   (listepunktene blir stående), og det gjøres fra objektmenyen. Et kategori-drag
   armer derfor ingenting.

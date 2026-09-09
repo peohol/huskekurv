@@ -10,22 +10,34 @@
       uansett skjermbredde;
     • idémodalen likeså (dekket av `ideas-modal.test.js`);
     • hovedsidens board er låst når det FAKTISK står i én kolonne, og fritt når
-      kortene er fordelt på flere.
+      kortene er fordelt på flere;
+    • notatfanens to scope er ALDRI låst: de har et arkiv OG en søppelkasse side
+      om side (`sideTargets`), og da betyr sidelengs noe også i én kolonne.
 
   Den dynamiske rotasjonen (`dndPaintRotation`, ±5° etter horisontal posisjon)
   hører til flerkolonnevisningen og skrus av i samme åndedrag: står objektet
   stille i x, ville vinkelen ellers svingt av en intensjon ingen ser.
 
+  Låsen er en LEDESNOR, ikke en spiker: det løftede objektet er kompakt og
+  sentrert på grepet (`dndCompactLift`), og en ren nulling av x slapp fingeren ut
+  av objektet så snart den flyttet seg en halv objektbredde sidelengs. Snoren gir
+  det samme som før for det låsen er til for — fingerskjelvet flytter ingenting —
+  og gir etter først når fingeren ellers ville forlatt objektet.
+
   Dekker:
     1. Hovedsiden i FLERKOLONNE: objektet følger fingeren sidelengs, og bærer
        rotasjonen. Både liste- og listepunktnivå. (Kontrollen for resten av
        fila: det er den samme koden med låsen av.)
-    2. Hovedsiden i ÉN KOLONNE (mobil): senteret står helt stille gjennom en
-       sidelengs gest, og `rotate` er ikke satt. Både liste og listepunkt.
+    2. Hovedsiden i ÉN KOLONNE (mobil): en liten sidelengs gest flytter
+       INGENTING, en stor lar objektet henge etter uten å slippe fingeren, og
+       `rotate` er ikke satt. Både liste og listepunkt.
     3. Regelen følger KOLONNETALLET, ikke skjermbredden eller pekertypen: en
        bred skjerm som likevel bare får plass til én kolonne er låst.
     4. Nav-modalen er låst også på en bred skjerm, der modalen har rikelig
        vannrett rom å bevege seg i. Både område- og mapperad.
+    5. Notatenes to scope har `sideTargets` — et arkiv OG en søppelkasse side om
+       side — og er derfor ALDRI låst: sidelengs er hele forskjellen på «legg
+       bort» og «slett».
 
   Gestene er EKTE input (`tests/dnd-gestures.js`). Se `docs/drag-and-drop.md`.
 
@@ -96,6 +108,28 @@ async function seedCards(p, cards) {
   await p.waitForTimeout(300);
 }
 
+/* Notater: én bokhylle med to notater. Notatfanens to scope har `sideTargets` —
+   et arkiv OG en søppelkasse side om side — og skal derfor ALDRI være låst. */
+async function seedNotes(p) {
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    H.setMainTab('notes');
+    const proj = H.addNoteProject();
+    proj.name = 'Fagstoff';
+    H.setActiveProject(proj.id);
+    H.setActiveNoteFolder(null);
+    for (const t of ['Blodprøver', 'Timeplan']) {
+      const n = H.addNote();
+      H.closeNoteEditor();
+      n.title = t;
+      n.doc = { v: 1, blocks: [{ t: 'p', c: [{ s: t }] }] };
+    }
+    H.save();
+    H.renderNotes();
+  });
+  await p.waitForTimeout(400);
+}
+
 /* Områder og mapper for nav-modalen. De opprettes gjennom UI-et: rekkefølgen på
    områder er PERSONLIG, og en rad som aldri har vært på serveren har ingen
    personlig posisjon å skrive til (samme grunn som i `dnd-nav-engine`). */
@@ -127,7 +161,8 @@ const dragged = (p, root) => p.evaluate((r) => {
   const el = document.querySelector(r + ' [data-dnd-dragging]');
   if (!el) throw new Error('ingenting er løftet i ' + r);
   const b = el.getBoundingClientRect();
-  return { x: Math.round((b.left + b.right) / 2), rot: el.style.rotate || '' };
+  return { x: Math.round((b.left + b.right) / 2), w: Math.round(b.width),
+    l: Math.round(b.left), r: Math.round(b.right), rot: el.style.rotate || '' };
 }, root);
 
 async function cancel(p, touch) {
@@ -153,7 +188,13 @@ async function sidelengs(p, sel, root, touch, dx) {
   await p.waitForTimeout(220);
   const etter = await dragged(p, root);
   await cancel(p, touch);
-  return { flyttet: etter.x - før.x, rot: etter.rot, spor: før.x + ' → ' + etter.x };
+  return {
+    flyttet: etter.x - før.x, rot: etter.rot, spor: før.x + ' → ' + etter.x,
+    bredde: etter.w,
+    // Slapp objektet fingeren? Ledesnoren i `dndLockAxis` finnes for at svaret
+    // alltid skal være nei — se filhodet.
+    holder: lifted.x + dx >= etter.l && lifted.x + dx <= etter.r,
+  };
 }
 
 (async () => {
@@ -171,8 +212,15 @@ async function sidelengs(p, sel, root, touch, dx) {
     const kort = await sidelengs(p, '#board .card[data-id="card-A"] .card-head', '#board', false, 250);
     log('1 flerkolonne: lista følger fingeren sidelengs',
       kort.flyttet >= 200, kort.spor + ' (Δ ' + Math.round(kort.flyttet) + ')');
-    log('1 flerkolonne: … og bærer rotasjonen',
-      Math.abs(parseFloat(kort.rot) || 0) > 0.5, 'rotate=' + JSON.stringify(kort.rot));
+    /* Rotasjonen er en FUNKSJON AV DEN VANNRETTE POSISJONEN (±5° ut mot
+       viewportkantene), ikke et fast utslag per dratt piksel: det løftede
+       objektet er kompakt og sentrert på grepet, så senteret når helt ut til
+       kantene og kurven er slakere på midten. Påstanden måles derfor som
+       kontrakten er formulert — dra lenger ut, og vinkelen skal følge etter. */
+    const lengre = await sidelengs(p, '#board .card[data-id="card-A"] .card-head', '#board', false, 700);
+    log('1 flerkolonne: … og rotasjonen følger den vannrette posisjonen',
+      parseFloat(lengre.rot) > parseFloat(kort.rot) && Math.abs(parseFloat(lengre.rot) || 0) > 1,
+      'rotate=' + JSON.stringify(kort.rot) + ' → ' + JSON.stringify(lengre.rot));
 
     const rad = await sidelengs(p, '#board .card[data-id="card-A"] .item', '#board', false, 250);
     log('1 flerkolonne: listepunktet følger fingeren sidelengs',
@@ -194,16 +242,30 @@ async function sidelengs(p, sel, root, touch, dx) {
     const cols = await boardCols(p);
     log('2 mobil: board-et står i ÉN kolonne', cols === 1, 'kolonner=' + cols);
 
+    // En STOR gest: objektet HENGER ETTER (det følger ikke fingeren piksel for
+    // piksel, som i flerkolonne over), men slipper den aldri.
     const kort = await sidelengs(p, '#board .card[data-id="card-A"] .card-head', '#board', true, 120);
-    log('2 mobil: lista står stille sidelengs',
-      Math.abs(kort.flyttet) <= 1, kort.spor + ' (Δ ' + Math.round(kort.flyttet) + ')');
+    log('2 mobil: lista henger etter fingeren i stedet for å følge den',
+      Math.abs(kort.flyttet) < 120, kort.spor + ' (Δ ' + Math.round(kort.flyttet) + ')');
+    log('2 mobil: … men slipper den aldri (ledesnoren)',
+      kort.holder === true, 'bredde=' + kort.bredde + ' Δ ' + Math.round(kort.flyttet));
     log('2 mobil: … og males uten rotasjon', kort.rot === '', 'rotate=' + JSON.stringify(kort.rot));
+
+    /* Fingerskjelvet: en gest godt innenfor snorens slakk skal ikke flytte noe i
+       det hele tatt — det er hele grunnen til at låsen finnes. Slakken er halve
+       bredden på det LØFTEDE objektet, som er kompakt og dermed avhenger av hvor
+       langt navnet er; gesten måles derfor mot bredden vi nettopp så. */
+    const skjelv = await sidelengs(p, '#board .card[data-id="card-A"] .card-head', '#board', true,
+      Math.max(3, Math.round(kort.bredde / 2) - 14));
+    log('2 mobil: en liten sidelengs gest flytter ingenting',
+      Math.abs(skjelv.flyttet) <= 1, skjelv.spor + ' (Δ ' + Math.round(skjelv.flyttet) + ')');
 
     // Kortere utslag på radnivå: en finger utenfor kortets vannrette kant betyr
     // «ekstraher til ny liste», og det er en annen sak enn aksen.
     const rad = await sidelengs(p, '#board .card[data-id="card-A"] .item', '#board', true, 60);
-    log('2 mobil: listepunktet står stille sidelengs',
-      Math.abs(rad.flyttet) <= 1, rad.spor + ' (Δ ' + Math.round(rad.flyttet) + ')');
+    log('2 mobil: listepunktet henger etter og slipper ikke fingeren',
+      Math.abs(rad.flyttet) < 60 && rad.holder === true,
+      rad.spor + ' (Δ ' + Math.round(rad.flyttet) + ', bredde=' + rad.bredde + ')');
     log('2 mobil: … og males uten rotasjon', rad.rot === '', 'rotate=' + JSON.stringify(rad.rot));
     log('2 mobil: ingen JS-feil', errs.length === 0, errs.join(' | '));
     await p.close();
@@ -220,8 +282,9 @@ async function sidelengs(p, sel, root, touch, dx) {
     const cols = await boardCols(p);
     log('3 bred énkolonne: board-et står i ÉN kolonne på 700 px', cols === 1, 'kolonner=' + cols);
     const kort = await sidelengs(p, '#board .card[data-id="card-A"] .card-head', '#board', false, 180);
-    log('3 bred énkolonne: lista står stille sidelengs (låsen er ikke en mobilregel)',
-      Math.abs(kort.flyttet) <= 1, kort.spor + ' (Δ ' + Math.round(kort.flyttet) + ')');
+    log('3 bred énkolonne: lista henger etter fingeren (låsen er ikke en mobilregel)',
+      Math.abs(kort.flyttet) < 180 && kort.holder === true,
+      kort.spor + ' (Δ ' + Math.round(kort.flyttet) + ', bredde=' + kort.bredde + ')');
     log('3 bred énkolonne: … og males uten rotasjon', kort.rot === '', 'rotate=' + JSON.stringify(kort.rot));
     log('3 bred énkolonne: ingen JS-feil', errs.length === 0, errs.join(' | '));
     await p.close();
@@ -248,16 +311,35 @@ async function sidelengs(p, sel, root, touch, dx) {
     const uniId = await p.evaluate(() =>
       document.querySelector('#nav-board .board-col > .card').dataset.id);
     const kort = await sidelengs(p, '#nav-board .card[data-id="' + uniId + '"] .card-head', '#nav-board', false, 250);
-    log('4 nav-modalen: området står stille sidelengs',
-      Math.abs(kort.flyttet) <= 1, kort.spor + ' (Δ ' + Math.round(kort.flyttet) + ')');
+    log('4 nav-modalen: området henger etter fingeren, og slipper den aldri',
+      Math.abs(kort.flyttet) < 250 && kort.holder === true,
+      kort.spor + ' (Δ ' + Math.round(kort.flyttet) + ', bredde=' + kort.bredde + ')');
     log('4 nav-modalen: … og males uten rotasjon', kort.rot === '', 'rotate=' + JSON.stringify(kort.rot));
 
     await åpen();
     const rad = await sidelengs(p, '#nav-board .card .items-container > .item', '#nav-board', false, 250);
-    log('4 nav-modalen: mapperaden står stille sidelengs',
-      Math.abs(rad.flyttet) <= 1, rad.spor + ' (Δ ' + Math.round(rad.flyttet) + ')');
+    log('4 nav-modalen: mapperaden henger etter fingeren, og slipper den aldri',
+      Math.abs(rad.flyttet) < 250 && rad.holder === true,
+      rad.spor + ' (Δ ' + Math.round(rad.flyttet) + ', bredde=' + rad.bredde + ')');
     log('4 nav-modalen: … og males uten rotasjon', rad.rot === '', 'rotate=' + JSON.stringify(rad.rot));
     log('4 nav-modalen: ingen JS-feil', errs.length === 0, errs.join(' | '));
+    await p.close();
+  }
+
+  /* ---------- 5) Notatfanen er ALDRI låst: to slippmål side om side ----------
+     Én kolonne på mobil, men arkivet og søppelkassen står ved siden av hverandre
+     nederst — og sidelengs er hele forskjellen på «legg bort» og «slett». */
+  {
+    const p = await b.newPage({ viewport: { width: 390, height: 780 }, isMobile: true, hasTouch: true });
+    const errs = []; p.on('pageerror', (e) => errs.push(e.message));
+    await register(p);
+    await seedNotes(p);
+    const cols = await p.evaluate(() => document.querySelectorAll('#notes-board > .board-col').length);
+    log('5 notatfanen står i ÉN kolonne på mobil', cols === 1, 'kolonner=' + cols);
+    const notat = await sidelengs(p, '#notes-board .note-card', '#notes-board', true, 120);
+    log('5 notatkortet følger fingeren sidelengs likevel',
+      notat.flyttet >= 100, notat.spor + ' (Δ ' + Math.round(notat.flyttet) + ')');
+    log('5 notatkortet ingen JS-feil', errs.length === 0, errs.join(' | '));
     await p.close();
   }
 

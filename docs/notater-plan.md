@@ -48,10 +48,18 @@ kort — de SAMME kortene som listene, ikke en egen korttype:
 - samme kolonnepakking som listene (venstre kolonne fylles først), og samme
   posisjonsbaserte palettfarge;
 - hvert kort viser tittel med notatikonet foran, «sist endret» øverst til høyre,
-  og et tekstutdrag i «…» på en plate i kortkroppen;
+  og et tekstutdrag i «…» på en plate i kortkroppen. Ikonet står på tittelens
+  FØRSTE LINJE og i samme størrelse som type-ikonene ellers i appen: hodet her er
+  topp-justert fordi tittelen kan gå over flere linjer, så ikonet får høyden til
+  den første linjeboksen og sentreres i den (vakt: `notes-tab` punkt 8);
 - klikk på kortet åpner editoren;
 - klikk-og-hold / eksisterende pekersemantikk starter DnD;
 - omrokering skal bruke samme grunnprinsipp som omrokering av lister i en mappe.
+
+Arkivet og søppelkassen for notatene står i en FAST FOT nederst på siden, side
+om side og med halve bredden hver — ikke i topplinjas knapperad. Det er den samme
+foten listefanen har for sin kasse; begge er beskrevet i
+[`trash.md`](trash.md).
 
 Notatkortet har den SAMME menyknappen som resten av appen (tre prikker,
 `.obj-menu-btn` → `#obj-menu`): der ligger «Endre navn», «Flytt», «Koblinger»,

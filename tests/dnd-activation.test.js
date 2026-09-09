@@ -270,8 +270,10 @@ const log = (n, ok, x = '') => { results.push(ok); console.log((ok ? 'PASS' : 'F
     await p.waitForTimeout(150);
     const uIds = await p.evaluate(() => [...document.querySelectorAll('#nav-board .card')].map((u) => u.dataset.id));
     const u1 = await centerOf(p, '#nav-board .card[data-id="' + uIds[0] + '"] .card-head');
-    const u3 = await centerOf(p, '#nav-board .card[data-id="' + uIds[2] + '"] .card-head');
     await holdOn(p, u1.x, u1.y);
+    // Mål mål-kortets hode ETTER løftet, som i 4b: alle kortene kollapser, og
+    // modalens fot vokser med søppelkassen, så layouten er en helt annen nå.
+    const u3 = await centerOf(p, '#nav-board .card[data-id="' + uIds[2] + '"] .card-head');
     await nudge(p, u1);
     await G.touchEnd(p, u1.x, u3.y + 4); // INGEN pointermove mot slippunktet
     await p.waitForTimeout(500);
