@@ -15,6 +15,10 @@
        en nøktern melding forklarer hva som skjedde
     6. En KOBLING til et notat man mister tilgang til blir stående (den
        ødelegges ikke), men kan ikke åpnes
+    7. Ingen evig retry: en endring man ikke hadde rett til å gjøre rulles
+       tilbake — BÅDE innholdet og posisjonen/forelderen
+    8. En EKTE flytting ut av «Delt med meg» blir godtatt av serveren og
+       skriver den nye plasseringen, ikke den gamle kanoniske
 
   Kjøres på BÅDE desktop- og mobil-viewport.
 
@@ -36,11 +40,12 @@ const U = () => 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
      A eier bokhyllen P (notatbok F med notat N1, og det frie notatet N2).
      B er MEDLEM av P — altså redaktør så lenge bokhyllen er åpen.
      C har en DIREKTE rolle på notatet N1, og ingenting annet.
-     D er eksplisitt EIER av notatboken F, uten rolle i bokhyllen.
+     D er eksplisitt EIER av notatboken F, uten rolle i bokhyllen — og har i
+     tillegg sin EGEN bokhylle DP å flytte notatboken til.
      C har i tillegg sitt eget område CU og en kobling fra N1 til det. */
 function buildDB() {
   const uA = 'uA', uB = 'uB', uC = 'uC', uD = 'uD';
-  const P = U(), F = U(), N1 = U(), N2 = U(), CU = U(), LNK = U();
+  const P = U(), F = U(), N1 = U(), N2 = U(), CU = U(), LNK = U(), DP = U(), DF = U();
   const doc = { v: 1, blocks: [{ t: 'p', c: [{ s: 'Femti deltakere' }] }] };
   const base = (x) => Object.assign({
     trashed: false, archived: false, locked: false, unlocked: false,
@@ -54,7 +59,7 @@ function buildDB() {
     role: role, pos: pos || 0, created_at: 1,
   }, on);
   return {
-    ids: { uA, uB, uC, uD, P, F, N1, N2, CU, LNK },
+    ids: { uA, uB, uC, uD, P, F, N1, N2, CU, LNK, DP, DF },
     db: {
       _rolesBackfilled: true,
       profiles: [
@@ -67,8 +72,14 @@ function buildDB() {
       universes: [Object.assign(base({ id: CU, owner_id: uC, name: 'Catos område' }),
         { is_cat: false, cat_id: null })],
       groups: [], cards: [], items: [], ideas: [],
-      note_projects: [base({ id: P, owner_id: uA, name: 'Felles bokhylle' })],
-      note_folders: [base({ id: F, owner_id: uA, project_id: P, name: 'Metode' })],
+      note_projects: [
+        base({ id: P, owner_id: uA, name: 'Felles bokhylle' }),
+        base({ id: DP, owner_id: uD, name: 'Dinas bokhylle' }),
+      ],
+      note_folders: [
+        base({ id: F, owner_id: uA, project_id: P, name: 'Metode', pos: 7 }),
+        base({ id: DF, owner_id: uD, project_id: DP, name: 'Dinas metode' }),
+      ],
       notes: [
         base({ id: N1, owner_id: uA, project_id: P, folder_id: F, title: 'Utvalg', body: doc }),
         base({ id: N2, owner_id: uA, project_id: P, folder_id: null, title: 'Løse tanker', body: doc, pos: 1 }),
@@ -80,6 +91,7 @@ function buildDB() {
         mem(uB, { note_project_id: P }, 'member', 0),
         mem(uC, { note_id: N1 }, 'member', 0),
         mem(uD, { note_folder_id: F }, 'owner', 0),
+        mem(uD, { note_project_id: DP }, 'owner', 0),
         mem(uC, { universe_id: CU }, 'owner', 0),
       ],
       share_invites: [], tombstones: [],
@@ -145,6 +157,27 @@ async function sync(p, pred) {
     if (await p.evaluate(pred)) return true;
   }
   return false;
+}
+/* Dra en NOTATBOK-rad over i et annet bokhyllekort — samme gest som
+   `group-move.test.js` bruker på listesiden, mot notat-navigasjonens board.
+   Auto-scrollen henter målet inn mens draget pågår, så pekeren holdes over
+   målkortets «legg til»-rad i flere runder. */
+async function dragNoteFolderTo(p, folderId, projectId) {
+  const rad = '#notes-nav-board .item[data-id="' + folderId + '"]';
+  await p.locator(rad).scrollIntoViewIfNeeded();
+  await p.waitForTimeout(150);
+  const a = await p.locator(rad).boundingBox();
+  await p.mouse.move(a.x + a.width / 2, a.y + a.height / 2);
+  await p.mouse.down();
+  await p.mouse.move(a.x + a.width / 2 + 8, a.y + a.height / 2 + 8, { steps: 3 });
+  await p.waitForTimeout(90);
+  for (let i = 0; i < 14; i++) {
+    const t = await p.locator('#notes-nav-board .card[data-id="' + projectId + '"] .add-item-row').boundingBox();
+    await p.mouse.move(t.x + t.width / 2, t.y + 2, { steps: 5 });
+    await p.waitForTimeout(80);
+  }
+  await p.mouse.up();
+  await p.waitForTimeout(500);
 }
 const readDB = (p) => p.evaluate(() => JSON.parse(localStorage.getItem('hk-mock-db')));
 const writeDB = (p, db) => p.evaluate((d) => {
@@ -299,6 +332,46 @@ async function run(label, viewport, mobile) {
   log(label + ' 4: en lokal endring uten skriverett slutter å avvike (ingen evig retry)',
     stopper === true && etterLås.lokal === 'Utvalg' && etterLås.server === 'Utvalg',
     JSON.stringify(etterLås));
+
+  /* Det samme gjelder POSISJONSREGISTERET, og et LÅSUNNTAK er tilfellet som
+     viser hvorfor det er et EGET spørsmål: notatet er åpent (jeg KAN redigere
+     det), mens notatboken over er låst (jeg kan IKKE ordne rekkefølgen i den).
+     En omrokkering gjort før låsen kom kan da aldri lande — og en rollback som
+     bare så på innholdet ville ikke kjørt i det hele tatt. */
+  await p.evaluate((id) => { window.__hkNote = id; }, ids.N1);
+  const unntak = await readDB(p);
+  unntak.notes.find((n) => n.id === ids.N1).unlocked = true;
+  await writeDB(p, unntak);
+  await sync(p, () => {
+    const n = (window.__huskis.state.notes || []).find((x) => x.id === window.__hkNote);
+    return !!(n && n._caps && n._caps.editContent === true && n._caps.reorderInParent === false);
+  });
+  const caps = await p.evaluate(() => {
+    const n = (window.__huskis.state.notes || []).find((x) => x.id === window.__hkNote) || {};
+    return { skriv: n._caps && n._caps.editContent, rekkefølge: n._caps && n._caps.reorderInParent };
+  });
+  log(label + ' 4: et låsUNNTAK gir skriverett UTEN rett til å ordne rekkefølgen',
+    caps.skriv === true && caps.rekkefølge === false, JSON.stringify(caps));
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    const n = H.state.notes.find((x) => x.id === window.__hkNote);
+    n.pos = 99; n.posTs = 9e12; n.posOrg = 'b';
+    H.save();
+  });
+  const posStopper = await sync(p, () => {
+    const H = window.__huskis;
+    const mine = H.docFromMyState().notes.find((x) => x.id === window.__hkNote);
+    const serv = H.contentDocFromMy(H.lastMy).notes.find((x) => x.id === window.__hkNote);
+    return !!mine && !!serv && JSON.stringify(mine) === JSON.stringify(serv);
+  });
+  const etterPos = await p.evaluate(() => {
+    const db2 = JSON.parse(localStorage.getItem('hk-mock-db'));
+    return { lokal: (window.__huskis.state.notes.find((x) => x.id === window.__hkNote) || {}).pos,
+      server: (db2.notes.find((x) => x.id === window.__hkNote) || {}).pos };
+  });
+  log(label + ' 4: en omrokkering uten rett til det ruller også tilbake (ingen evig retry)',
+    posStopper === true && etterPos.lokal === 0 && etterPos.server === 0,
+    JSON.stringify(etterPos));
   await p.evaluate(() => window.__huskis.closeNotesNav());
   await p.waitForTimeout(200);
 
@@ -367,18 +440,20 @@ async function run(label, viewport, mobile) {
 
   /* ---------- 7) Direkte delt NOTATBOK: D ser boken, ikke bokhyllen ---------- */
   await loadAs(p, db, ids.uD, 'd@x.no', viewport);
+  await p.evaluate((x) => { window.__hkFolder = x.F; window.__hkShelf = x.DP; },
+    { F: ids.F, DP: ids.DP });
   const dState = await p.evaluate(() => {
     const H = window.__huskis;
-    const shelf = H.state.noteProjects[0] || {};
+    const shelf = H.state.noteProjects.find((x) => x._virtual) || {};
     return {
-      bokhyller: H.state.noteProjects.length,
+      bokhyller: H.state.noteProjects.map((x) => x.name),
       virtuell: !!shelf._virtual,
       notatbøker: (shelf.folders || []).map((f) => f.name),
       notater: H.state.notes.map((n) => n.title),
     };
   });
   log(label + ' 7: D ser notatboken i den virtuelle bokhyllen, med notatet i',
-    dState.bokhyller === 1 && dState.virtuell && dState.notatbøker.join() === 'Metode'
+    dState.bokhyller.length === 2 && dState.virtuell && dState.notatbøker.join() === 'Metode'
     && dState.notater.join() === 'Utvalg', JSON.stringify(dState));
   const dDom = await p.evaluate(() => document.body.innerText);
   log(label + ' 7: bokhyllens navn lekker ikke', !/Felles bokhylle/.test(dDom), '');
@@ -387,6 +462,61 @@ async function run(label, viewport, mobile) {
   log(label + ' 7: D er eksplisitt eier og kan dele notatboken videre',
     dRows.some((r) => /Deling/i.test(r)) && dRows.some((r) => /Forlat/i.test(r)),
     dRows.join(' | '));
+
+  /* En EKTE flytting UT av «Delt med meg»: D drar notatboken over i sin egen
+     bokhylle. To ting må holde samtidig.
+
+     Serveren må godta den: D har destruktiv myndighet i kilden (direkte eier)
+     og opprettelsesrett i målet — selv om hen IKKE får ordne rekkefølgen i
+     bokhyllen hen ikke ser. Det er to forskjellige spørsmål, og søsken-vakten
+     skal ikke rulle flyttingen tilbake med svaret på det ene.
+
+     Og klienten må skrive den NYE plasseringen: i den virtuelle bokhyllen var
+     rekkefølgen PERSONLIG, og den kanoniske lå til side. Blir den liggende
+     etter flyttingen, pushes den gamle plasseringen i stedet for den nye. */
+  const førFlytt = await p.evaluate(() => {
+    const H = window.__huskis;
+    const f = H.state.noteProjects.flatMap((x) => x.folders || [])
+      .find((x) => x.id === window.__hkFolder) || {};
+    return { canon: !!f._canon, canonProject: !!f._canonProject,
+      kanoniskPos: f._canon ? f._canon.pos : null, personligPos: f.pos };
+  });
+  log(label + ' 7: notatboken står med PERSONLIG rekkefølge og skjult kanonisk bokhylle',
+    førFlytt.canon === true && førFlytt.canonProject === true
+    && førFlytt.kanoniskPos === 7 && førFlytt.personligPos !== 7,
+    JSON.stringify(førFlytt));
+  await dragNoteFolderTo(p, ids.F, ids.DP);
+  const etterFlytt = await p.evaluate(() => {
+    const H = window.__huskis;
+    const f = H.state.noteProjects.flatMap((x) => x.folders || [])
+      .find((x) => x.id === window.__hkFolder) || {};
+    const rad = H.docFromMyState().noteFolders.find((x) => x.id === window.__hkFolder) || {};
+    return { prosjekt: f.project, canon: !!f._canon, canonProject: !!f._canonProject,
+      lokalPos: f.pos, docProsjekt: rad.project, docPos: rad.pos };
+  });
+  log(label + ' 7: … og etter flyttingen er BEGGE overstyringene borte',
+    etterFlytt.prosjekt === ids.DP && etterFlytt.canon === false
+    && etterFlytt.canonProject === false, JSON.stringify(etterFlytt));
+  log(label + ' 7: … så doc-et pusher den NYE plasseringen, ikke den gamle kanoniske',
+    etterFlytt.docProsjekt === ids.DP && etterFlytt.docPos === etterFlytt.lokalPos
+    && etterFlytt.docPos !== førFlytt.kanoniskPos,
+    JSON.stringify({ før: førFlytt, etter: etterFlytt }));
+  const landet = await sync(p, () => {
+    const db2 = JSON.parse(localStorage.getItem('hk-mock-db'));
+    const r = db2.note_folders.find((x) => x.id === window.__hkFolder);
+    return !!r && r.project_id === window.__hkShelf;
+  });
+  const serverRad = await p.evaluate(() => {
+    const db2 = JSON.parse(localStorage.getItem('hk-mock-db'));
+    const f = db2.note_folders.find((x) => x.id === window.__hkFolder) || {};
+    const n = db2.notes.find((x) => x.folder_id === window.__hkFolder) || {};
+    return { bokhylle: f.project_id, pos: f.pos, notatBokhylle: n.project_id };
+  });
+  log(label + ' 7: serveren godtar flyttingen — den blir ikke stille rullet tilbake',
+    landet === true && serverRad.bokhylle === ids.DP && serverRad.pos === etterFlytt.docPos,
+    JSON.stringify(serverRad));
+  log(label + ' 7: … og notatet fulgte med (kaskaden holder invarianten)',
+    serverRad.notatBokhylle === ids.DP, JSON.stringify(serverRad));
   await p.evaluate(() => window.__huskis.closeNotesNav());
   await p.waitForTimeout(200);
 

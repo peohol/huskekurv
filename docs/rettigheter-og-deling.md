@@ -800,6 +800,19 @@ ingen id-mapping å holde rede på. En notatbok som flyttes drar notatene sine m
 seg (`note_folders_cascade`); den kaskaden er invarianten, ikke en flytting, og
 krever derfor ingen egen myndighet på hvert notat.
 
+**Å FLYTTE og å OMROKKERE er to forskjellige spørsmål.** Forelder-pekerne rir på
+posisjonsregisteret, og det registeret voktes ellers av `can_reorder_in_parent`
+— som spør den GAMLE forelderen. En direkte notatbok- eller notateier som ikke
+ser nivået over har med rette `false` der, men har likevel full myndighet til å
+flytte objektet ut. Vakten skiller derfor de to: en flytting den alt har
+godkjent (kilde + mål) rulles ikke tilbake av søsken-vakten etterpå. Registeret
+gjelder fortsatt — en eldre skriving vinner aldri, heller ikke en flytting.
+
+I klienten har en notatbok eller et notat som vises i «Delt med meg» PERSONLIG
+rekkefølge, med den kanoniske plasseringen lagt til side. Dras raden ut i en ekte
+bokhylle, faller BEGGE overstyringene bort: plasseringen er da en helt vanlig,
+delt plassering i mål-bokhyllen.
+
 ### Hva som skjer når tilgang trekkes tilbake
 
 `revoke_share` og `leave_share` rydder NEDOVER: fjernes bokhyllerollen, ryddes
@@ -814,6 +827,17 @@ Hos mottakeren forsvinner raden fra neste `get_my_doc`. Klienten dropper den
 lokalt (den står i synk-basen, så den leses ikke som «nyopprettet her»),
 editoren lukkes hvis notatet var åpent, og en nøktern melding forklarer hva som
 skjedde. **En gammel lokal kopi blir aldri stående redigerbar.**
+
+En endring man IKKE hadde rett til å gjøre — skrevet før låsen kom, eller mens
+enheten var offline — kan aldri lande: vaktene reverterer den stille, og
+fletteren ville funnet den samme divergensen hver runde. Klienten ruller derfor
+raden tilbake til serverens siste kjente verdi FØR flettingen. Det gjelder
+begge registrene, hver for seg: innholdet når `editContent` er usann, og
+posisjonen (med forelder-pekerne) når `reorderInParent` — eller `move`, hvis
+forelderen er endret lokalt — er usann. Et barn med LÅSUNNTAK er tilfellet som
+viser hvorfor de må skilles: der er `editContent` sann samtidig som
+`reorderInParent` er usann. Rader med PERSONLIG rekkefølge røres ikke: deres
+delte register ligger urørt til side, og `.pos` går til medlemskapsraden.
 
 ### «Delt med meg» på notatsiden
 
@@ -889,8 +913,11 @@ idempotent og hindrer at en bevisst fjernet rolle kommer tilbake.
   knapper, medlemskategorier, breadcrumbs, tap av tilgang (desktop + mobil).
 * `supabase/tests/test-note-sharing.sql` — notatsiden: roller og arv på tre
   nivåer, ren leser via lås, sletterett, flytting mellom foreldre med ulike
-  delingsforhold, tilbakekalling, uautoriserte skrivinger, koblinger på tvers av
+  delingsforhold (også at en godkjent flytting IKKE rulles tilbake av
+  søsken-vakten), tilbakekalling, uautoriserte skrivinger, koblinger på tvers av
   delt og privat, gravsteiner og kontosletting (fire brukere).
 * `tests/notes-sharing.test.js` — delerad i den vanlige objektmenyen på alle
   tre nivåene, delemodalen, eier/redaktør/leser, «Delt med meg»-bokhyllen,
-  tilbakekalling og samtidige endringer (desktop + mobil).
+  tilbakekalling, samtidige endringer, rollback av både innholds- og
+  posisjonsregisteret uten skriverett, og en ekte flytting ut av «Delt med meg»
+  (desktop + mobil).

@@ -1963,7 +1963,11 @@
           });
           row.ts = patch.ts; row.org = patch.org;
         }
-        if (nReorder && regNewer(patch.pos_ts, patch.pos_org, row.pos_ts, row.pos_org)) {
+        /* `flyttet` er allerede godkjent (kilde + mål) over. Søsken-vakten
+           spør den GAMLE forelderen, og ville ellers stille rullet flyttingen
+           tilbake for den som eier objektet direkte uten å se nivået over —
+           se kommentaren i note_folders_before_update. */
+        if ((nReorder || flyttet) && regNewer(patch.pos_ts, patch.pos_org, row.pos_ts, row.pos_org)) {
           ['pos', 'project_id', 'folder_id'].forEach(function (k) {
             if (k in patch) row[k] = patch[k];
           });

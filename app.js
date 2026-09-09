@@ -17084,8 +17084,15 @@
         // plasseringen røres ikke.
         commitPos(moved, 'noteFolder', np);
       } else {
-        // En EKTE flytting: den kanoniske overstyringen gjelder ikke lenger.
+        /* En EKTE flytting: BEGGE overstyringene faller bort. `_canonProject`
+           pekte på en bokhylle jeg ikke ser, og `_canon` holdt den kanoniske
+           posisjonen mens `.pos` var min personlige rekkefølge i «Delt med
+           meg». Etter flyttingen er plasseringen en helt vanlig, delt
+           plassering i mål-bokhyllen — blir `_canon` liggende, skriver
+           `withCanonPos` den GAMLE kanoniske posisjonen tilbake i stedet for
+           den nye. */
         delete moved._canonProject;
+        delete moved._canon;
         moved.project = targetId;
         moved.pos = np;
         stampPos(moved);
@@ -17100,6 +17107,9 @@
     allNotes().forEach((n) => {
       if (n.folder !== folder.id || n.project === folder.project) return;
       n.project = folder.project;
+      // Notatet sto i den virtuelle bokhyllen fordi NOTATBOKEN gjorde det. Nå
+      // har det en ekte bokhylle, og overstyringen gjelder ikke lenger.
+      delete n._canonProject;
       stampPos(n);
     });
   }
@@ -19575,25 +19585,53 @@
     note_folder: ['name', 'trashed', 'archived'],
     note: ['title', 'doc', 'trashed', 'archived'],
   };
+  /* Det gjelder BEGGE registrene. Innholdet er det ene; POSISJONEN er det
+     andre, og forelder-pekerne rir på det (som `card_id`/`cat_id` på et
+     listepunkt). En omrokkering gjort rett før forelderen ble låst kan aldri
+     lande heller — og et barn med LÅSUNNTAK er det tydeligste tilfellet:
+     `editContent` er sann samtidig som `reorderInParent` er usann, så en
+     rollback som bare så på innholdet kjørte ikke i det hele tatt. */
+  const NOTE_PARENT_FIELDS = { note_project: [], note_folder: ['project'], note: ['project', 'folder'] };
+  const NOTE_POS_FIELDS = ['pos', 'posTs', 'posOrg'];
   const NOTE_CLEAN = { note_project: cleanNoteProject, note_folder: cleanNoteFolder, note: cleanNote };
+  /* Et forelder-felt med en VISNINGS-overstyring er ikke en lokal endring i
+     det hele tatt: `canonRow` skriver den kanoniske verdien uansett hva
+     visningen sier. Predikatene er nøyaktig `canonRow` sine. */
+  const noteParentIsLocal = (o, f) => (f === 'project'
+    ? !(o._canonProject && o.project === SHARED_NOTES_ID)
+    : !(o._canonFolder !== undefined && !o.folder));
   function revertUnwritableNoteEdits(my) {
     if (!my) return false;
     let changed = false;
+    const put = (o, f, v) => {
+      if (JSON.stringify(o[f]) === JSON.stringify(v)) return;
+      o[f] = v;
+      changed = true;
+    };
     const each = (type, rows) => {
       const srvRows = new Map((my[NOTE_SERVER_KEY[type]] || []).map((r) => [r.id, r]));
       rows.forEach((o) => {
         // Serverens capability, direkte: kjøres hver synk-runde over hver rad,
         // så det lokale låse-anslaget (`frozen`) skal ikke regnes ut her.
         // Mangler `_caps` er raden ny og ikke på serveren ennå.
-        if (!o._caps || o._caps.editContent !== false) return;
+        if (!o._caps) return;
         const raw = srvRows.get(o.id);
         if (!raw) return;                           // ikke på serveren (ennå)
         const srv = NOTE_CLEAN[type](raw);
-        NOTE_CONTENT_FIELDS[type].concat(['ts', 'org']).forEach((f) => {
-          if (JSON.stringify(o[f]) === JSON.stringify(srv[f])) return;
-          o[f] = srv[f];
-          changed = true;
-        });
+        if (o._caps.editContent === false) {
+          NOTE_CONTENT_FIELDS[type].concat(['ts', 'org']).forEach((f) => put(o, f, srv[f]));
+        }
+        /* PERSONLIG rekkefølge (`_canon`): `.pos` går til min egen
+           medlemskapsrad, ikke til det delte registeret — det ligger urørt i
+           `_canon`. Å rulle `.pos` tilbake her ville ødelagt nettopp den
+           rekkefølgen «Delt med meg» er sortert etter. */
+        if (o._canon) return;
+        const parents = NOTE_PARENT_FIELDS[type].filter((f) => noteParentIsLocal(o, f));
+        // Er forelderen en annen enn serverens, er dette en FLYTTING, og da er
+        // det `move` serveren spør om — ikke rekkefølgen blant søsken.
+        const moved = parents.some((f) => (o[f] || null) !== (srv[f] || null));
+        if (o._caps[moved ? 'move' : 'reorderInParent'] !== false) return;
+        parents.concat(NOTE_POS_FIELDS).forEach((f) => put(o, f, srv[f]));
       });
     };
     each('note_project', state.noteProjects || []);

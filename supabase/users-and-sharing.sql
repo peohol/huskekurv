@@ -2526,7 +2526,9 @@ $$;
 
 create or replace function public.note_folders_before_update()
 returns trigger language plpgsql security definer set search_path = public as $$
-declare uid uuid := auth.uid(); can_content boolean := true; can_reorder boolean := true;
+declare
+  uid uuid := auth.uid(); can_content boolean := true; can_reorder boolean := true;
+  v_moved boolean;
 begin
   if new.owner_id is distinct from old.owner_id and not public.in_privileged_op() then
     raise exception 'owner_id (oppretter) kan ikke endres';
@@ -2558,8 +2560,8 @@ begin
   -- finnes ingen kryssdomene-kopiering å gjøre atomisk. Tilgangen regnes om
   -- fra den nye forelderen — de som bare arvet fra den gamle bokhyllen mister
   -- den, målets medlemmer får den, og DIREKTE roller på notatboken består.
-  if new.project_id is distinct from old.project_id and uid is not null
-     and not public.in_privileged_op() then
+  v_moved := new.project_id is distinct from old.project_id;
+  if v_moved and uid is not null and not public.in_privileged_op() then
     if not public.can_move_note_object('note_folder', old.id, uid) then
       raise exception 'mangler myndighet til å flytte notatboken';
     end if;
@@ -2572,7 +2574,16 @@ begin
     new.name := old.name; new.trashed := old.trashed; new.archived := old.archived;
     new.ts := old.ts; new.org := old.org;
   end if;
-  if (uid is not null and not can_reorder and not public.in_privileged_op())
+  /* SØSKEN-VAKTEN SKAL IKKE OMGJØRE EN GODKJENT FLYTTING.
+     `can_reorder_in_parent` spør den GAMLE forelderen: hvem som får ordne
+     rekkefølgen der notatboken STÅR. Den som eier notatboken DIREKTE uten å se
+     bokhyllen over har med rette `false` der — og ville da fått flyttingen
+     over godkjent og stille rullet tilbake her, som om ingenting skjedde.
+     Myndigheten til å flytte er en annen og allerede avgjort: destruktiv rett
+     i kilden PLUSS opprettelsesrett i MÅLET, og det er målets rett som
+     bestemmer plasseringen i målet. Registeret gjelder fortsatt for begge
+     veier — en eldre skriving vinner aldri. */
+  if (uid is not null and not can_reorder and not v_moved and not public.in_privileged_op())
      or not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
     new.project_id := old.project_id;
     new.pos := old.pos; new.pos_ts := old.pos_ts; new.pos_org := old.pos_org;
@@ -2667,7 +2678,11 @@ begin
     new.archived := old.archived;
     new.ts := old.ts; new.org := old.org;
   end if;
-  if (uid is not null and not can_reorder and not public.in_privileged_op())
+  -- Samme unntak som for notatboken: en flytting `v_moved` allerede har
+  -- godkjent (kilde + mål) rulles ikke tilbake av søsken-vakten. KASKADEN er
+  -- ikke `v_moved`, og skal fortsatt gå gjennom den vanlige vakten — bokhyllen
+  -- utledes uansett på nytt av invarianten nederst.
+  if (uid is not null and not can_reorder and not v_moved and not public.in_privileged_op())
      or not public.reg_newer(new.pos_ts, new.pos_org, old.pos_ts, old.pos_org) then
     new.project_id := old.project_id; new.folder_id := old.folder_id;
     new.pos := old.pos; new.pos_ts := old.pos_ts; new.pos_org := old.pos_org;

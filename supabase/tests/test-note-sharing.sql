@@ -12,7 +12,8 @@
 --   2. deling på hvert av de tre nivåene, og at arven bare går NEDOVER
 --   3. eier / redaktør / ren leser (låsen er det som lager leseren)
 --   4. hvem som kan slette, arkivere, gjenopprette og dele videre
---   5. flytting mellom foreldre med ulike delingsforhold
+--   5. flytting mellom foreldre med ulike delingsforhold — og at en GODKJENT
+--      flytting ikke blir rullet tilbake av søsken-vakten etterpå
 --   6. tilbakekalling, og at ingen skjult tilgang blir stående igjen
 --   7. uautorisert SELECT/INSERT/UPDATE/DELETE fra en rå klient
 --   8. koblinger på tvers av delt og privat innhold
@@ -75,6 +76,11 @@ grant execute on function public.t_fails_with(text, text, text) to public;
 \set G  '75000000-5555-0000-0000-00000000000b'
 \set L  '75000000-5555-0000-0000-00000000000c'
 \set N4 '75000000-5555-0000-0000-00000000000d'
+-- DP = Ds egen bokhylle; F3/N5 = det D eier DIREKTE under As bokhylle.
+\set DP '75000000-5555-0000-0000-00000000000e'
+\set F3 '75000000-5555-0000-0000-00000000000f'
+\set N5 '75000000-5555-0000-0000-000000000010'
+\set DP2 '75000000-5555-0000-0000-000000000011'
 
 insert into auth.users (id, email) values
   (:'A', 'del-a@example.com'), (:'B', 'del-b@example.com'),
@@ -266,6 +272,59 @@ select public.t_check('B fikk den arvede tilgangen tilbake da notatboken kom til
 reset role; select set_config('request.jwt.claim.sub', :'D', false); set role authenticated;
 select public.t_fails('D kan ikke flytte notatboken inn i en bokhylle hen ikke ser',
   format('update public.note_folders set project_id = %L, pos_ts = 60, pos_org = ''d'' where id = %L', :'P2', :'F'));
+
+/* … men til et MÅL hen har rett i, skal flyttingen faktisk STÅ.
+   Det er ikke det samme spørsmålet som «kan D ordne rekkefølgen der objektet
+   står nå»: en direkte notatbok-/notateier som ikke ser bokhyllen over har med
+   rette NEI på det siste. Vakten må derfor skille de to — ellers blir en
+   godkjent flytting stille rullet tilbake av søsken-vakten rett etterpå, og
+   eieren sitter fast i en forelder hen ikke ser. */
+reset role; select set_config('request.jwt.claim.sub', :'A', false); set role authenticated;
+insert into public.note_folders (id, owner_id, project_id, name, ts, org, pos, pos_ts, pos_org)
+  values (:'F3', :'A', :'P', 'Ds notatbok', 1, 'a', 5, 1, 'a');
+insert into public.notes (id, owner_id, project_id, title, ts, org, pos, pos_ts, pos_org)
+  values (:'N5', :'A', :'P', 'Ds notat', 1, 'a', 6, 1, 'a');
+select public.create_share_invite('note_folder', :'F3', 'del-d@example.com', 'owner') ->> 'id' as inv_d2 \gset
+select public.create_share_invite('note', :'N5', 'del-d@example.com', 'owner') ->> 'id' as inv_d3 \gset
+reset role; select set_config('request.jwt.claim.sub', :'D', false); set role authenticated;
+select public.accept_share_invite(:'inv_d2'::uuid);
+select public.accept_share_invite(:'inv_d3'::uuid);
+insert into public.note_projects (id, owner_id, name, ts, org, pos, pos_ts, pos_org)
+  values (:'DP', :'D', 'Ds bokhylle', 1, 'd', 1, 1, 'd');
+select public.t_check('D er direkte eier, men får IKKE ordne rekkefølgen i bokhyllen over',
+  public.is_note_folder_owner(:'F3', :'D') and public.is_note_owner(:'N5', :'D')
+  and not public.can_reorder_in_parent('note_folder', :'F3', :'D')
+  and not public.can_reorder_in_parent('note', :'N5', :'D'));
+update public.note_folders set pos = 99, pos_ts = 70, pos_org = 'd' where id = :'F3';
+update public.notes set pos = 99, pos_ts = 70, pos_org = 'd' where id = :'N5';
+select public.t_check('… så en REN omrokkering blir stille rullet tilbake',
+  (select pos from public.note_folders where id = :'F3') = 5
+  and (select pos from public.notes where id = :'N5') = 6);
+update public.note_folders set project_id = :'DP', pos = 3, pos_ts = 71, pos_org = 'd' where id = :'F3';
+select public.t_check('… men FLYTTINGEN til hens egen bokhylle står, med den nye plasseringen',
+  (select project_id from public.note_folders where id = :'F3') = :'DP'::uuid
+  and (select pos from public.note_folders where id = :'F3') = 3);
+update public.notes set project_id = :'DP', pos = 4, pos_ts = 72, pos_org = 'd' where id = :'N5';
+select public.t_check('… og et direkte eid NOTAT flyttes på samme vis',
+  (select project_id from public.notes where id = :'N5') = :'DP'::uuid
+  and (select pos from public.notes where id = :'N5') = 4);
+/* Registeret gjelder fortsatt for en flytting: unntaket over sier bare at
+   MYNDIGHET til å flytte er et annet spørsmål enn myndighet til å ordne
+   rekkefølgen — ikke at en gammel skriving plutselig vinner. D har rett i
+   begge bokhyllene sine, så her er registeret det eneste som avgjør. */
+insert into public.note_projects (id, owner_id, name, ts, org, pos, pos_ts, pos_org)
+  values (:'DP2', :'D', 'Ds andre bokhylle', 1, 'd', 2, 1, 'd');
+update public.notes set project_id = :'DP2', pos = 7, pos_ts = 50, pos_org = 'd' where id = :'N5';
+select public.t_check('… en flytting med ELDRE register rulles tilbake',
+  (select project_id from public.notes where id = :'N5') = :'DP'::uuid
+  and (select pos from public.notes where id = :'N5') = 4);
+update public.notes set project_id = :'DP2', pos = 7, pos_ts = 73, pos_org = 'd' where id = :'N5';
+select public.t_check('… og med NYERE register står den',
+  (select project_id from public.notes where id = :'N5') = :'DP2'::uuid);
+reset role; select set_config('request.jwt.claim.sub', :'A', false); set role authenticated;
+select public.t_check('A mistet den arvede tilgangen da D flyttet dem ut',
+  not public.can_read('note_folder', :'F3', :'A')
+  and not public.can_read('note', :'N5', :'A'));
 
 -- ---------- 7. Uautoriserte skrivinger fra en rå klient ----------
 select public.t_fails('D kan ikke skrive en rolle direkte inn i memberships',
