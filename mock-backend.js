@@ -109,6 +109,31 @@
     db.auth_sessions = db.auth_sessions || [];
     db.device_sessions = db.device_sessions || [];
     db.native_notif_devices = db.native_notif_devices || [];
+    /* Notatsidens rolle-backfill (speiler users-and-sharing.sql del 11). Kjøres
+       uavhengig av listesidens markør: en seedet database kan ha notatrader og
+       likevel være «backfilled» fra en tidligere runde. Kriteriet «ingen rader
+       i det hele tatt» gjør den naturlig idempotent og hindrer at en bevisst
+       fjernet rolle kommer tilbake. */
+    (db.note_projects || []).forEach(function (p) {
+      var finnes = db.memberships.some(function (m) { return m.note_project_id === p.id; });
+      if (finnes) return;
+      db.memberships.push({ id: newId('mem'), user_id: p.owner_id,
+        universe_id: null, group_id: null,
+        note_project_id: p.id, note_folder_id: null, note_id: null,
+        role: 'owner', pos: p.pos || 0, created_at: Date.now() });
+    });
+    // Eldre seedede rader mangler notatkolonnene helt; null dem eksplisitt så
+    // oppslagene («m.note_id === id») ikke sammenligner mot undefined.
+    db.memberships.forEach(function (m) {
+      if (m.note_project_id === undefined) m.note_project_id = null;
+      if (m.note_folder_id === undefined) m.note_folder_id = null;
+      if (m.note_id === undefined) m.note_id = null;
+    });
+    db.share_invites.forEach(function (s) {
+      if (s.note_project_id === undefined) s.note_project_id = null;
+      if (s.note_folder_id === undefined) s.note_folder_id = null;
+      if (s.note_id === undefined) s.note_id = null;
+    });
     if (db._rolesBackfilled) return db;
     db._rolesBackfilled = true;
     var has = function (uid, col, id) {
@@ -225,6 +250,10 @@
   function findC(db, id) { return db.cards.find(function (x) { return x.id === id; }) || null; }
   function findI(db, id) { return db.items.find(function (x) { return x.id === id; }) || null; }
 
+  function findNP(db, id) { return (db.note_projects || []).find(function (x) { return x.id === id; }) || null; }
+  function findNF(db, id) { return (db.note_folders || []).find(function (x) { return x.id === id; }) || null; }
+  function findN(db, id) { return (db.notes || []).find(function (x) { return x.id === id; }) || null; }
+
   function uniMembership(db, uid, id) {
     return db.memberships.find(function (m) { return m.user_id === uid && m.universe_id === id; }) || null;
   }
@@ -270,6 +299,99 @@
     return Object.keys(seen).length;
   }
 
+  /* ---- Notatsidens roller (speiler users-and-sharing.sql del 5) ----
+     Bokhylle > Notatbok > Notat, samme rolletabell og samme to roller. Arven
+     går NEDOVER; en rolle på et notat gir ingenting oppover. */
+  function noteProjectRole(db, id, uid) {
+    var m = db.memberships.find(function (x) { return x.user_id === uid && x.note_project_id === id; });
+    return m ? m.role : null;
+  }
+  function noteFolderRole(db, id, uid) {
+    var m = db.memberships.find(function (x) { return x.user_id === uid && x.note_folder_id === id; });
+    return m ? m.role : null;
+  }
+  function noteRole(db, id, uid) {
+    var m = db.memberships.find(function (x) { return x.user_id === uid && x.note_id === id; });
+    return m ? m.role : null;
+  }
+  function noteFolderProject(db, id) { var f = findNF(db, id); return f ? f.project_id : null; }
+  function noteProjectOf(db, id) { var n = findN(db, id); return n ? n.project_id : null; }
+  // Notatets VIRKELIGE forelder-notatbok: bare når raden faktisk finnes. En
+  // hengende peker leses som «fritt notat», som i databasen.
+  function noteParentFolder(db, id) {
+    var n = findN(db, id);
+    return n && n.folder_id && findNF(db, n.folder_id) ? n.folder_id : null;
+  }
+  function isNoteProjectOwner(db, id, uid) { return noteProjectRole(db, id, uid) === 'owner'; }
+  function isNoteProjectMember(db, id, uid) { return noteProjectRole(db, id, uid) !== null; }
+  function isNoteFolderOwner(db, id, uid) {
+    return noteFolderRole(db, id, uid) === 'owner'
+      || isNoteProjectOwner(db, noteFolderProject(db, id), uid);
+  }
+  function isNoteFolderMember(db, id, uid) {
+    return noteFolderRole(db, id, uid) !== null
+      || isNoteProjectMember(db, noteFolderProject(db, id), uid);
+  }
+  function isNoteOwner(db, id, uid) {
+    var f = noteParentFolder(db, id);
+    return noteRole(db, id, uid) === 'owner'
+      || (!!f && isNoteFolderOwner(db, f, uid))
+      || isNoteProjectOwner(db, noteProjectOf(db, id), uid);
+  }
+  function isNoteMember(db, id, uid) {
+    var f = noteParentFolder(db, id);
+    return noteRole(db, id, uid) !== null
+      || (!!f && isNoteFolderMember(db, f, uid))
+      || isNoteProjectMember(db, noteProjectOf(db, id), uid);
+  }
+  // ARVET medlemskap = tilgang som kommer OVENFRA. Det er dét som skiller et
+  // rent direkte medlem (som aldri kan slette for alle) fra et arvet.
+  function noteFolderInheritedMember(db, id, uid) {
+    return isNoteProjectMember(db, noteFolderProject(db, id), uid);
+  }
+  function noteInheritedMember(db, id, uid) {
+    var f = noteParentFolder(db, id);
+    return f ? isNoteFolderMember(db, f, uid) : isNoteProjectMember(db, noteProjectOf(db, id), uid);
+  }
+  function resourceNoteProject(db, type, id) {
+    if (type === 'note_project') return id;
+    if (type === 'note_folder') return noteFolderProject(db, id);
+    if (type === 'note') return noteProjectOf(db, id);
+    return null;
+  }
+  function noteProjectOwnerCount(db, id) {
+    return db.memberships.filter(function (m) { return m.note_project_id === id && m.role === 'owner'; }).length;
+  }
+  function survivingNoteProjectOwner(db, id, uid) {
+    var m = db.memberships.filter(function (x) {
+      return x.note_project_id === id && x.role === 'owner' && x.user_id !== uid;
+    }).sort(function (a, b) { return (a.created_at || 0) - (b.created_at || 0); })[0];
+    return m ? m.user_id : null;
+  }
+  function noteProjectMemberCount(db, id) {
+    return db.memberships.filter(function (m) { return m.note_project_id === id; }).length;
+  }
+  function noteFolderMemberCount(db, id) {
+    var seen = {}, proj = noteFolderProject(db, id);
+    db.memberships.forEach(function (m) {
+      if (proj && m.note_project_id === proj) seen[m.user_id] = 1;
+      if (m.note_folder_id === id) seen[m.user_id] = 1;
+    });
+    return Object.keys(seen).length;
+  }
+  function noteMemberCount(db, id) {
+    var seen = {}, proj = noteProjectOf(db, id), fol = noteParentFolder(db, id);
+    db.memberships.forEach(function (m) {
+      if (proj && m.note_project_id === proj) seen[m.user_id] = 1;
+      if (fol && m.note_folder_id === fol) seen[m.user_id] = 1;
+      if (m.note_id === id) seen[m.user_id] = 1;
+    });
+    return Object.keys(seen).length;
+  }
+  function canReadNoteProject(db, id, uid) { return !!findNP(db, id) && isNoteProjectMember(db, id, uid); }
+  function canReadNoteFolder(db, id, uid) { return !!findNF(db, id) && isNoteFolderMember(db, id, uid); }
+  function canReadNote(db, id, uid) { return !!findN(db, id) && isNoteMember(db, id, uid); }
+
   // Området leses KUN av områdemedlemmer — en direkte mappemottaker skal
   // aldri se områdets navn eller medlemsliste.
   function canReadUniverse(db, id, uid) { return isUniverseMember(db, id, uid); }
@@ -283,8 +405,13 @@
     if (type === 'group') return canReadGroup(db, id, uid);
     if (type === 'card') return canReadCard(db, id, uid);
     if (type === 'item') { var i = findI(db, id); return !!i && canReadCard(db, i.card_id, uid); }
+    if (type === 'note_project') return canReadNoteProject(db, id, uid);
+    if (type === 'note_folder') return canReadNoteFolder(db, id, uid);
+    if (type === 'note') return canReadNote(db, id, uid);
     return false;
   }
+  var NOTE_TYPES = { note_project: 1, note_folder: 1, note: 1 };
+  var SHAREABLE_TYPES = { universe: 1, group: 1, note_project: 1, note_folder: 1, note: 1 };
   function resourceGroup(db, type, id) {
     if (type === 'group') return id;
     if (type === 'card') { var c = findC(db, id); return c ? c.group_id : null; }
@@ -299,6 +426,9 @@
   // aldri av en lås for egen redigering.
   function isPrivileged(db, type, id, uid) {
     if (type === 'universe') return isUniverseOwner(db, id, uid);
+    if (type === 'note_project') return isNoteProjectOwner(db, id, uid);
+    if (type === 'note_folder') return isNoteFolderOwner(db, id, uid);
+    if (type === 'note') return isNoteOwner(db, id, uid);
     var g = resourceGroup(db, type, id);
     return !!g && isGroupOwner(db, g, uid);
   }
@@ -306,6 +436,18 @@
   // Ordnet kjede nærmeste-først [liste?, mappe?, område?].
   function lockChain(db, type, id) {
     var vCard = null, vGroup = null, vUniverse = null, r, chain = [];
+    // Notatsidens kjede: notat → notatbok → bokhylle. Et FRITT notat hopper
+    // over notatboken, og en hengende peker teller ikke som forelder.
+    if (NOTE_TYPES[type]) {
+      var vNote = null, vFolder = null, vProject = null;
+      if (type === 'note') { vNote = id; vFolder = noteParentFolder(db, id); vProject = noteProjectOf(db, id); }
+      else if (type === 'note_folder') { vFolder = id; vProject = noteFolderProject(db, id); }
+      else vProject = id;
+      if (vNote) { r = findN(db, vNote); if (r) chain.push({ type: 'note', row: r }); }
+      if (vFolder) { r = findNF(db, vFolder); if (r) chain.push({ type: 'note_folder', row: r }); }
+      if (vProject) { r = findNP(db, vProject); if (r) chain.push({ type: 'note_project', row: r }); }
+      return chain;
+    }
     if (type === 'item') { r = findI(db, id); vCard = r ? r.card_id : null; }
     else if (type === 'card') vCard = id;
     else if (type === 'group') vGroup = id;
@@ -331,15 +473,26 @@
     if (type === 'card') { pt = 'group'; r = findC(db, id); pid = r ? r.group_id : null; }
     else if (type === 'group') { pt = 'universe'; r = findG(db, id); pid = r ? r.universe_id : null; }
     else if (type === 'item') { pt = 'card'; r = findI(db, id); pid = r ? r.card_id : null; }
-    else return null;
+    else if (type === 'note_folder') { pt = 'note_project'; pid = noteFolderProject(db, id); }
+    else if (type === 'note') {
+      pid = noteParentFolder(db, id);
+      if (pid) pt = 'note_folder';
+      else { pt = 'note_project'; pid = noteProjectOf(db, id); }
+    } else return null;
     return pid ? effectiveLockSource(db, pt, pid) : null;
   }
   // Unntak fra en ARVET lås: områdeeiere alltid; er låsen satt på en MAPPE,
   // også en EKSPLISITT mappeeier der. Uten arvet lås er «unntak» bare en
   // overflødig flaggverdi som objektets lås-eier kan rydde bort.
   function canManageLockException(db, type, id, uid) {
-    if (isUniverseOwner(db, resourceUniverse(db, type, id), uid)) return true;
     var s = inheritedLockSource(db, type, id);
+    if (NOTE_TYPES[type]) {
+      if (isNoteProjectOwner(db, resourceNoteProject(db, type, id), uid)) return true;
+      if (s && s.isLocked && s.type === 'note_folder') return noteFolderRole(db, s.id, uid) === 'owner';
+      if (!(s && s.isLocked)) return isPrivileged(db, type, id, uid);
+      return false;
+    }
+    if (isUniverseOwner(db, resourceUniverse(db, type, id), uid)) return true;
     if (s && s.isLocked && s.type === 'group') return groupRole(db, s.id, uid) === 'owner';
     if (!(s && s.isLocked)) return isPrivileged(db, type, id, uid);
     return false;
@@ -348,6 +501,14 @@
   // Invitasjonspolicy (tretilstand med dynamisk arv) — kun område og mappe.
   function effectiveInviteSource(db, type, id) {
     var chain = [], r;
+    if (NOTE_TYPES[type]) {
+      lockChain(db, type, id).forEach(function (c) { chain.push(c); });
+      for (var j = 0; j < chain.length; j++) {
+        var p2 = chain[j].row.invite_policy;
+        if (p2 === 'allow' || p2 === 'deny') return { type: chain[j].type, id: chain[j].row.id, pol: p2 };
+      }
+      return null;
+    }
     if (type === 'group') {
       r = findG(db, id); if (r) chain.push({ type: 'group', row: r });
       var u = r && findU(db, r.universe_id); if (u) chain.push({ type: 'universe', row: u });
@@ -364,6 +525,16 @@
     var s = effectiveInviteSource(db, type, id); return s ? s.pol === 'allow' : true;
   }
   function inheritedInviteSource(db, type, id) {
+    if (type === 'note_folder') {
+      var pr = noteFolderProject(db, id);
+      return pr ? effectiveInviteSource(db, 'note_project', pr) : null;
+    }
+    if (type === 'note') {
+      var fo = noteParentFolder(db, id);
+      if (fo) return effectiveInviteSource(db, 'note_folder', fo);
+      var pr2 = noteProjectOf(db, id);
+      return pr2 ? effectiveInviteSource(db, 'note_project', pr2) : null;
+    }
     if (type !== 'group') return null;
     var g = findG(db, id);
     return g ? effectiveInviteSource(db, 'universe', g.universe_id) : null;
@@ -375,6 +546,12 @@
       (isPrivileged(db, type, id, uid) || !isEffectivelyLocked(db, type, id));
   }
   function canCreateChild(db, type, id, uid) { return canEditContent(db, type, id, uid); }
+  // Å opprette et NOTAT spør forelderen: notatboken hvis det skal ligge i én
+  // (og den finnes), ellers bokhyllen.
+  function canCreateNote(db, projectId, folderId, uid) {
+    if (folderId && findNF(db, folderId)) return canCreateChild(db, 'note_folder', folderId, uid);
+    return canCreateChild(db, 'note_project', projectId, uid);
+  }
   // Posisjonen tilhører FORELDERENS organisering. Områdets toppnivåposisjon
   // er PERSONLIG (memberships.pos) og krever bare medlemskap.
   function canReorderInParent(db, type, id, uid) {
@@ -383,6 +560,10 @@
     if (type === 'group') { r = findG(db, id); return !!r && canEditContent(db, 'universe', r.universe_id, uid); }
     if (type === 'card') { r = findC(db, id); return !!r && canEditContent(db, 'group', r.group_id, uid); }
     if (type === 'item') { r = findI(db, id); return !!r && canEditContent(db, 'card', r.card_id, uid); }
+    // Bokhyllens toppnivåposisjon er PERSONLIG, som områdets.
+    if (type === 'note_project') return isNoteProjectMember(db, id, uid);
+    if (type === 'note_folder') return canEditContent(db, 'note_project', noteFolderProject(db, id), uid);
+    if (type === 'note') return canCreateNote(db, noteProjectOf(db, id), noteParentFolder(db, id), uid);
     return false;
   }
   function canDeleteObject(db, type, id, uid) {
@@ -390,6 +571,16 @@
     if (type === 'group') {
       return isGroupOwner(db, id, uid) ||
         (isUniverseMember(db, groupUniverse(db, id), uid) && !isEffectivelyLocked(db, 'group', id));
+    }
+    // Notatsiden, samme trapp: et rent DIREKTE medlem kan aldri slette for alle.
+    if (type === 'note_project') return isNoteProjectOwner(db, id, uid);
+    if (type === 'note_folder') {
+      return isNoteFolderOwner(db, id, uid) ||
+        (noteFolderInheritedMember(db, id, uid) && !isEffectivelyLocked(db, 'note_folder', id));
+    }
+    if (type === 'note') {
+      return isNoteOwner(db, id, uid) ||
+        (noteInheritedMember(db, id, uid) && !isEffectivelyLocked(db, 'note', id));
     }
     return isPrivileged(db, type, id, uid) ||
       (canReadAny(db, type, id, uid) && !isEffectivelyLocked(db, type, id));
@@ -405,26 +596,86 @@
       return groupRole(db, id, uid) !== null &&
         universeRole(db, groupUniverse(db, id), uid) === null;
     }
+    if (type === 'note_project') {
+      var rp = noteProjectRole(db, id, uid);
+      return rp !== null && (rp !== 'owner' || noteProjectOwnerCount(db, id) > 1);
+    }
+    if (type === 'note_folder') {
+      return noteFolderRole(db, id, uid) !== null &&
+        noteProjectRole(db, noteFolderProject(db, id), uid) === null;
+    }
+    if (type === 'note') {
+      var fo = noteParentFolder(db, id);
+      return noteRole(db, id, uid) !== null &&
+        (!fo || noteFolderRole(db, fo, uid) === null) &&
+        noteProjectRole(db, noteProjectOf(db, id), uid) === null;
+    }
     return false;
   }
   function canManageMembers(db, type, id, uid) {
     if (type === 'universe') return isUniverseOwner(db, id, uid);
     if (type === 'group') return isGroupOwner(db, id, uid);
+    if (type === 'note_project') return isNoteProjectOwner(db, id, uid);
+    if (type === 'note_folder') return isNoteFolderOwner(db, id, uid);
+    if (type === 'note') return isNoteOwner(db, id, uid);
     return false;
   }
   function canInviteTo(db, type, id, uid) {
     return canManageMembers(db, type, id, uid) ||
-      (canReadAny(db, type, id, uid) && (type === 'universe' || type === 'group') &&
+      (canReadAny(db, type, id, uid) && !!SHAREABLE_TYPES[type] &&
        effectiveInvitePolicy(db, type, id));
   }
   function canInviteOwner(db, type, id, uid) { return canManageMembers(db, type, id, uid); }
   function canManageLock(db, type, id, uid) { return isPrivileged(db, type, id, uid); }
   function canManageInvitePolicy(db, type, id, uid) {
     var s = inheritedInviteSource(db, type, id);
-    if (s && s.pol === 'deny') return isUniverseOwner(db, resourceUniverse(db, type, id), uid);
+    if (s && s.pol === 'deny') {
+      return NOTE_TYPES[type]
+        ? isNoteProjectOwner(db, resourceNoteProject(db, type, id), uid)
+        : isUniverseOwner(db, resourceUniverse(db, type, id), uid);
+    }
     return canManageMembers(db, type, id, uid);
   }
   function canMoveGroup(db, id, uid) { return canDeleteObject(db, 'group', id, uid); }
+  function canMoveNoteObject(db, type, id, uid) {
+    return (type === 'note_folder' || type === 'note') && canDeleteObject(db, type, id, uid);
+  }
+  function directRole(db, type, id, uid) {
+    if (type === 'universe') return universeRole(db, id, uid);
+    if (type === 'group') return groupRole(db, id, uid);
+    if (type === 'note_project') return noteProjectRole(db, id, uid);
+    if (type === 'note_folder') return noteFolderRole(db, id, uid);
+    if (type === 'note') return noteRole(db, id, uid);
+    return null;
+  }
+  function ownerCountOf(db, type, id) {
+    if (type === 'universe') return universeOwnerCount(db, id);
+    if (type === 'note_project') return noteProjectOwnerCount(db, id);
+    var key = type === 'group' ? 'group_id' : type === 'note_folder' ? 'note_folder_id' : 'note_id';
+    return db.memberships.filter(function (m) { return m[key] === id && m.role === 'owner'; }).length;
+  }
+  function memberCountOf(db, type, id) {
+    if (type === 'universe') return universeMemberCount(db, id);
+    if (type === 'group') return groupMemberCount(db, id);
+    if (type === 'note_project') return noteProjectMemberCount(db, id);
+    if (type === 'note_folder') return noteFolderMemberCount(db, id);
+    return noteMemberCount(db, id);
+  }
+  // Kolonnen medlemskapsraden bruker for hver delbar type.
+  var MEMBER_COL = {
+    universe: 'universe_id', group: 'group_id',
+    note_project: 'note_project_id', note_folder: 'note_folder_id', note: 'note_id',
+  };
+  // Typene som HAR lås/unntak, og raden låsen står på.
+  var LOCKABLE = { universe: 1, group: 1, card: 1, note_project: 1, note_folder: 1, note: 1 };
+  function lockRow(db, type, id) {
+    if (type === 'universe') return findU(db, id);
+    if (type === 'group') return findG(db, id);
+    if (type === 'card') return findC(db, id);
+    if (type === 'note_project') return findNP(db, id);
+    if (type === 'note_folder') return findNF(db, id);
+    return findN(db, id);
+  }
 
   function universeCaps(db, id, uid) {
     return {
@@ -466,6 +717,91 @@
     };
   }
 
+  function noteProjectCaps(db, id, uid) {
+    return {
+      read: canReadNoteProject(db, id, uid),
+      editContent: canEditContent(db, 'note_project', id, uid),
+      createChild: canCreateChild(db, 'note_project', id, uid),
+      reorderInParent: canReorderInParent(db, 'note_project', id, uid),
+      manageSettings: canManageMembers(db, 'note_project', id, uid),
+      delete: canDeleteObject(db, 'note_project', id, uid),
+      leave: canLeave(db, 'note_project', id, uid),
+      invite: canInviteTo(db, 'note_project', id, uid),
+      inviteOwner: canInviteOwner(db, 'note_project', id, uid),
+      manageMembers: canManageMembers(db, 'note_project', id, uid),
+      manageOwners: canManageMembers(db, 'note_project', id, uid),
+      manageLock: canManageLock(db, 'note_project', id, uid),
+      lockException: canManageLockException(db, 'note_project', id, uid),
+      managePolicy: canManageInvitePolicy(db, 'note_project', id, uid),
+      locked: isEffectivelyLocked(db, 'note_project', id),
+    };
+  }
+  function noteFolderCaps(db, id, uid) {
+    return {
+      read: canReadNoteFolder(db, id, uid),
+      editContent: canEditContent(db, 'note_folder', id, uid),
+      createChild: canCreateChild(db, 'note_folder', id, uid),
+      reorderInParent: canReorderInParent(db, 'note_folder', id, uid),
+      manageSettings: canManageMembers(db, 'note_folder', id, uid),
+      delete: canDeleteObject(db, 'note_folder', id, uid),
+      move: canMoveNoteObject(db, 'note_folder', id, uid),
+      leave: canLeave(db, 'note_folder', id, uid),
+      invite: canInviteTo(db, 'note_folder', id, uid),
+      inviteOwner: canInviteOwner(db, 'note_folder', id, uid),
+      manageMembers: canManageMembers(db, 'note_folder', id, uid),
+      manageOwners: canManageMembers(db, 'note_folder', id, uid),
+      manageLock: canManageLock(db, 'note_folder', id, uid),
+      lockException: canManageLockException(db, 'note_folder', id, uid),
+      managePolicy: canManageInvitePolicy(db, 'note_folder', id, uid),
+      locked: isEffectivelyLocked(db, 'note_folder', id),
+    };
+  }
+  function noteCaps(db, id, uid) {
+    return {
+      read: canReadNote(db, id, uid),
+      editContent: canEditContent(db, 'note', id, uid),
+      reorderInParent: canReorderInParent(db, 'note', id, uid),
+      manageSettings: canManageMembers(db, 'note', id, uid),
+      delete: canDeleteObject(db, 'note', id, uid),
+      move: canMoveNoteObject(db, 'note', id, uid),
+      leave: canLeave(db, 'note', id, uid),
+      invite: canInviteTo(db, 'note', id, uid),
+      inviteOwner: canInviteOwner(db, 'note', id, uid),
+      manageMembers: canManageMembers(db, 'note', id, uid),
+      manageOwners: canManageMembers(db, 'note', id, uid),
+      manageLock: canManageLock(db, 'note', id, uid),
+      lockException: canManageLockException(db, 'note', id, uid),
+      managePolicy: canManageInvitePolicy(db, 'note', id, uid),
+      locked: isEffectivelyLocked(db, 'note', id),
+    };
+  }
+  function capsOf(db, type, id, uid) {
+    if (type === 'universe') return universeCaps(db, id, uid);
+    if (type === 'group') return groupCaps(db, id, uid);
+    if (type === 'note_project') return noteProjectCaps(db, id, uid);
+    if (type === 'note_folder') return noteFolderCaps(db, id, uid);
+    return noteCaps(db, id, uid);
+  }
+
+  // Hvilket objekt en invitasjonsrad peker på — type, id og navn, ett sted.
+  function inviteType(s) {
+    if (s.universe_id) return 'universe';
+    if (s.group_id) return 'group';
+    if (s.note_project_id) return 'note_project';
+    if (s.note_folder_id) return 'note_folder';
+    return 'note';
+  }
+  function inviteTarget(s) {
+    return s.universe_id || s.group_id || s.note_project_id || s.note_folder_id || s.note_id;
+  }
+  function inviteName(db, s) {
+    if (s.universe_id) return (findU(db, s.universe_id) || {}).name;
+    if (s.group_id) return (findG(db, s.group_id) || {}).name;
+    if (s.note_project_id) return (findNP(db, s.note_project_id) || {}).name;
+    if (s.note_folder_id) return (findNF(db, s.note_folder_id) || {}).name;
+    return (findN(db, s.note_id) || {}).title;
+  }
+
   function emailOf(db, uid) {
     var p = db.profiles.find(function (x) { return x.id === uid; });
     return p ? p.email : null;
@@ -500,6 +836,63 @@
       if (i.responsible === userId && cardIds.indexOf(i.card_id) > -1) { i.responsible = null; i.ts = Date.now(); i.org = 'server'; }
     });
   }
+  /* Notatsidens tre purge-veier (speiler purge_note_*_access i SQL-en):
+     tilgangen fjernes NEDOVER, så ingen skjult rolle blir stående igjen. */
+  function purgeNoteProjectAccess(db, pid, userId) {
+    var folderIds = (db.note_folders || []).filter(function (f) { return f.project_id === pid; })
+      .map(function (f) { return f.id; });
+    var noteIds = (db.notes || []).filter(function (n) { return n.project_id === pid; })
+      .map(function (n) { return n.id; });
+    db.memberships = db.memberships.filter(function (m) {
+      if (m.user_id !== userId) return true;
+      if (m.note_project_id === pid) return false;
+      if (m.note_folder_id && folderIds.indexOf(m.note_folder_id) > -1) return false;
+      return !(m.note_id && noteIds.indexOf(m.note_id) > -1);
+    });
+    var em = emailOf(db, userId);
+    db.share_invites.forEach(function (s) {
+      if (s.status !== 'pending') return;
+      var mine = s.invitee_id === userId || (em && String(s.invitee_email).toLowerCase() === em);
+      if (!mine) return;
+      if (s.note_project_id === pid
+          || (s.note_folder_id && folderIds.indexOf(s.note_folder_id) > -1)
+          || (s.note_id && noteIds.indexOf(s.note_id) > -1)) s.status = 'revoked';
+    });
+  }
+  function purgeNoteFolderAccess(db, fid, userId) {
+    var noteIds = (db.notes || []).filter(function (n) { return n.folder_id === fid; })
+      .map(function (n) { return n.id; });
+    db.memberships = db.memberships.filter(function (m) {
+      if (m.user_id !== userId) return true;
+      if (m.note_folder_id === fid) return false;
+      return !(m.note_id && noteIds.indexOf(m.note_id) > -1);
+    });
+    var em = emailOf(db, userId);
+    db.share_invites.forEach(function (s) {
+      if (s.status !== 'pending') return;
+      var mine = s.invitee_id === userId || (em && String(s.invitee_email).toLowerCase() === em);
+      if (!mine) return;
+      if (s.note_folder_id === fid || (s.note_id && noteIds.indexOf(s.note_id) > -1)) s.status = 'revoked';
+    });
+  }
+  function purgeNoteAccess(db, nid, userId) {
+    db.memberships = db.memberships.filter(function (m) {
+      return !(m.user_id === userId && m.note_id === nid);
+    });
+    var em = emailOf(db, userId);
+    db.share_invites.forEach(function (s) {
+      if (s.status === 'pending' && s.note_id === nid &&
+          (s.invitee_id === userId || (em && String(s.invitee_email).toLowerCase() === em))) s.status = 'revoked';
+    });
+  }
+  function purgeAccess(db, type, id, userId) {
+    if (type === 'universe') return purgeUniverseAccess(db, id, userId);
+    if (type === 'group') return purgeGroupAccess(db, id, userId);
+    if (type === 'note_project') return purgeNoteProjectAccess(db, id, userId);
+    if (type === 'note_folder') return purgeNoteFolderAccess(db, id, userId);
+    return purgeNoteAccess(db, id, userId);
+  }
+
   function purgeGroupAccess(db, gid, userId) {
     db.memberships = db.memberships.filter(function (m) {
       return !(m.user_id === userId && m.group_id === gid);
@@ -906,10 +1299,24 @@
     var myItems = db.items.filter(function (i) { return myCardIds[i.card_id]; });
     // Idéer henger på KONTOEN, ikke på hierarkiet: ingen join, bare eierskap.
     var myIdeas = (db.ideas || []).filter(function (d) { return d.owner_id === uid; });
-    // Notatene likeså (docs/notater-plan.md).
-    var myNoteProjects = (db.note_projects || []).filter(function (p) { return p.owner_id === uid; });
-    var myNoteFolders = (db.note_folders || []).filter(function (f) { return f.owner_id === uid; });
-    var myNotes = (db.notes || []).filter(function (n) { return n.owner_id === uid; });
+    /* Notatene hentes på ROLLE, ikke eierskap (docs/rettigheter-og-deling.md
+       del 15): bokhyller jeg har en rolle på, notatbøker i dem PLUSS
+       notatbøker delt direkte med meg (`free`), og notater i lesbare
+       bokhyller/notatbøker PLUSS notater delt direkte med meg. */
+    var myNoteProjects = (db.note_projects || []).filter(function (p) {
+      return isNoteProjectMember(db, p.id, uid);
+    });
+    var myNPIds = {};
+    myNoteProjects.forEach(function (p) { myNPIds[p.id] = 1; });
+    var myNoteFolders = (db.note_folders || []).filter(function (f) {
+      return myNPIds[f.project_id] || noteFolderRole(db, f.id, uid) !== null;
+    });
+    var myNFIds = {};
+    myNoteFolders.forEach(function (f) { myNFIds[f.id] = 1; });
+    var myNotes = (db.notes || []).filter(function (n) {
+      return myNPIds[n.project_id] || (n.folder_id && myNFIds[n.folder_id])
+        || noteRole(db, n.id, uid) !== null;
+    });
     // Koblingene mine (docs/notater-plan.md): eierskap alene, som notatene.
     var myLinks = (db.object_links || []).filter(function (l) { return l.owner_id === uid; });
 
@@ -978,25 +1385,55 @@
         };
       }),
       noteProjects: myNoteProjects.map(function (p) {
+        var m = db.memberships.find(function (x) {
+          return x.user_id === uid && x.note_project_id === p.id;
+        });
         return {
-          id: p.id, creator: p.owner_id, createdByMe: true, name: p.name,
+          id: p.id, creator: p.owner_id, createdByMe: p.owner_id === uid, name: p.name,
+          role: m ? m.role : null, personalPos: m ? m.pos : 0,
           collapsed: !!p.collapsed, trashed: !!p.trashed, archived: !!p.archived,
+          locked: !!p.locked, unlocked: !!p.unlocked,
+          invitePolicy: p.invite_policy || 'inherit',
           ts: p.ts, org: p.org, pos: p.pos, posTs: p.pos_ts, posOrg: p.pos_org,
+          ownerCount: noteProjectOwnerCount(db, p.id),
+          memberCount: noteProjectMemberCount(db, p.id),
+          shared: noteProjectMemberCount(db, p.id) > 1,
+          caps: noteProjectCaps(db, p.id, uid),
         };
       }),
       noteFolders: myNoteFolders.map(function (f) {
+        var m = db.memberships.find(function (x) {
+          return x.user_id === uid && x.note_folder_id === f.id;
+        });
         return {
-          id: f.id, creator: f.owner_id, createdByMe: true, project: f.project_id,
+          id: f.id, creator: f.owner_id, createdByMe: f.owner_id === uid, project: f.project_id,
+          free: !myNPIds[f.project_id],
+          role: m ? m.role : null, personalPos: m ? m.pos : 0,
           name: f.name, trashed: !!f.trashed, archived: !!f.archived,
+          locked: !!f.locked, unlocked: !!f.unlocked,
+          invitePolicy: f.invite_policy || 'inherit',
           ts: f.ts, org: f.org, pos: f.pos, posTs: f.pos_ts, posOrg: f.pos_org,
+          memberCount: noteFolderMemberCount(db, f.id),
+          shared: noteFolderMemberCount(db, f.id) > 1,
+          caps: noteFolderCaps(db, f.id, uid),
         };
       }),
       notes: myNotes.map(function (n) {
+        var m = db.memberships.find(function (x) {
+          return x.user_id === uid && x.note_id === n.id;
+        });
         return {
-          id: n.id, creator: n.owner_id, createdByMe: true,
+          id: n.id, creator: n.owner_id, createdByMe: n.owner_id === uid,
           project: n.project_id, folder: n.folder_id || null,
+          free: !myNPIds[n.project_id] && !(n.folder_id && myNFIds[n.folder_id]),
+          role: m ? m.role : null, personalPos: m ? m.pos : 0,
           title: n.title, body: n.body, trashed: !!n.trashed, archived: !!n.archived,
+          locked: !!n.locked, unlocked: !!n.unlocked,
+          invitePolicy: n.invite_policy || 'inherit',
           ts: n.ts, org: n.org, pos: n.pos, posTs: n.pos_ts, posOrg: n.pos_org,
+          memberCount: noteMemberCount(db, n.id),
+          shared: noteMemberCount(db, n.id) > 1,
+          caps: noteCaps(db, n.id, uid),
         };
       }),
       links: myLinks.map(function (l) {
@@ -1010,20 +1447,18 @@
         };
       }),
       invites_in: db.share_invites.filter(function (s) {
-        return s.status === 'pending' && (s.universe_id || s.group_id) && (s.invitee_id === uid ||
+        return s.status === 'pending' && (s.invitee_id === uid ||
           (email && String(s.invitee_email).toLowerCase() === email.toLowerCase()));
       }).map(function (s) {
-        var type = s.universe_id ? 'universe' : 'group';
-        var name = s.universe_id ? (findU(db, s.universe_id) || {}).name : (findG(db, s.group_id) || {}).name;
-        return { id: s.id, type: type, role: s.role || 'member', name: name,
+        return { id: s.id, type: inviteType(s), role: s.role || 'member', name: inviteName(db, s),
                  from: emailOf(db, s.inviter_id), from_name: nameOf(db, s.inviter_id),
                  created_at: s.created_at };
       }),
       invites_out: db.share_invites.filter(function (s) {
-        return s.status === 'pending' && s.inviter_id === uid && (s.universe_id || s.group_id);
+        return s.status === 'pending' && s.inviter_id === uid;
       }).map(function (s) {
-        return { id: s.id, type: s.universe_id ? 'universe' : 'group', role: s.role || 'member',
-                 target_id: s.universe_id || s.group_id,
+        return { id: s.id, type: inviteType(s), role: s.role || 'member',
+                 target_id: inviteTarget(s),
                  email: s.invitee_email, created_at: s.created_at };
       }),
       // Varsler: KUN mine egne rader, nyeste først og med de samme to grensene
@@ -1167,11 +1602,16 @@
   // Deduplisert, kategorisert medlemsliste. Presedens:
   //   1 områdeeier  2 eksplisitt mappeeier  3 områdemedlem  4 mappemedlem
   function getMembers(db, type, id, uid) {
+    if (!SHAREABLE_TYPES[type]) throw new Error('typen har ingen medlemsliste');
     if (!canReadAny(db, type, id, uid)) throw new Error('ingen tilgang');
     var uni = resourceUniverse(db, type, id);
+    var np = resourceNoteProject(db, type, id);
+    var nf = type === 'note_folder' ? id : (type === 'note' ? noteParentFolder(db, id) : null);
+    // Siste-eier-invarianten finnes bare på TOPPNIVÅENE (område og bokhylle).
+    var top = type === 'universe' || type === 'note_project';
     var acc = [];
     db.memberships.forEach(function (m) {
-      if (m.universe_id && m.universe_id === uni) {
+      if ((type === 'universe' || type === 'group') && m.universe_id && m.universe_id === uni) {
         acc.push({ user_id: m.user_id, prec: m.role === 'owner' ? 1 : 3,
           category: m.role === 'owner' ? 'universeOwner' : 'universeMember',
           role: m.role, source: 'universe', direct: type === 'universe' });
@@ -1181,15 +1621,30 @@
           category: m.role === 'owner' ? 'groupOwner' : 'groupMember',
           role: m.role, source: 'group', direct: true });
       }
+      // Notatsiden: bokhylle over notatbok over notat, samme presedens-idé.
+      if (NOTE_TYPES[type] && np && m.note_project_id === np) {
+        acc.push({ user_id: m.user_id, prec: m.role === 'owner' ? 1 : 4,
+          category: m.role === 'owner' ? 'noteProjectOwner' : 'noteProjectMember',
+          role: m.role, source: 'note_project', direct: type === 'note_project' });
+      }
+      if ((type === 'note_folder' || type === 'note') && nf && m.note_folder_id === nf) {
+        acc.push({ user_id: m.user_id, prec: m.role === 'owner' ? 2 : 5,
+          category: m.role === 'owner' ? 'noteFolderOwner' : 'noteFolderMember',
+          role: m.role, source: 'note_folder', direct: type === 'note_folder' });
+      }
+      if (type === 'note' && m.note_id === id) {
+        acc.push({ user_id: m.user_id, prec: m.role === 'owner' ? 3 : 6,
+          category: m.role === 'owner' ? 'noteOwner' : 'noteMember',
+          role: m.role, source: 'note', direct: true });
+      }
     });
     var best = {};
     acc.forEach(function (a) { if (!best[a.user_id] || a.prec < best[a.user_id].prec) best[a.user_id] = a; });
     var canManage = canManageMembers(db, type, id, uid);
-    var ownerCount = type === 'universe' ? universeOwnerCount(db, id)
-      : db.memberships.filter(function (m) { return m.group_id === id && m.role === 'owner'; }).length;
+    var ownerCount = ownerCountOf(db, type, id);
     var members = Object.keys(best).map(function (k) { return best[k]; }).map(function (b) {
       var pr = db.profiles.find(function (x) { return x.id === b.user_id; }) || {};
-      var lastOwner = type === 'universe' && b.role === 'owner' && ownerCount <= 1;
+      var lastOwner = top && b.role === 'owner' && ownerCount <= 1;
       return {
         id: b.user_id, email: pr.email, display_name: pr.display_name,
         avatar: pr.avatar || null,
@@ -1206,7 +1661,7 @@
           !db.share_invites.some(function (s) {
             return s.status === 'pending' && s.role === 'owner' &&
               String(s.invitee_email).toLowerCase() === String(pr.email || '').toLowerCase() &&
-              ((type === 'universe' && s.universe_id === id) || (type === 'group' && s.group_id === id));
+              inviteType(s) === type && inviteTarget(s) === id;
           }),
         prec: b.prec,
       };
@@ -1215,22 +1670,24 @@
       return String(a.display_name || a.email || '').toLowerCase()
         .localeCompare(String(b.display_name || b.email || '').toLowerCase());
     });
-    var self = type === 'universe' ? findU(db, id) : findG(db, id);
+    var self = type === 'universe' ? findU(db, id)
+      : type === 'group' ? findG(db, id)
+        : type === 'note_project' ? findNP(db, id)
+          : type === 'note_folder' ? findNF(db, id) : findN(db, id);
     return {
       type: type,
       ownerCount: ownerCount,
-      memberCount: type === 'universe' ? universeMemberCount(db, id) : groupMemberCount(db, id),
+      memberCount: memberCountOf(db, type, id),
       viewer: {
         id: uid,
-        role: type === 'universe' ? universeRole(db, id, uid) : groupRole(db, id, uid),
-        caps: type === 'universe' ? universeCaps(db, id, uid) : groupCaps(db, id, uid),
+        role: directRole(db, type, id, uid),
+        caps: capsOf(db, type, id, uid),
       },
       invitePolicy: (self && self.invite_policy) || 'inherit',
       inviteEffective: effectiveInvitePolicy(db, type, id),
       members: members,
       pendingInvites: db.share_invites.filter(function (s) {
-        return s.status === 'pending' &&
-          ((type === 'universe' && s.universe_id === id) || (type === 'group' && s.group_id === id));
+        return s.status === 'pending' && inviteType(s) === type && inviteTarget(s) === id;
       }).map(function (s) {
         return { id: s.id, email: s.invitee_email, role: s.role || 'member', created_at: s.created_at,
           by: s.inviter_id, by_name: nameOf(db, s.inviter_id), mine: s.inviter_id === uid };
@@ -1313,12 +1770,19 @@
         throw new Error('mangler tilgang til mappen');
       if (table === 'items' && findC(db, row.card_id) && !canCreateChild(db, 'card', row.card_id, uid))
         throw new Error('mangler tilgang til listen');
-      /* Notatene: forelderen må være MIN. Speiler `with check`-vilkåret i
-         note_folders_insert/notes_insert — uten det kunne en rad hektes inn i
-         et prosjekt som tilhører noen andre. */
-      if (table === 'note_folders' || table === 'notes') {
-        var eier = (db.note_projects || []).find(function (p) { return p.id === row.project_id; });
-        if (!eier || eier.owner_id !== uid) throw new Error('mangler tilgang til notatprosjektet');
+      /* Notatene: å OPPRETTE spør FORELDEREN (docs/rettigheter-og-deling.md
+         del 15). En notatbok krever opprettelsesrett i bokhyllen, et notat i
+         notatboken sin — eller i bokhyllen, for et fritt notat. */
+      if (table === 'note_folders') {
+        if (findNP(db, row.project_id) && !canCreateChild(db, 'note_project', row.project_id, uid)) {
+          throw new Error('mangler tilgang til bokhyllen');
+        }
+      }
+      if (table === 'notes') {
+        if ((findNP(db, row.project_id) || (row.folder_id && findNF(db, row.folder_id))) &&
+            !canCreateNote(db, row.project_id, row.folder_id, uid)) {
+          throw new Error('mangler tilgang til målet');
+        }
       }
       /* Koblinger (docs/notater-plan.md): notatsiden må være MIN, listesiden
          må være LESBAR for meg, og begge målene må FINNES — fremmednøklene i
@@ -1340,7 +1804,14 @@
           : row.note_folder_id
             ? (db.note_folders || []).find(function (x) { return x.id === row.note_folder_id; })
             : (db.notes || []).find(function (x) { return x.id === row.note_id; });
-        if (!noteRad || noteRad.owner_id !== uid) throw new Error('mangler tilgang til notatobjektet');
+        var noteType = row.note_project_id ? 'note_project' : row.note_folder_id ? 'note_folder' : 'note';
+        var noteId = row.note_project_id || row.note_folder_id || row.note_id;
+        if (!noteRad) {
+          throw new Error('insert or update on table "object_links" violates foreign key constraint');
+        }
+        // BEGGE sider må være LESBARE for meg. Koblingen er min egen, og en
+        // snarvei til noe jeg ikke ser er enten støy eller en lekkasje.
+        if (!canReadAny(db, noteType, noteId, uid)) throw new Error('mangler tilgang til notatobjektet');
         var listeType = row.universe_id ? 'universe' : row.group_id ? 'group' : 'card';
         var listeId = row.universe_id || row.group_id || row.card_id;
         var finnes = listeType === 'universe' ? findU(db, listeId)
@@ -1351,32 +1822,47 @@
         if (!canReadAny(db, listeType, listeId, uid)) throw new Error('mangler tilgang til listeobjektet');
       }
       if (table === 'notes' && row.folder_id) {
-        var mappe = (db.note_folders || []).find(function (f) { return f.id === row.folder_id; });
-        if (!mappe || mappe.owner_id !== uid) throw new Error('mangler tilgang til notatmappen');
+        var mappe = findNF(db, row.folder_id);
         /* Bokhyllen UTLEDES av notatboken (notes_fix_parent i
            users-and-sharing.sql): de to forelder-pekerne kan ikke motsi
            hverandre, ellers ville en kaskade fra feil bokhylle tatt notatet. */
-        row.project_id = mappe.project_id;
+        if (mappe) row.project_id = mappe.project_id;
       }
       // Nye objekter arver invitasjonspolicy dynamisk → lagres som 'inherit'.
-      if (table === 'universes' || table === 'groups') { if (!row.invite_policy) row.invite_policy = 'inherit'; }
+      if (!row.invite_policy && (table === 'universes' || table === 'groups'
+          || table === 'note_projects' || table === 'note_folders' || table === 'notes')) {
+        row.invite_policy = 'inherit';
+      }
       db[table].push(row);
-      // Opprettelses-triggerne: områdeoppretteren blir områdeeier, mappe-
-      // oppretteren eksplisitt mappeeier (med mindre rollen alt er arvet).
+      // Opprettelses-triggerne: oppretteren blir eier — med mindre rollen alt
+      // er ARVET ovenfra (da ville en egen rad bare duplisert medlemslisten).
       if (table === 'universes') seedRole(db, uid, { universe_id: row.id }, row.pos);
       if (table === 'groups' && !isUniverseOwner(db, row.universe_id, uid))
         seedRole(db, uid, { group_id: row.id }, row.pos);
+      if (table === 'note_projects') seedRole(db, uid, { note_project_id: row.id }, row.pos);
+      if (table === 'note_folders' && !isNoteProjectOwner(db, row.project_id, uid))
+        seedRole(db, uid, { note_folder_id: row.id }, row.pos);
+      if (table === 'notes'
+          && !(row.folder_id && isNoteFolderOwner(db, row.folder_id, uid))
+          && !isNoteProjectOwner(db, row.project_id, uid))
+        seedRole(db, uid, { note_id: row.id }, row.pos);
     });
   }
   function seedRole(db, uid, target, pos) {
     var dup = db.memberships.find(function (m) {
       return m.user_id === uid && m.universe_id === (target.universe_id || null) &&
-             m.group_id === (target.group_id || null);
+             m.group_id === (target.group_id || null) &&
+             m.note_project_id === (target.note_project_id || null) &&
+             m.note_folder_id === (target.note_folder_id || null) &&
+             m.note_id === (target.note_id || null);
     });
     if (dup) return;
     db.memberships.push({
       id: newId('mem'), user_id: uid,
       universe_id: target.universe_id || null, group_id: target.group_id || null,
+      note_project_id: target.note_project_id || null,
+      note_folder_id: target.note_folder_id || null,
+      note_id: target.note_id || null,
       role: 'owner', pos: pos || 0, created_at: Date.now(),
     });
   }
@@ -1425,20 +1911,49 @@
         }
         return;
       }
-      /* Notatene: samme felt-LWW som idéene, og av samme grunn uten
-         capability-oppslag — RLS har alt avgjort at raden er min
-         (*_before_update i users-and-sharing.sql). Forelder-pekerne rir på
+      /* Notatene: samme felt-LWW som listene, og fra og med delingsrunden de
+         samme CAPABILITY-spørsmålene (*_before_update i users-and-sharing.sql).
+         `archived` er INNHOLD (reversibelt, krever bare redigeringsrett);
+         `trashed` krever SLETTERETT. Forelder-pekerne rir på
          posisjonsregisteret. */
       if (table === 'note_projects' || table === 'note_folders' || table === 'notes') {
-        if (row.owner_id !== uid) return;
+        var ntype = table === 'note_projects' ? 'note_project'
+          : table === 'note_folders' ? 'note_folder' : 'note';
+        if (!canReadAny(db, ntype, row.id, uid)) return;   // usynlig rad → ingen skriving
         if ('owner_id' in patch && patch.owner_id !== row.owner_id) throw new Error('owner_id (oppretter) kan ikke endres');
-        if (regNewer(patch.ts, patch.org, row.ts, row.org)) {
+        if ('locked' in patch && patch.locked !== row.locked && !canManageLock(db, ntype, row.id, uid))
+          throw new Error('mangler myndighet til å låse/åpne');
+        if ('unlocked' in patch && patch.unlocked !== row.unlocked && !canManageLockException(db, ntype, row.id, uid))
+          throw new Error('mangler myndighet til å endre unntak');
+        if ('invite_policy' in patch && patch.invite_policy !== row.invite_policy
+            && !canManageInvitePolicy(db, ntype, row.id, uid))
+          throw new Error('mangler myndighet til å endre invitasjonspolicy');
+        if ('trashed' in patch && patch.trashed !== row.trashed && !canDeleteObject(db, ntype, row.id, uid))
+          throw new Error('mangler myndighet til å slette objektet');
+        /* EN FLYTTING er at notatboken endrer seg — eller bokhyllen for et
+           FRITT notat. At bokhyllen alene endrer seg for et notat i en
+           notatbok er invarianten (kaskaden), ikke brukerens handling. */
+        var flyttet = table === 'note_folders'
+          ? ('project_id' in patch && patch.project_id !== row.project_id)
+          : (table === 'notes' && (('folder_id' in patch && (patch.folder_id || null) !== (row.folder_id || null))
+             || (!row.folder_id && !patch.folder_id && 'project_id' in patch && patch.project_id !== row.project_id)));
+        if (flyttet) {
+          if (!canMoveNoteObject(db, ntype, row.id, uid)) throw new Error('mangler myndighet til å flytte');
+          var okMaal = table === 'note_folders'
+            ? canCreateChild(db, 'note_project', patch.project_id, uid)
+            : canCreateNote(db, patch.project_id != null ? patch.project_id : row.project_id,
+                            'folder_id' in patch ? patch.folder_id : row.folder_id, uid);
+          if (!okMaal) throw new Error('mangler tilgang til målet');
+        }
+        var nContent = canEditContent(db, ntype, row.id, uid);
+        var nReorder = canReorderInParent(db, ntype, row.id, uid);
+        if (nContent && regNewer(patch.ts, patch.org, row.ts, row.org)) {
           ['name', 'title', 'body', 'collapsed', 'trashed', 'archived'].forEach(function (k) {
             if (k in patch) row[k] = patch[k];
           });
           row.ts = patch.ts; row.org = patch.org;
         }
-        if (regNewer(patch.pos_ts, patch.pos_org, row.pos_ts, row.pos_org)) {
+        if (nReorder && regNewer(patch.pos_ts, patch.pos_org, row.pos_ts, row.pos_org)) {
           ['pos', 'project_id', 'folder_id'].forEach(function (k) {
             if (k in patch) row[k] = patch[k];
           });
@@ -1599,7 +2114,9 @@
       var kaskade = [];
       db[table] = db[table].filter(function (row) {
         if (!matches(row, filters)) return true;
-        if (row.owner_id !== uid) return true;
+        // Permanent sletting krever SLETTERETT (delete-policyen), ikke
+        // eierskap på raden — notatene deles nå.
+        if (!canDeleteObject(db, TYPE_OF_TABLE[table], row.id, uid)) return true;
         writeTombstone(db, TYPE_OF_TABLE[table], row.id);
         kaskade.push(row.id);
         return false;
@@ -1773,8 +2290,8 @@
       },
       create_share_invite: function (p) {
         var role = p.p_role || 'member';
-        if (['universe', 'group'].indexOf(p.p_type) < 0)
-          throw new Error('kun områder og mapper kan deles (fikk: ' + p.p_type + ')');
+        if (!SHAREABLE_TYPES[p.p_type])
+          throw new Error('kan ikke deles (fikk: ' + p.p_type + ')');
         if (['member', 'owner'].indexOf(role) < 0) throw new Error('ugyldig rolle: ' + role);
         var em = String(p.p_email).toLowerCase().trim();
         if (em === '' || em.indexOf('@') < 0) throw new Error('ugyldig e-postadresse');
@@ -1788,12 +2305,10 @@
         if (target) {
           if (role === 'member' && canReadAny(db, p.p_type, p.p_id, target))
             throw new Error('brukeren har allerede tilgang');
-          if (role === 'owner' &&
-              ((p.p_type === 'universe' && isUniverseOwner(db, p.p_id, target)) ||
-               (p.p_type === 'group' && isGroupOwner(db, p.p_id, target))))
+          if (role === 'owner' && isPrivileged(db, p.p_type, p.p_id, target))
             throw new Error('brukeren er allerede eier');
         }
-        var col = p.p_type === 'universe' ? 'universe_id' : 'group_id';
+        var col = MEMBER_COL[p.p_type];
         // Som serveren: en ventende invitasjon oppdateres i stedet for å feile,
         // og rollen kan bare gå OPP (member → owner).
         var dup = db.share_invites.find(function (s) {
@@ -1810,9 +2325,10 @@
           return dup;
         }
         var inv = { id: newId('inv'), inviter_id: uid, invitee_email: em, invitee_id: target,
-          universe_id: p.p_type === 'universe' ? p.p_id : null,
-          group_id: p.p_type === 'group' ? p.p_id : null,
+          universe_id: null, group_id: null,
+          note_project_id: null, note_folder_id: null, note_id: null,
           role: role, status: 'pending', created_at: Date.now() };
+        inv[col] = p.p_id;
         db.share_invites.push(inv);
         return inv;
       },
@@ -1824,17 +2340,21 @@
         if (!inv.invitee_id && String(inv.invitee_email).toLowerCase() !== String(em).toLowerCase())
           throw new Error('invitasjonen er ikke til deg');
         var role = inv.role || 'member';
-        var col = inv.universe_id ? 'universe_id' : 'group_id';
-        var targetId = inv.universe_id || inv.group_id;
+        var itype = inviteType(inv);
+        var col = MEMBER_COL[itype];
+        var targetId = inviteTarget(inv);
         var existing = db.memberships.find(function (m) { return m.user_id === uid && m[col] === targetId; });
         var mem;
         if (existing) {
           if (role === 'owner') existing.role = 'owner';
           mem = existing;
         } else {
-          mem = { id: newId('mem'), user_id: uid, universe_id: inv.universe_id || null,
-            group_id: inv.group_id || null, role: role,
+          mem = { id: newId('mem'), user_id: uid,
+            universe_id: null, group_id: null,
+            note_project_id: null, note_folder_id: null, note_id: null,
+            role: role,
             pos: p.p_pos != null ? p.p_pos : nextPersonalPos(db, uid), created_at: Date.now() };
+          mem[col] = targetId;
           db.memberships.push(mem);
         }
         if (inv.universe_id) {
@@ -1844,6 +2364,25 @@
             .map(function (g) { return g.id; });
           db.memberships = db.memberships.filter(function (m) {
             return !(m.user_id === uid && m.role === 'member' && gids.indexOf(m.group_id) > -1);
+          });
+        }
+        if (inv.note_project_id) {
+          // Det samme på notatsiden: ordinære direkte roller på notatbøker og
+          // notater i bokhyllen blir redundante ved aksept.
+          var fids = (db.note_folders || []).filter(function (f) { return f.project_id === inv.note_project_id; })
+            .map(function (f) { return f.id; });
+          var nids = (db.notes || []).filter(function (n) { return n.project_id === inv.note_project_id; })
+            .map(function (n) { return n.id; });
+          db.memberships = db.memberships.filter(function (m) {
+            if (m.user_id !== uid || m.role !== 'member') return true;
+            return !(fids.indexOf(m.note_folder_id) > -1 || nids.indexOf(m.note_id) > -1);
+          });
+        }
+        if (inv.note_folder_id) {
+          var nids2 = (db.notes || []).filter(function (n) { return n.folder_id === inv.note_folder_id; })
+            .map(function (n) { return n.id; });
+          db.memberships = db.memberships.filter(function (m) {
+            return !(m.user_id === uid && m.role === 'member' && nids2.indexOf(m.note_id) > -1);
           });
         }
         inv.status = 'accepted'; inv.invitee_id = uid;
@@ -1857,91 +2396,95 @@
       revoke_share_invite: function (p) {
         var inv = db.share_invites.find(function (s) { return s.id === p.p_invite && s.status === 'pending'; });
         if (!inv) throw new Error('fant ingen ventende invitasjon');
-        var it = inv.universe_id ? 'universe' : 'group';
-        var iid = inv.universe_id || inv.group_id;
+        var it = inviteType(inv);
+        var iid = inviteTarget(inv);
         if (inv.inviter_id !== uid && !canManageMembers(db, it, iid, uid))
           throw new Error('mangler myndighet til å trekke tilbake denne invitasjonen');
         inv.status = 'revoked';
         return null;
       },
       revoke_share: function (p) {
-        if (['universe', 'group'].indexOf(p.p_type) < 0) throw new Error('ugyldig type: ' + p.p_type);
+        if (!SHAREABLE_TYPES[p.p_type]) throw new Error('ugyldig type: ' + p.p_type);
         if (!canManageMembers(db, p.p_type, p.p_id, uid)) throw new Error('mangler myndighet til å fjerne medlemmer');
-        if (p.p_type === 'universe') {
-          if (universeRole(db, p.p_id, p.p_user) === null) throw new Error('brukeren er ikke medlem av området');
-          if (universeRole(db, p.p_id, p.p_user) === 'owner' && universeOwnerCount(db, p.p_id) <= 1)
-            throw new Error('området må ha minst én eier');
-          purgeUniverseAccess(db, p.p_id, p.p_user);
-        } else {
-          if (groupRole(db, p.p_id, p.p_user) === null) {
-            if (isGroupMember(db, p.p_id, p.p_user))
-              throw new Error('brukeren har tilgang via området og må fjernes der');
-            throw new Error('brukeren er ikke medlem av mappen');
-          }
-          purgeGroupAccess(db, p.p_id, p.p_user);
+        if (directRole(db, p.p_type, p.p_id, p.p_user) === null) {
+          // Tilgang uten direkte rolle kommer OVENFRA — og da er det DER den
+          // må fjernes. En forklarende feil, ikke en stille no-op.
+          if (canReadAny(db, p.p_type, p.p_id, p.p_user))
+            throw new Error('brukeren har tilgang ovenfra og må fjernes der');
+          throw new Error('brukeren er ikke medlem her');
         }
+        if ((p.p_type === 'universe' || p.p_type === 'note_project') &&
+            directRole(db, p.p_type, p.p_id, p.p_user) === 'owner' &&
+            ownerCountOf(db, p.p_type, p.p_id) <= 1) {
+          throw new Error('objektet må ha minst én eier');
+        }
+        purgeAccess(db, p.p_type, p.p_id, p.p_user);
         return null;
       },
       set_member_role: function (p) {
-        if (['universe', 'group'].indexOf(p.p_type) < 0) throw new Error('ugyldig type: ' + p.p_type);
+        if (!SHAREABLE_TYPES[p.p_type]) throw new Error('ugyldig type: ' + p.p_type);
         if (['member', 'owner'].indexOf(p.p_role) < 0) throw new Error('ugyldig rolle: ' + p.p_role);
         if (!canManageMembers(db, p.p_type, p.p_id, uid)) throw new Error('mangler myndighet til å endre roller');
-        var cur = p.p_type === 'universe' ? universeRole(db, p.p_id, p.p_user) : groupRole(db, p.p_id, p.p_user);
+        var cur = directRole(db, p.p_type, p.p_id, p.p_user);
         if (cur === null) throw new Error('brukeren har ingen rolle her');
         if (p.p_role === 'owner' && cur !== 'owner')
           throw new Error('eierskap gis via en eierskapsinvitasjon mottakeren må godta');
         if (cur === p.p_role) return null;
-        if (p.p_type === 'universe') {
-          if (universeOwnerCount(db, p.p_id) <= 1) throw new Error('området må ha minst én eier');
-          uniMembership(db, p.p_user, p.p_id).role = p.p_role;
-        } else if (isUniverseMember(db, groupUniverse(db, p.p_id), p.p_user)) {
+        var col = MEMBER_COL[p.p_type];
+        var rad = db.memberships.find(function (m) {
+          return m.user_id === p.p_user && m[col] === p.p_id;
+        });
+        if (p.p_type === 'universe' || p.p_type === 'note_project') {
+          if (ownerCountOf(db, p.p_type, p.p_id) <= 1) throw new Error('objektet må ha minst én eier');
+          rad.role = p.p_role;
+          return null;
+        }
+        // En degradert eier som ellers har tilgang ovenfra trenger ingen rad.
+        var arvet = p.p_type === 'group' ? isUniverseMember(db, groupUniverse(db, p.p_id), p.p_user)
+          : p.p_type === 'note_folder' ? noteFolderInheritedMember(db, p.p_id, p.p_user)
+            : noteInheritedMember(db, p.p_id, p.p_user);
+        if (arvet) {
           db.memberships = db.memberships.filter(function (m) {
-            return !(m.user_id === p.p_user && m.group_id === p.p_id);
+            return !(m.user_id === p.p_user && m[col] === p.p_id);
           });
         } else {
-          grpMembership(db, p.p_user, p.p_id).role = p.p_role;
+          rad.role = p.p_role;
         }
         return null;
       },
       leave_share: function (p) {
-        if (['universe', 'group'].indexOf(p.p_type) < 0) throw new Error('ugyldig type: ' + p.p_type);
-        if (p.p_type === 'universe') {
-          if (universeRole(db, p.p_id, uid) === null) throw new Error('du er ikke medlem av dette området');
-          if (!canLeave(db, 'universe', p.p_id, uid))
+        if (!SHAREABLE_TYPES[p.p_type]) throw new Error('ugyldig type: ' + p.p_type);
+        if (p.p_type === 'universe' || p.p_type === 'note_project') {
+          if (directRole(db, p.p_type, p.p_id, uid) === null) throw new Error('du har ingen rolle her');
+          if (!canLeave(db, p.p_type, p.p_id, uid))
             throw new Error('du er siste eier — gi eierskap til noen andre først');
-          purgeUniverseAccess(db, p.p_id, uid);
-        } else {
-          if (!canLeave(db, 'group', p.p_id, uid)) {
-            if (isGroupMember(db, p.p_id, uid))
-              throw new Error('du har tilgang via området — forlat området i stedet');
-            throw new Error('du er ikke medlem av denne mappen');
-          }
-          purgeGroupAccess(db, p.p_id, uid);
+        } else if (!canLeave(db, p.p_type, p.p_id, uid)) {
+          if (canReadAny(db, p.p_type, p.p_id, uid))
+            throw new Error('du har tilgang ovenfra — forlat der i stedet');
+          throw new Error('du har ingen rolle her');
         }
+        purgeAccess(db, p.p_type, p.p_id, uid);
         return null;
       },
       set_locked: function (p) {
-        if (['universe', 'group', 'card'].indexOf(p.p_type) < 0) throw new Error('ugyldig type: ' + p.p_type);
+        if (!LOCKABLE[p.p_type]) throw new Error('ugyldig type: ' + p.p_type);
         if (!canManageLock(db, p.p_type, p.p_id, uid)) throw new Error('mangler myndighet til å låse/åpne');
-        var t = p.p_type === 'universe' ? db.universes : p.p_type === 'group' ? db.groups : db.cards;
-        var r = t.find(function (x) { return x.id === p.p_id; });
+        var r = lockRow(db, p.p_type, p.p_id);
         if (r) { r.locked = p.p_locked; if (p.p_locked) r.unlocked = false; }
         return null;
       },
       set_unlocked: function (p) {
-        if (['universe', 'group', 'card'].indexOf(p.p_type) < 0) throw new Error('ugyldig type: ' + p.p_type);
+        if (!LOCKABLE[p.p_type]) throw new Error('ugyldig type: ' + p.p_type);
         if (!canManageLockException(db, p.p_type, p.p_id, uid)) throw new Error('mangler myndighet til å endre unntak');
-        var t = p.p_type === 'universe' ? db.universes : p.p_type === 'group' ? db.groups : db.cards;
-        var r = t.find(function (x) { return x.id === p.p_id; });
+        var r = lockRow(db, p.p_type, p.p_id);
         if (r) { r.unlocked = p.p_unlocked; if (p.p_unlocked) r.locked = false; }
         return null;
       },
       set_invite_policy: function (p) {
-        if (['universe', 'group'].indexOf(p.p_type) < 0) throw new Error('ugyldig type: ' + p.p_type);
+        if (!SHAREABLE_TYPES[p.p_type]) throw new Error('ugyldig type: ' + p.p_type);
         if (['inherit', 'allow', 'deny'].indexOf(p.p_policy) < 0) throw new Error('ugyldig policy');
         if (!canManageInvitePolicy(db, p.p_type, p.p_id, uid)) throw new Error('mangler myndighet til å endre invitasjonspolicy');
-        var t = p.p_type === 'universe' ? db.universes : db.groups;
-        var r = t.find(function (x) { return x.id === p.p_id; });
+        var r = lockRow(db, p.p_type, p.p_id);
         if (r) r.invite_policy = p.p_policy;
         return null;
       },
@@ -1969,8 +2512,27 @@
           cascadeDelete(db, 'universe', id);
           db.universes = db.universes.filter(function (x) { return x.id !== id; });
         });
+        // 2b. BOKHYLLER etter nøyaktig samme regel: den som står uten eier
+        //     når jeg er borte, er min og følger med — med hele undertreet.
+        (db.note_projects || []).filter(function (p2) {
+          return survivingNoteProjectOwner(db, p2.id, uid) === null &&
+            (p2.owner_id === uid || isNoteProjectMember(db, p2.id, uid));
+        }).map(function (p2) { return p2.id; }).forEach(function (id) {
+          writeTombstone(db, 'note_project', id);
+          (db.note_folders || []).filter(function (f) { return f.project_id === id; })
+            .forEach(function (f) { writeTombstone(db, 'note_folder', f.id); });
+          (db.notes || []).filter(function (n) { return n.project_id === id; })
+            .forEach(function (n) { writeTombstone(db, 'note', n.id); });
+          db.note_folders = (db.note_folders || []).filter(function (f) { return f.project_id !== id; });
+          db.notes = (db.notes || []).filter(function (n) { return n.project_id !== id; });
+          db.note_projects = db.note_projects.filter(function (x) { return x.id !== id; });
+        });
         // 3. oppretter-arv på alt som overlever
         db.universes.forEach(function (u) { if (u.owner_id === uid) u.owner_id = heir(u.id); });
+        var nHeir = function (pid) { return survivingNoteProjectOwner(db, pid, uid); };
+        (db.note_projects || []).forEach(function (p2) { if (p2.owner_id === uid) p2.owner_id = nHeir(p2.id); });
+        (db.note_folders || []).forEach(function (f) { if (f.owner_id === uid) f.owner_id = nHeir(f.project_id); });
+        (db.notes || []).forEach(function (n) { if (n.owner_id === uid) n.owner_id = nHeir(n.project_id); });
         db.groups.forEach(function (g) { if (g.owner_id === uid) g.owner_id = heir(g.universe_id); });
         db.cards.forEach(function (c) {
           if (c.owner_id === uid) c.owner_id = heir(groupUniverse(db, c.group_id));
@@ -1997,17 +2559,15 @@
           writeTombstone(db, 'idea', d.id);
           return false;
         });
-        // 4a2. notatene — mine alene, som idéene (docs/notater-plan.md).
-        //      Koblingene først: de peker på notatradene under.
-        [['object_links', 'object_link'],
-          ['notes', 'note'], ['note_folders', 'note_folder'], ['note_projects', 'note_project']]
-          .forEach(function (par) {
-            db[par[0]] = (db[par[0]] || []).filter(function (r) {
-              if (r.owner_id !== uid) return true;
-              writeTombstone(db, par[1], r.id);
-              return false;
-            });
-          });
+        // 4a2. KOBLINGENE er mine alene (min egen krysshenvisning, ikke delt
+        //      innhold). Notatobjektene er det derimot ikke lenger: de som sto
+        //      uten eier etter meg er alt slettet i steg 2b, og resten
+        //      overlever med en arvet oppretter (steg 3).
+        db.object_links = (db.object_links || []).filter(function (r) {
+          if (r.owner_id !== uid) return true;
+          writeTombstone(db, 'object_link', r.id);
+          return false;
+        });
         // 4b. varselhistorikken, preferansene, push-abonnementene og utboksen —
         //     alt sammen mitt alene (som kaskaden i delete_account()).
         db.notifications = db.notifications.filter(function (n) { return n.user_id !== uid; });

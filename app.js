@@ -1202,9 +1202,14 @@
   // Skriv en ny posisjon med NØYAKTIG den regelen dra-motoren bruker ved slipp:
   // et objekt med `_canon` (områder og frie mapper) har PERSONLIG rekkefølge
   // og skrives til min egen medlemskapsrad; alt annet stemples i synk-doc'et.
+  // Kolonnen den personlige posisjonen ligger i på medlemskapsraden.
+  const PERSONAL_POS_COL = {
+    universe: 'universe_id', group: 'group_id',
+    noteProject: 'note_project_id', noteFolder: 'note_folder_id', note: 'note_id',
+  };
   function commitPos(obj, kind, np) {
     obj.pos = np;
-    if (obj._canon) cloudPersonalPos(kind === 'universe' ? 'universe' : 'group', obj.id, np);
+    if (obj._canon) cloudPersonalPos(PERSONAL_POS_COL[kind] ? kind : 'group', obj.id, np);
     else stampPos(obj);
   }
 
@@ -1226,8 +1231,14 @@
   // `data-dnd-ignore` setter på dra-sonen på hvert nivå — klientens gating er
   // kun UX og skal feile LUKKET, så en manglende capability betyr «nei».
   function canReorderObj(kind, obj, cont) {
-    // Notatene er mine alene — det finnes ingen lås å spørre om.
-    if (kind === 'note' || kind === 'noteFolder' || kind === 'noteProject') return true;
+    // Bokhyllenes rekkefølge er PERSONLIG (som områdenes) — alltid min egen.
+    if (kind === 'noteProject') return true;
+    // Notatbøker og notater: serverens capability er autoritativ. En rad som
+    // står i den VIRTUELLE «delt med meg»-bokhyllen har personlig rekkefølge.
+    if (kind === 'noteFolder' || kind === 'note') {
+      if (obj && obj._canon) return true;
+      return cap(obj, 'reorderInParent', !frozen(obj));
+    }
     if (kind === 'item') return !frozen(cont) && !obj.done;
     if (kind === 'category') return !frozen(cont);
     if (kind === 'card') return !frozen(obj) && canAddList(activeGroupObj());
@@ -2605,16 +2616,19 @@
 
   // Forlat et område eller en mappe: fjerner KUN min egen tilgang, aldri
   // innholdet. Optimistisk — objektet forsvinner straks, RPC-en ligger i køen.
-  async function leaveObject(type, obj) {
-    const word = tr(type === 'universe' ? 'kindDef.universe' : 'kindDef.group');
+  async function leaveObject(kind, obj) {
+    const word = tr('kindDef.' + kind);
     if (!await askConfirm({
       title: tr('leave.title', { kind: word }),
-      message: tr('leave.message', { name: quoted(obj.name || tr('common.theObject')) }),
+      message: tr('leave.message', { name: quoted(nameOfAny(obj) || tr('common.theObject')) }),
       okLabel: tr('leave.ok'),
     })) return;
     removeSharedLocally(obj.id);
-    cloudLeave(type, obj.id);
+    // Serveren snakker `p_type`; UI-et snakker kind. Oversettelsen ett sted.
+    cloudLeave(NOTE_SHARE_TYPE[kind] || kind, obj.id);
     render();
+    renderNotesNav();
+    renderNotes();
     save();
   }
 
@@ -13861,7 +13875,10 @@
     const obj = objMenuLive(kind, spec.id);
     if (!obj) { closeObjMenu(); return; }
     const cont = objMenuCont(kind, obj);
-    const shareType = kind === 'universe' ? 'universe' : 'group';
+    // Serverens `p_type` for det objektet menyen står på. Notatsidens tre
+    // nivåer er delbare på lik linje med område og mappe.
+    const shareType = NOTE_SHARE_TYPE[kind] || (kind === 'universe' ? 'universe' : 'group');
+    const shareable = kind === 'universe' || kind === 'group' || !!NOTE_KIND_SET[kind];
     objMenuCtx = { spec, sub: openSub || null };
     objMenuPanel.innerHTML = '';
 
@@ -13961,7 +13978,7 @@
     /* 6) Lås (delte områder/mapper). Nærmeste eksplisitte tilstand vinner: en
           EGEN lås går foran en arvet, ellers tilbys unntaket. Samme skriving som
           del-modalens knapp (toggleObjLock) — de kan ikke gli fra hverandre. */
-    if ((kind === 'universe' || kind === 'group') && obj._shared) {
+    if (shareable && obj._shared) {
       const anc = obj._locked ? null : inheritedLockInfo(shareType, obj);
       const exception = !!anc;
       const allowed = exception ? cap(obj, 'lockException', false) : cap(obj, 'manageLock', false);
@@ -13982,7 +13999,7 @@
     }
 
     /* 7) Forlat (delte områder/mapper) — gir fra seg MIN tilgang, aldri innholdet. */
-    if ((kind === 'universe' || kind === 'group') && cap(obj, 'leave', false)) {
+    if (shareable && cap(obj, 'leave', false)) {
       list.appendChild(objMenuRow(ICONS.logout, tr('leave.title', { kind: objMenuWord(kind) }),
         () => closeObjMenuThen(() => {
           const live = objMenuLive(kind, spec.id);
@@ -15273,6 +15290,22 @@
   const noteCountInProject = (projectId) =>
     allNotes().filter((n) => noteVisible(n) && n.project === projectId).length;
 
+  /* Å OPPRETTE spør FORELDEREN, ikke objektet selv (docs/rettigheter-og-deling.md
+     del 3). En notatbok krever opprettelsesrett i bokhyllen; et notat i
+     notatboken sin — eller i bokhyllen, for et fritt notat. Den virtuelle
+     «delt med meg»-bokhyllen er en SEKSJON, ikke en bokhylle: der kan man ikke
+     lage noe. Serverens capability er autoritativ; mangler den, følger anslaget
+     låsen. */
+  function canAddNoteFolder(p) {
+    return !!p && !p._virtual && cap(p, 'createChild', !frozen(p));
+  }
+  function canAddNote(p, f) {
+    if (f) return cap(f, 'createChild', !frozen(f));
+    return !!p && !p._virtual && cap(p, 'createChild', !frozen(p));
+  }
+  // Kan jeg redigere navnet/innholdet på dette notatobjektet?
+  function canEditNoteObj(o) { return cap(o, 'editContent', !frozen(o)); }
+
   function setActiveProject(id) {
     state.activeProject = id || null;
     // Per-prosjekt-minnet: kom vi tilbake til et prosjekt vi har vært i før,
@@ -15324,6 +15357,7 @@
     paintCardColor(el, note.color || colorForIndex(0));
     el.querySelector('.note-card-icon').innerHTML = ICONS.note;
     el.querySelector('.note-card-title').textContent = noteDisplayTitle(note);
+    applyShareBadge(el, note);
     const ex = el.querySelector('.note-card-excerpt');
     const text = noteExcerpt(note);
     // Utdraget står i anførselstegn: det er et SITAT fra notatet, ikke en
@@ -15450,7 +15484,7 @@
     crumbNoteFolderName.textContent = f ? f.name : tr('notes.freeNotes');
   }
   function updateNotesToolbar() {
-    if (addNoteBtn) addNoteBtn.disabled = !activeProjectObj();
+    if (addNoteBtn) addNoteBtn.disabled = !canAddNote(activeProjectObj(), activeNoteFolderObj());
   }
 
   /* ------------------------------------------------------------
@@ -15458,7 +15492,10 @@
      ------------------------------------------------------------ */
   function addNoteProject() {
     const p = makeNoteProject(tr('notes.newProject'));
-    p.pos = maxPos(noteProjects()) + 1;
+    // Den virtuelle «delt med meg»-bokhyllen har `pos: Infinity` og er ingen
+    // nabo: tas den med, blir den nye posisjonen Infinity — en verdi som ikke
+    // overlever JSON.
+    p.pos = maxPos(noteProjects().filter((x) => !x._virtual)) + 1;
     stampContent(p);
     stampPos(p);
     noteProjects().push(p);
@@ -15482,7 +15519,7 @@
   }
   function addNoteFolder(projectId) {
     const p = findNoteProject(projectId);
-    if (!p) return null;
+    if (!canAddNoteFolder(p)) return null;
     const f = makeNoteFolder(tr('notes.newFolder'), p.id);
     f.pos = maxPos(p.folders) + 1;
     stampContent(f);
@@ -15507,7 +15544,8 @@
      som må gjøres først. */
   function addNote() {
     const p = activeProjectObj();
-    if (!p) return null;
+    const f = activeNoteFolderObj();
+    if (!canAddNote(p, f)) return null;
     const n = makeNote(p.id, state.activeFolder || null);
     n.pos = maxPos(activeNotes()) + 1;
     stampContent(n);
@@ -15551,18 +15589,23 @@
     el.querySelector('.title-line').appendChild(noteRowCount(noteCountIn(f.project, f.id)));
     const fChip = linkChip('noteFolder', f.id);
     if (fChip) el.querySelector('.title-line').appendChild(fChip);
-    const rename = () => editText(txt, f.name, (val) => {
-      const o = findNoteFolder(f.id);
-      if (!o) return;
-      o.name = val || tr('notes.newFolder');
-      stampContent(o);
-      txt.textContent = o.name;
-      updateNotesCrumbs();
-      save();
-    });
+    applyShareBadge(el, f);
+    const canEditF = canEditNoteObj(f);
+    const rename = () => {
+      if (!canEditF) return;
+      editText(txt, f.name, (val) => {
+        const o = findNoteFolder(f.id);
+        if (!o) return;
+        o.name = val || tr('notes.newFolder');
+        stampContent(o);
+        txt.textContent = o.name;
+        updateNotesCrumbs();
+        save();
+      });
+    };
     // Tittel-klikk omdøper, klikk ellers på raden navigerer — samme deling som
     // mapperadene i listenes nav-modal (docs/menus.md).
-    txt.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
+    if (canEditF) txt.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
     el.addEventListener('click', () => {
       setActiveProject(f.project);
       setActiveNoteFolder(f.id);
@@ -15572,7 +15615,7 @@
     const fMenu = el.querySelector('.obj-menu-btn');
     attachObjMenu(fMenu, noteObjMenuSpec('noteFolder', f.id, rename));
     labelBtn(fMenu, tr(NOTE_MENU_LABEL.noteFolder, { name: quoted(f.name) }));
-    attachKeyHandle(el, 'noteFolder', () => f.id, { rename });
+    attachKeyHandle(el, 'noteFolder', () => f.id, { rename: canEditF ? rename : null });
     return el;
   }
 
@@ -15610,25 +15653,37 @@
   function buildNoteProjectCard(p) {
     const el = fromTemplate(noteProjectTpl);
     el.dataset.id = p.id;
-    paintCardColor(el, p.color || colorForIndex(0));
-    el.querySelector('.uni-icon').innerHTML = ICONS.noteProject;
+    // Den virtuelle «Notater delt med meg»-bokhyllen er en SEKSJON, ikke en
+    // bokhylle: ingen posisjonsfarge, ingen meny, ingen ＋-knapp, ingen kasser
+    // — nøyaktig som «Mapper delt med meg» i listenes nav-modal.
+    const isShared = !!p._virtual;
+    if (!isShared) paintCardColor(el, p.color || colorForIndex(0));
+    el.classList.toggle('free-groups-card', isShared);
+    const canEdit = !isShared && canEditNoteObj(p);
+    el.querySelector('.uni-icon').innerHTML = isShared ? ICONS.people : ICONS.noteProject;
     const title = el.querySelector('.card-title');
     title.textContent = p.name;
     // Pillen på bokhyllen teller HELE bokhyllen — de frie notatene har sin egen
     // rad med sitt eget tall, og to like tall ved siden av hverandre forvirrer.
     el.querySelector('.title-line').appendChild(noteRowCount(noteCountInProject(p.id)));
-    const pChip = linkChip('noteProject', p.id);
-    if (pChip) el.querySelector('.card-title-wrap').appendChild(pChip);
-    const rename = () => editText(title, p.name, (val) => {
-      const o = findNoteProject(p.id);
-      if (!o) return;
-      o.name = val || tr('notes.newProject');
-      stampContent(o);
-      title.textContent = o.name;
-      updateNotesCrumbs();
-      save();
-    });
-    title.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
+    if (!isShared) {
+      applyShareBadge(el, p);
+      const pChip = linkChip('noteProject', p.id);
+      if (pChip) el.querySelector('.card-title-wrap').appendChild(pChip);
+    }
+    const rename = () => {
+      if (!canEdit) return;
+      editText(title, p.name, (val) => {
+        const o = findNoteProject(p.id);
+        if (!o) return;
+        o.name = val || tr('notes.newProject');
+        stampContent(o);
+        title.textContent = o.name;
+        updateNotesCrumbs();
+        save();
+      });
+    };
+    if (canEdit) title.addEventListener('click', (ev) => { ev.stopPropagation(); rename(); });
     /* Korthodet er et TREKKSPILL — nøyaktig som områdekortets: det åpner og
        lukker bokhyllen, og lukker ALDRI modalen. Veien til bokhyllens frie
        notater er raden «Frie notater» inne i den. */
@@ -15644,23 +15699,28 @@
       ev.preventDefault();
       toggleCardCollapsed(el, p, notesNavScope);
     });
-    attachKeyHandle(head, 'noteProject', () => p.id, { rename });
+    if (isShared) head.dataset.dndIgnore = '';
+    else attachKeyHandle(head, 'noteProject', () => p.id, { rename: canEdit ? rename : null });
     const list = el.querySelector('.items-container');
     list.dataset.dndContainer = p.id;
     list.appendChild(buildNoteFreeRow(p));
     liveFolders(p).forEach((f) => list.appendChild(buildNoteFolderRow(f)));
     const addBtn = el.querySelector('.add-item-btn');
     addBtn.querySelector('.add-kind-icon').innerHTML = ICONS.noteFolder;
+    addBtn.hidden = !canAddNoteFolder(p);
     addBtn.addEventListener('click', (ev) => {
       ev.stopPropagation();
       addNoteFolder(p.id);
     });
     const pMenu = el.querySelector('.obj-menu-btn');
-    attachObjMenu(pMenu, noteObjMenuSpec('noteProject', p.id, rename));
-    labelBtn(pMenu, tr(NOTE_MENU_LABEL.noteProject, { name: quoted(p.name) }));
-    // Notatbok-kassen og -arkivet ligger i BOKHYLLEN sin, akkurat som
-    // mappe-kassen ligger i områdekortet (docs/trash.md).
-    buildNoteProjectCans(p, el.querySelector('.card-body'));
+    if (isShared) pMenu.hidden = true;
+    else {
+      attachObjMenu(pMenu, noteObjMenuSpec('noteProject', p.id, rename));
+      labelBtn(pMenu, tr(NOTE_MENU_LABEL.noteProject, { name: quoted(p.name) }));
+      // Notatbok-kassen og -arkivet ligger i BOKHYLLEN sin, akkurat som
+      // mappe-kassen ligger i områdekortet (docs/trash.md).
+      buildNoteProjectCans(p, el.querySelector('.card-body'));
+    }
     if (p.collapsed) {
       collapseCardBody(el);
       setCollapseCount(head, leafCount((p.folders || []).filter(noteVisible)), true, ICONS.noteFolder);
@@ -15689,8 +15749,9 @@
     notesNavBoard.innerHTML = '';
     if (notesNavModal.hidden) return;
     const vis = visibleNoteProjects();
-    // Samme posisjonsbaserte farge som områdekortene.
-    vis.forEach((p, i) => { p.color = colorForIndex(i); });
+    // Samme posisjonsbaserte farge som områdekortene. Den virtuelle
+    // «delt med meg»-bokhyllen er en seksjon og får ingen palettfarge.
+    vis.filter((p) => !p._virtual).forEach((p, i) => { p.color = colorForIndex(i); });
     notesNavBoard.classList.toggle('empty', !vis.length);
     const col = document.createElement('div');
     col.className = 'board-col';
@@ -16063,21 +16124,36 @@
      — radene er de samme, bare ordene og oppslaget skiller dem. */
   function noteObjMenuSpec(kind, id, renameFn) {
     const cfg = NOTE_KINDS[kind];
+    const obj = cfg.find(id);
+    /* Klientens gating er kun UX og skal feile LUKKET: mangler serverens
+       capabilities, følger anslaget den lokale låsen/rollen — aldri «alt er
+       lov» (docs/rettigheter-og-deling.md del 3). Serveren avviser uansett. */
+    const canEdit = cap(obj, 'editContent', !frozen(obj));
+    const canDel = cap(obj, 'delete', !frozen(obj));
     return {
       kind, id,
       scope: kind === 'note' ? notesScope : notesNavScope,
-      rename: true,
+      rename: canEdit,
       renameFn: renameFn || null,
+      // Deling ligger i den VANLIGE objektmenyen, på alle tre notatnivåene, og
+      // åpner den samme `#share-modal` som områder og mapper bruker.
+      share: () => {
+        const live = cfg.find(id);
+        if (!live) return;
+        if (kind === 'note') { openShare(NOTE_SHARE_TYPE[kind], id, live, null); return; }
+        closeNotesNav();
+        openShare(NOTE_SHARE_TYPE[kind], id, live, openNotesNav);
+      },
       extraRows: [
         linksMenuRow(kind, id),
-        {
+        canEdit ? {
           icon: ICONS.archive,
-          label: tr(cfg.find(id) && cfg.find(id).archived ? 'notes.unarchive' : 'notes.archive'),
+          label: tr(obj && obj.archived ? 'notes.unarchive' : 'notes.archive'),
           hint: tr('notes.archiveHint'),
           fn: () => setNoteArchived(kind, id, !(cfg.find(id) || {}).archived),
-        },
+        } : null,
       ],
-      remove: () => deleteNoteObject(kind, id),
+      remove: canDel ? () => deleteNoteObject(kind, id) : null,
       removeLabel: tr(NOTE_DELETE_LABEL[kind]),
     };
   }
@@ -16574,7 +16650,7 @@
     render: () => renderNotesNav(),
     afterDrop: () => { updateNotesCrumbs(); renderNotes(); },
     reindexColors: () => {
-      visibleNoteProjects().forEach((p, i) => {
+      visibleNoteProjects().filter((p) => !p._virtual).forEach((p, i) => {
         p.color = colorForIndex(i);
         const el = notesNavBoard.querySelector('.card[data-id="' + p.id + '"]');
         if (el) paintCardColor(el, p.color);
@@ -16779,8 +16855,10 @@
         ? (findNoteById(prev.dataset.id) || {}).pos : null;
       const pNext = next && next.classList.contains('note-card')
         ? (findNoteById(next.dataset.id) || {}).pos : null;
-      n.pos = between(pPrev == null ? null : pPrev, pNext == null ? null : pNext);
-      stampPos(n);
+      // `commitPos` velger selv: et notat som er delt DIREKTE med meg står i
+      // den virtuelle bokhyllen og har PERSONLIG rekkefølge; alle andre
+      // stemples i synk-doc-et som før.
+      commitPos(n, 'note', between(pPrev == null ? null : pPrev, pNext == null ? null : pNext));
     }
     save();
     relayoutBoardNow(notesScope);
@@ -16940,8 +17018,10 @@
       const next = dndRowSibling(el, 1);
       const pPrev = prev && prev.classList.contains('card') ? (findNoteProject(prev.dataset.id) || {}).pos : null;
       const pNext = next && next.classList.contains('card') ? (findNoteProject(next.dataset.id) || {}).pos : null;
-      p.pos = between(pPrev == null ? null : pPrev, pNext == null ? null : pNext);
-      stampPos(p);
+      const np = between(pPrev == null ? null : pPrev, pNext == null ? null : pNext);
+      // Bokhyllenes rekkefølge er PERSONLIG, som områdenes: den ligger på min
+      // egen medlemskapsrad og endrer aldri hva andre ser (commitPos).
+      commitPos(p, 'noteProject', np);
     }
     notesNavScope.reindexColors();
     save();
@@ -16966,10 +17046,18 @@
     if (targetId !== sourceId) reconcileRows(S, targetId, pool);
     const moved = S.findRow(el.dataset.id);
     if (moved) {
-      moved.project = targetId;
-      moved.pos = between(rowPos(prev), rowPos(next));
-      stampPos(moved);
-      noteFolderMoved(moved);
+      const np = between(rowPos(prev), rowPos(next));
+      if (targetId === sourceId && moved._canon) {
+        // En notatbok som er delt DIREKTE med meg står i den virtuelle
+        // bokhyllen: rekkefølgen der er min egen, og den kanoniske
+        // plasseringen røres ikke.
+        commitPos(moved, 'noteFolder', np);
+      } else {
+        moved.project = targetId;
+        moved.pos = np;
+        stampPos(moved);
+        noteFolderMoved(moved);
+      }
     }
     save();
     S.afterDrop();
@@ -17097,6 +17185,7 @@
     try { document.execCommand('styleWithCSS', false, false); } catch (e) { /* ignore */ }
     try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (e) { /* ignore */ }
     noteEditorBody.scrollTop = 0;
+    applyNoteEditorAccess();
     if (opts.focusTitle) noteTitleInput.focus();
     else noteDocEl.focus();
     refreshNoteTools();
@@ -17139,10 +17228,39 @@
     clearTimeout(noteSaveTimer);
     writeNoteNow();
   }
+  /* Er notatet redigerbart for MEG akkurat nå? Serverens capability er
+     autoritativ; mangler den, følger anslaget den lokale låsen — aldri «alt er
+     lov» (docs/rettigheter-og-deling.md del 3). */
+  function noteEditable(n) { return !!n && cap(n, 'editContent', !frozen(n)); }
+  // Editorens skrivetilstand males på nytt: ved åpning, og hver gang synken har
+  // bygget state om (en lås eller en rolle kan ha endret seg under føttene).
+  function applyNoteEditorAccess() {
+    if (!noteEditorOpen()) return;
+    const n = noteOpenId ? findNoteById(noteOpenId) : null;
+    const on = noteEditable(n);
+    if (noteDocEl) noteDocEl.contentEditable = on ? 'true' : 'false';
+    if (noteTitleInput) noteTitleInput.readOnly = !on;
+    if (noteEditorEl) noteEditorEl.classList.toggle('is-readonly', !on);
+    if (noteToolsEl) noteToolsEl.hidden = !on;
+    if (!on) setNoteStatus('notes.readOnly');
+  }
+  /* Notatet kan forsvinne under editoren: slettet for alle, eller tilgangen
+     trukket tilbake. En gammel lokal kopi skal aldri bli stående redigerbar,
+     så bildet lukkes — og autosaven nulles FØR lukkingen, slik at den ikke
+     rekker å skrive en rad som ikke lenger er min. */
+  function closeNoteEditorIfGone() {
+    if (!noteEditorOpen()) return;
+    if (noteOpenId && findNoteById(noteOpenId)) { applyNoteEditorAccess(); return; }
+    clearTimeout(noteSaveTimer);
+    noteSaveTimer = null;
+    noteOpenId = null;
+    closeNoteEditor();
+  }
   function writeNoteNow() {
     noteSaveTimer = null;
     const n = noteOpenId ? findNoteById(noteOpenId) : null;
     if (!n) return;
+    if (!noteEditable(n)) return;   // låst for meg: serveren ville rullet den tilbake
     const title = noteTitleInput.value.trim();
     const doc = noteDocFromEl(noteDocEl);
     // Ingen endring → ingen skriving. Ellers ville hvert tastetrykk som ikke
@@ -17959,7 +18077,10 @@
        notatene er flate med to forelder-pekere. */
     const noteProjectRows = [], noteFolderRows = [];
     (s.noteProjects || []).forEach((p) => {
-      noteProjectRows.push(rowFn(p, 'note_project', null));
+      // «Delt med meg» på notatsiden er en VIRTUELL bokhylle — den finnes ikke
+      // i databasen og skal aldri pushes. Notatbøkene i den skrives som vanlig
+      // (canonRow beholder deres kanoniske bokhylle).
+      if (!p._virtual) noteProjectRows.push(rowFn(p, 'note_project', null));
       (p.folders || []).forEach((f) => noteFolderRows.push(rowFn(f, 'note_folder', p)));
     });
     const noteRows = (s.notes || []).map((n) => rowFn(n, 'note', null));
@@ -19202,6 +19323,12 @@
   // DIREKTE rolle i, men ingen rolle i det kanoniske området. Den er ikke et
   // ekte område — den pushes aldri, og har ingen delings-/opprettelseskontroller.
   const FREE_UNI_ID = '__free__';
+  /* Notatsidens motstykke: den VIRTUELLE bokhyllen for notatbøker og notater
+     som er delt DIREKTE med meg, uten at jeg ser bokhyllen de egentlig står i.
+     Den finnes ikke i databasen, pushes aldri, og har verken delings- eller
+     opprettelseskontroller — nøyaktig som «Mapper delt med meg»
+     (docs/rettigheter-og-deling.md del 15). */
+  const SHARED_NOTES_ID = '__shared_notes__';
   // Hvilken av de tre seksjonene et toppnivå-objekt hører til.
   const SECTION_OWNED = 0, SECTION_SHARED = 1, SECTION_FREE = 2;
   const sectionRank = (u) => (u._virtual ? SECTION_FREE
@@ -19209,6 +19336,7 @@
   // Brukervendte tekster som gjenbrukes i flere visninger.
   const S_TEXT = {
     get freeSection() { return tr('section.freeGroups'); },
+    get sharedNotesShelf() { return tr('section.sharedNotes'); },
     get sections() {
       return [tr('section.mine'), tr('section.sharedUniverses'), tr('section.sharedGroups')];
     },
@@ -19226,9 +19354,36 @@
   // mappeeier (eksplisitt ELLER områdeeier) for mappe/liste/listepunkt.
   // Privilegerte påvirkes aldri av en lås for egen redigering. Lokalt anslag —
   // serverens `_caps` er autoritative.
+  /* Notatsidens forfedre, nærmeste først: notatboken (hvis notatet ligger i
+     én) og så bokhyllen. Notatene ligger FLATT i state — `_parent` peker rett
+     på bokhyllen — så kjeden må slås opp, ikke gås. */
+  function noteAncestors(kind, obj) {
+    const out = [];
+    if (!obj) return out;
+    if (kind === 'note') {
+      const f = obj.folder ? findNoteFolder(obj.folder) : null;
+      if (f) out.push({ type: 'noteFolder', id: f.id, obj: f });
+    }
+    if (kind === 'note' || kind === 'noteFolder') {
+      const p = findNoteProject(obj.project);
+      if (p && !p._virtual) out.push({ type: 'noteProject', id: p.id, obj: p });
+    }
+    return out;
+  }
+  const NOTE_KIND_SET = { noteProject: 1, noteFolder: 1, note: 1 };
+  /* Klientens KIND ↔ serverens `p_type`. De to skrivemåtene er databasens
+     kontrakt (`note_project`/`note_folder`/`note`) og UI-ets (camelCase);
+     oversettelsen skjer ett sted i stedet for i hvert kall. */
+  const NOTE_SHARE_TYPE = { noteProject: 'note_project', noteFolder: 'note_folder', note: 'note' };
+  const NOTE_KIND_OF_TYPE = { note_project: 'noteProject', note_folder: 'noteFolder', note: 'note' };
   function privilegedLocal(o) {
     if (!o) return false;
     if (o._type === 'universe') return o._role === 'owner';
+    // Notatsiden: eier på NIVÅET selv, eller arvet fra notatboken/bokhyllen.
+    if (NOTE_KIND_SET[o._type]) {
+      if (o._role === 'owner') return true;
+      return noteAncestors(o._type, o).some((a) => a.obj._role === 'owner');
+    }
     const g = nodeOfType(o, 'group');
     if (g && g._role === 'owner') return true;
     const u = nodeOfType(o, 'universe');
@@ -19239,6 +19394,14 @@
   // den. Eiere på nivået omgår låsen helt.
   function frozen(o) {
     if (privilegedLocal(o)) return false;
+    if (o && NOTE_KIND_SET[o._type]) {
+      const chain = [{ obj: o }].concat(noteAncestors(o._type, o));
+      for (const a of chain) {
+        if (a.obj._unlocked) return false;
+        if (a.obj._locked) return true;
+      }
+      return false;
+    }
     let n = o;
     while (n && !n._virtual) {
       if (n._unlocked) return false;
@@ -19274,7 +19437,8 @@
   // Forelderen (m/ type) hvis lås faktisk gjelder for objektet — dvs. arvet
   // låsing. Et unntak (_unlocked) på veien opp bryter arven.
   function inheritedLockInfo(type, obj) {
-    const chain = ancestorChain(type, obj);
+    const kind = NOTE_KIND_OF_TYPE[type] || type;
+    const chain = NOTE_KIND_SET[kind] ? noteAncestors(kind, obj) : ancestorChain(type, obj);
     for (const a of chain) { if (a.obj._unlocked) return null; if (a.obj._locked) return a; }
     return null;
   }
@@ -19292,10 +19456,22 @@
     (my.universes || []).forEach((u) => { if (suppressedRows.has(u.id)) supU.add(u.id); });
     (my.groups || []).forEach((g) => { if (suppressedRows.has(g.id) || supU.has(g.uni)) supG.add(g.id); });
     (my.cards || []).forEach((c) => { if (suppressedRows.has(c.id) || supG.has(c.group)) supC.add(c.id); });
-    return { supU, supG, supC };
+    // Notatsiden har den samme forlatelsen, og dermed det samme behovet: en
+    // bokhylle/notatbok/et notat man nettopp har forlatt skal ikke komme
+    // tilbake fra en pull som var i lufta — og undertreet skal heller ikke få
+    // fletteren til å pushe delete på EIERENS rader.
+    const supNP = new Set(), supNF = new Set(), supN = new Set();
+    (my.noteProjects || []).forEach((p) => { if (suppressedRows.has(p.id)) supNP.add(p.id); });
+    (my.noteFolders || []).forEach((f) => {
+      if (suppressedRows.has(f.id) || supNP.has(f.project)) supNF.add(f.id);
+    });
+    (my.notes || []).forEach((n) => {
+      if (suppressedRows.has(n.id) || supNP.has(n.project) || (n.folder && supNF.has(n.folder))) supN.add(n.id);
+    });
+    return { supU, supG, supC, supNP, supNF, supN };
   }
   function contentDocFromMy(my) {
-    const { supU, supG, supC } = suppressedSetsFor(my);
+    const { supU, supG, supC, supNP, supNF, supN } = suppressedSetsFor(my);
     let maxTs = 0;
     const bump = (r) => { maxTs = Math.max(maxTs, r.ts || 0, r.posTs || 0, r.labTs || 0); };
     const universes = (my.universes || []).filter((u) => !supU.has(u.id)).map((u) => { const r = cleanUniverse(u); bump(r); return r; });
@@ -19304,10 +19480,14 @@
     const items = (my.items || []).filter((it) => !supC.has(it.home)).map((it) => { const r = cleanItem(it, it.home); bump(r); return r; });
     // Idéene deles aldri, så ingen forlatt-deling kan undertrykke dem.
     const ideas = (my.ideas || []).map((d) => { const r = cleanIdea(d); bump(r); return r; });
-    // Notatene heller ikke (docs/notater-plan.md).
-    const noteProjects = (my.noteProjects || []).map((p) => { const r = cleanNoteProject(p); bump(r); return r; });
-    const noteFolders = (my.noteFolders || []).map((f) => { const r = cleanNoteFolder(f); bump(r); return r; });
-    const notes = (my.notes || []).map((n) => { const r = cleanNote(n); bump(r); return r; });
+    // Notatene DELES nå (docs/rettigheter-og-deling.md del 15), så de har den
+    // samme undertrykkingen som områdene og mappene.
+    const noteProjects = (my.noteProjects || []).filter((p) => !supNP.has(p.id))
+      .map((p) => { const r = cleanNoteProject(p); bump(r); return r; });
+    const noteFolders = (my.noteFolders || []).filter((f) => !supNF.has(f.id))
+      .map((f) => { const r = cleanNoteFolder(f); bump(r); return r; });
+    const notes = (my.notes || []).filter((n) => !supN.has(n.id))
+      .map((n) => { const r = cleanNote(n); bump(r); return r; });
     // Koblingene: eierens egne rader, uten register å bumpe utover `ts`.
     const links = (my.links || []).map((l) => { const r = cleanLink(l); bump(r); return r; })
       .filter(linkUsable);
@@ -19330,6 +19510,11 @@
     add(my.cards, 'card');
     add(my.items, 'item');
     add(my.ideas, 'idea');
+    // Notatsidens tre nivåer bærer nå de samme metadataene som områder og
+    // mapper: rolle, capabilities, lås, delingsstatus og personlig posisjon.
+    add(my.noteProjects, 'noteProject');
+    add(my.noteFolders, 'noteFolder');
+    add(my.notes, 'note');
     return meta;
   }
 
@@ -19338,6 +19523,14 @@
      medlemskapsraden, ikke på objektet — `.pos` i state er da den personlige
      verdien, og den KANONISKE står i `_canon`. Den kanoniske skrives tilbake
      uendret, så en personlig omrokkering aldri kan endre hva andre ser. */
+  // Den KANONISKE posisjonen tilbake på raden, når `.pos` er den personlige.
+  function withCanonPos(row, o) {
+    if (!o._canon) return row;
+    row.pos = o._canon.pos || 0;
+    row.posTs = o._canon.posTs || 0;
+    row.posOrg = o._canon.posOrg || '';
+    return row;
+  }
   function canonRow(o, type) {
     if (o._canon) {
       const c = o._canon;
@@ -19364,11 +19557,23 @@
     }
     if (type === 'card') return cleanCard(o);
     if (type === 'idea') return cleanIdea(o);
-    // Notatradene har ingen personlig rekkefølge og ingen RPC-eid plassering —
-    // de skrives nøyaktig som de står.
-    if (type === 'note_project') return cleanNoteProject(o);
-    if (type === 'note_folder') return cleanNoteFolder(o);
-    if (type === 'note') return cleanNote(o);
+    /* Notatradene: bokhyllene har PERSONLIG rekkefølge (som områdene), og en
+       notatbok/et notat som vises i den virtuelle «delt med meg»-bokhyllen har
+       sin kanoniske plassering i en bokhylle jeg ikke ser. Begge deler skrives
+       tilbake UENDRET — en personlig omrokkering skal aldri endre hva andre
+       ser, og en visning skal aldri kunne flytte noe i en annens bokhylle. */
+    if (type === 'note_project') return withCanonPos(cleanNoteProject(o), o);
+    if (type === 'note_folder') {
+      const r = withCanonPos(cleanNoteFolder(o), o);
+      if (o._canonProject) r.project = o._canonProject;
+      return r;
+    }
+    if (type === 'note') {
+      const r = withCanonPos(cleanNote(o), o);
+      if (o._canonProject) r.project = o._canonProject;
+      if (o._canonFolder !== undefined) r.folder = o._canonFolder || null;
+      return r;
+    }
     if (type === 'object_link') return cleanLink(o);
     return cleanItem(o, o.home);
   }
@@ -19377,7 +19582,8 @@
     // element-grenen gir cleanItem(it, it.home) som før.
     // pruneDanglingCats: en `cat` som ikke treffer en kategori er uskrivbar
     // (FK) og ville låst synken — se kommentaren der.
-    return pruneNoteParents(pruneDanglingCats(flattenNested(state, canonRow)));
+    return pruneNoteParents(pruneDanglingCats(flattenNested(state, canonRow)),
+                            foreignParentNoteIds());
   }
   // Rader den cachede staten sier er opprettet av NOEN ANDRE (`_createdByMe ===
   // false`). Forsvinner en slik rad fra serveren, er tilgangen opphørt eller
@@ -19396,6 +19602,14 @@
         (g.cards || []).forEach((c) => { if (c._createdByMe === false) s.add(c.id); });
       });
     });
+    // Notatsiden deles nå på alle tre nivåene, og den samme regelen gjelder:
+    // en rad andre har opprettet skal aldri settes inn på nytt av oss.
+    (state.noteProjects || []).forEach((p) => {
+      if (p._virtual) return;
+      if (p._createdByMe === false) s.add(p.id);
+      (p.folders || []).forEach((f) => { if (f._createdByMe === false) s.add(f.id); });
+    });
+    (state.notes || []).forEach((n) => { if (n._createdByMe === false) s.add(n.id); });
     return s;
   }
 
@@ -19501,7 +19715,9 @@
         obj._type = type;
         obj._creator = m ? m.creator : (authUser && authUser.id);
         obj._createdByMe = m ? m.createdByMe !== false : true;
-        obj._role = m ? (m.role || null) : (type === 'universe' || type === 'group' ? 'owner' : null);
+        obj._role = m ? (m.role || null)
+          : (type === 'universe' || type === 'group'
+             || type === 'noteProject' || type === 'noteFolder' || type === 'note' ? 'owner' : null);
         // Optimistiske overlays: en køet set_locked/-policy-skriving skal ikke
         // visuelt «hoppe tilbake» hvis en pull rekker å kjøre før den lander.
         obj._locked = lockOverrides.has(id) ? !!lockOverrides.get(id) : (m ? m.locked : false);
@@ -19515,8 +19731,14 @@
         obj._free = !!(m && m.free);
         // Personlig posisjon (områder + frie mapper): den kanoniske tas vare
         // på i _canon, og `.pos` blir brukerens egen.
+        /* PERSONLIG posisjon: toppnivåene (område, bokhylle) og alt som vises i
+           en VIRTUELL beholder (frie mapper, direkte delte notatbøker og
+           notater). Den kanoniske plasseringen tas vare på i `_canon` og
+           skrives tilbake uendret, så min egen omrokkering aldri endrer hva
+           andre ser. */
         const personal = m && m.personalPos != null &&
-          (type === 'universe' || (type === 'group' && m.free));
+          (type === 'universe' || type === 'noteProject'
+           || ((type === 'group' || type === 'noteFolder' || type === 'note') && m.free));
         if (personal) {
           obj._canon = { parent: canonParent, cat: canonCat, pos: obj.pos, posTs: obj.posTs, posOrg: obj.posOrg };
           obj.pos = posOverrides.has(id) ? posOverrides.get(id) : (m.personalPos || 0);
@@ -19596,29 +19818,58 @@
          prosjektet sitt, nøyaktig som visningen tegner det. */
       const noteProjectList = (doc.noteProjects || []).map((raw) => {
         const p = Object.assign(cleanNoteProject(raw), { folders: [] });
-        p._type = 'noteProject';
-        p._createdByMe = true;
+        attachMeta(p, p.id, 'noteProject', null, null);
         return p;
       });
       const projById = new Map(noteProjectList.map((p) => [p.id, p]));
-      const folderProject = new Map();
+
+      /* «Delt med meg» på notatsiden: en notatbok eller et notat kan være delt
+         DIREKTE, uten at bokhyllen over er lesbar (`free` fra serveren). Da
+         finnes det ingen forelder å tegne dem i — og bokhyllens navn skal
+         aldri lekke. De samles derfor i én virtuell bokhylle, nøyaktig som
+         «Mapper delt med meg» samler frie mapper. Den pushes aldri. */
+      let sharedShelf = null;
+      const ensureSharedShelf = () => {
+        if (sharedShelf) return sharedShelf;
+        sharedShelf = {
+          id: SHARED_NOTES_ID, name: S_TEXT.sharedNotesShelf, folders: [], pos: Infinity,
+          _virtual: true, _type: 'noteProject', _role: null, _caps: {},
+          _shared: false, _locked: false, _unlocked: false, _createdByMe: false,
+        };
+        noteProjectList.push(sharedShelf);
+        projById.set(SHARED_NOTES_ID, sharedShelf);
+        return sharedShelf;
+      };
+
+      const folderContainer = new Map();   // notatbok-id → bokhyllen den VISES i
       (doc.noteFolders || []).forEach((raw) => {
         const f = cleanNoteFolder(raw);
-        const parent = projById.get(f.project);
-        if (!parent) return;
-        f._type = 'noteFolder';
-        f._createdByMe = true;
-        folderProject.set(f.id, f.project);
+        attachMeta(f, f.id, 'noteFolder', f.project, null);
+        const parent = f._free ? ensureSharedShelf() : projById.get(f.project);
+        if (!parent) return;               // foreldreløs (bokhyllen er ikke lesbar)
+        // Vises i den virtuelle bokhyllen — men den KANONISKE bokhyllen (som
+        // jeg ikke ser) må skrives tilbake uendret, ellers ville synken pushet
+        // en peker til et objekt som ikke finnes i databasen.
+        if (parent.id !== f.project) { f._canonProject = f.project; f.project = parent.id; }
+        f._parent = parent;
+        folderContainer.set(f.id, parent.id);
         parent.folders.push(f);
       });
       const noteList = [];
       (doc.notes || []).forEach((raw) => {
         const n = cleanNote(raw);
-        if (n.folder && !folderProject.has(n.folder)) n.folder = null;
-        else if (n.folder) n.project = folderProject.get(n.folder);
-        if (!projById.has(n.project)) return;
-        n._type = 'note';
-        n._createdByMe = true;
+        attachMeta(n, n.id, 'note', n.project, n.folder);
+        /* En notatbok jeg ikke ser er ingen forelder: notatet leses som et
+           FRITT notat, akkurat som når notatboken er slettet på en annen enhet.
+           Pekeren nulles bare i VISNINGEN — den kanoniske verdien tas vare på
+           og skrives tilbake uendret. Å nulle den i doc-et ville tatt notatet
+           ut av en notatbok andre ser det i. */
+        if (n.folder && !folderContainer.has(n.folder)) { n._canonFolder = n.folder; n.folder = null; }
+        const parent = n.folder ? projById.get(folderContainer.get(n.folder))
+          : (n._free ? ensureSharedShelf() : projById.get(n.project));
+        if (!parent) return;
+        if (parent.id !== n.project) { n._canonProject = n.project; n.project = parent.id; }
+        n._parent = parent;
         noteList.push(n);
       });
       noteProjectList.sort(posCmp);
@@ -19651,6 +19902,9 @@
       // stående redigerbar.
       const hadGroup = state.activeGroup && !!findGroupAnywhere(state.activeGroup);
       const hadUni = state.activeUniverse && !!findUniverse(state.activeUniverse);
+      const hadFolder = state.activeFolder && !!findNoteFolder(state.activeFolder);
+      const hadProject = state.activeProject && !!findNoteProject(state.activeProject);
+      const hadOpenNote = noteOpenId && findNoteById(noteOpenId) ? noteOpenId : null;
       state.universes = universes;
       state.ideas = ideas;
       state.noteProjects = noteProjectList;
@@ -19660,12 +19914,25 @@
       observeTs(doc.hlc);
       const lostGroup = hadGroup && state.activeGroup && !findGroupAnywhere(state.activeGroup);
       const lostUni = hadUni && state.activeUniverse && !findUniverse(state.activeUniverse);
+      /* Notatsiden kan miste tilgang på nøyaktig samme måte nå: bokhyllen ble
+         slettet for alle, notatboken flyttet ut av rekkevidde, eller rollen
+         min trukket tilbake. En gammel lokal kopi skal ALDRI bli stående
+         redigerbar — editoren lukkes og vi lander på nærmeste gyldige sted. */
+      const lostFolder = hadFolder && state.activeFolder && !findNoteFolder(state.activeFolder);
+      const lostProject = hadProject && state.activeProject && !findNoteProject(state.activeProject);
+      const lostOpenNote = hadOpenNote && !findNoteById(hadOpenNote);
       validateActive(state);
       validateActiveNotes(state);
       if (lostGroup || lostUni) noteAccessLoss(lostGroup ? 'group' : 'universe');
+      if (lostOpenNote || lostFolder || lostProject) {
+        noteAccessLoss(lostOpenNote ? 'note' : lostFolder ? 'noteFolder' : 'noteProject');
+      }
       // Første pull etter innlogging: land på posisjonen kontoen husker.
       if (!navRestored) { navRestored = true; restoreNavPref(); }
       reapplyPendingDeletes(); // hold buffer-slettede skjult etter rebuild
+      // Editoren holder ETT notat åpent i fullskjerm: er det borte, eller er
+      // låsen endret under føttene, må bildet følge etter.
+      closeNoteEditorIfGone();
       render();
     } finally {
       applyingRemote = false;
@@ -19677,11 +19944,20 @@
      flyttet til et annet eierskapsdomene, eller man ble kastet ut / degradert.
      Da lukkes visningen (og enhver åpen modal som peker på det), vi lander på
      nærmeste gyldige fallback (validateActive), og sier nøkternt fra. */
+  const ACCESS_LOSS_KEY = {
+    group: 'access.lostGroup', universe: 'access.lostUniverse',
+    note: 'access.lostNote', noteFolder: 'access.lostNoteFolder',
+    noteProject: 'access.lostNoteProject',
+  };
   function noteAccessLoss(kind) {
     if (!shareModal.hidden) closeShare();
     closeObjMenu();
     closeResponsible();
-    showToast(tr(kind === 'group' ? 'access.lostGroup' : 'access.lostUniverse'));
+    // Editoren er den ene visningen som holder ETT objekt åpent i fullskjerm.
+    // Er notatet borte, må den lukkes — ellers står en kopi uten rettigheter
+    // igjen på skjermen, redigerbar.
+    if (kind === 'note' || kind === 'noteFolder' || kind === 'noteProject') closeNoteEditorIfGone();
+    showToast(tr(ACCESS_LOSS_KEY[kind] || 'access.lostUniverse'));
   }
 
   /* ---------------- Push: rad-CRUD mot tabellene ---------------- */
@@ -19866,11 +20142,18 @@
      tegner), mens en rad uten PROSJEKT er foreldreløs: prosjektet er `not
      null` i databasen, så raden kan ikke finnes uten det, og den tas ut av
      doc-en i stedet for å bli hengende i en usynlig retry-løkke. */
-  function pruneNoteParents(doc) {
+  /* `keep` er id-ene som er DELT DIREKTE med meg: bokhyllen (og for et notat
+     kanskje notatboken) står i doc-et til en annen bruker, ikke i mitt. For dem
+     er «forelderen finnes ikke her» normaltilstanden, ikke en hengende peker —
+     og en prune ville tatt raden ut av MITT doc, hvorpå fletteren leste den som
+     «slettet lokalt» og pushet DELETE på eierens rad. */
+  function pruneNoteParents(doc, keep) {
+    const free = keep || new Set();
     const projects = new Set((doc.noteProjects || []).map((p) => p.id));
-    doc.noteFolders = (doc.noteFolders || []).filter((f) => projects.has(f.project));
+    doc.noteFolders = (doc.noteFolders || []).filter((f) => free.has(f.id) || projects.has(f.project));
     const folders = new Map((doc.noteFolders || []).map((f) => [f.id, f.project]));
     doc.notes = (doc.notes || []).filter((n) => {
+      if (free.has(n.id)) return true;
       if (!projects.has(n.project)) return false;
       // En mappe som er flyttet til et annet prosjekt drar notatene med seg;
       // står de igjen med det gamle prosjektet, rettes de her.
@@ -19879,6 +20162,16 @@
       return true;
     });
     return doc;
+  }
+  // Notatrader hvis KANONISKE forelder ligger utenfor mitt eget doc (delt
+  // direkte med meg). De skal aldri prunes bort — se pruneNoteParents.
+  function foreignParentNoteIds() {
+    const s = new Set();
+    (state.noteProjects || []).forEach((p) => {
+      (p.folders || []).forEach((f) => { if (f._canonProject) s.add(f.id); });
+    });
+    (state.notes || []).forEach((n) => { if (n._canonProject) s.add(n.id); });
+    return s;
   }
   function pruneDanglingCats(doc) {
     ['items', 'groups', 'ideas'].forEach((key) => {
@@ -20348,7 +20641,8 @@
   function rowKnownToServer(id) {
     if (!lastMy) return false;
     const has = (list) => (list || []).some((r) => r.id === id);
-    return has(lastMy.universes) || has(lastMy.groups) || has(lastMy.cards);
+    return has(lastMy.universes) || has(lastMy.groups) || has(lastMy.cards)
+        || has(lastMy.noteProjects) || has(lastMy.noteFolders) || has(lastMy.notes);
   }
 
   /* ---------------- Personlig rekkefølge (medlemskapsraden) ----------------
@@ -20358,7 +20652,7 @@
   function cloudPersonalPos(type, id, pos) {
     posOverrides.set(id, pos);
     const key = 'pos:' + id;
-    const col = type === 'universe' ? 'universe_id' : 'group_id';
+    const col = PERSONAL_POS_COL[type] || 'group_id';
     const op = {
       key,
       pos,
@@ -20411,11 +20705,22 @@
     if (!f) return;
     const arr = f.kind === 'universe' ? state.universes
       : f.kind === 'group' ? (f.obj._parent ? f.obj._parent.groups : null)
-      : f.obj._parent ? f.obj._parent.cards : null;
+      : f.kind === 'noteProject' ? state.noteProjects
+        : f.kind === 'noteFolder' ? (f.obj._parent ? f.obj._parent.folders : null)
+          : f.kind === 'note' ? state.notes
+            : f.obj._parent ? f.obj._parent.cards : null;
     if (!arr) return;
     const i = arr.indexOf(f.obj);
     if (i > -1) arr.splice(i, 1);
+    // En bokhylle tar innholdet sitt ut av visningen med seg — radene finnes
+    // fortsatt hos eieren, men de er ikke mine å vise lenger.
+    if (f.kind === 'noteProject') {
+      state.notes = (state.notes || []).filter((n) => n.project !== id);
+    } else if (f.kind === 'noteFolder') {
+      state.notes = (state.notes || []).filter((n) => n.folder !== id);
+    }
     validateActive(state); // objektet kan ha vært aktivt område/mappe
+    validateActiveNotes(state);
   }
 
   /* ---------------- Synk-syklus v2 ---------------- */
@@ -21562,9 +21867,15 @@
     if (back) back();
   });
 
-  const SHARE_TYPE_ICON = { universe: 'globe', group: 'folder' };
+  const SHARE_TYPE_ICON = {
+    universe: 'globe', group: 'folder',
+    note_project: 'noteProject', note_folder: 'noteFolder', note: 'note',
+  };
   // Objekttypen i bestemt form, slik den leses inne i en setning.
-  const typeWord = (type) => tr(type === 'universe' ? 'kindDef.universe' : 'kindDef.group');
+  const typeWord = (type) => tr('kindDef.' + (NOTE_KIND_OF_TYPE[type] || type));
+  // Er den delte tingen et TOPPNIVÅ (område/bokhylle)? Bare de har
+  // siste-eier-invarianten og «du er eneste eier»-forklaringen.
+  const shareIsTop = (type) => type === 'universe' || type === 'note_project';
   function openShare(type, id, obj, backTo) {
     shareCtx = { type, id, obj };
     shareBackTo = backTo || null;
@@ -21573,7 +21884,7 @@
     const objSpan = document.createElement('span');
     objSpan.className = 'share-title-obj';
     objSpan.innerHTML = ICONS[SHARE_TYPE_ICON[type]] || '';
-    objSpan.appendChild(document.createTextNode(obj.name || obj.title || ''));
+    objSpan.appendChild(document.createTextNode(nameOfAny(obj) || tr('common.noName')));
     shareTitle.appendChild(objSpan);
     shareTitle.appendChild(document.createTextNode(tr('share.settingsSuffix')));
     shareModal.hidden = false;
@@ -21592,12 +21903,20 @@
   }
   // Meg selv, fra kontoens egne data — så medlemslisten kan tegnes UMIDDELBART
   // (uten å vente på get_members); resten fylles inn når hentingen lander.
+  // Kategorien betrakteren står i før serversvaret lander: den DIREKTE rollen
+  // på nivået man ser på.
+  const SELF_CATEGORY = {
+    universe: ['universeOwner', 'universeMember'],
+    group: ['groupOwner', 'groupMember'],
+    note_project: ['noteProjectOwner', 'noteProjectMember'],
+    note_folder: ['noteFolderOwner', 'noteFolderMember'],
+    note: ['noteOwner', 'noteMember'],
+  };
   function mySelfInfo(type, id, obj) {
     const prof = (lastMy && lastMy.user) || {};
     const role = obj._role || 'member';
-    const cat = type === 'universe'
-      ? (role === 'owner' ? 'universeOwner' : 'universeMember')
-      : (role === 'owner' ? 'groupOwner' : 'groupMember');
+    const pair = SELF_CATEGORY[type] || SELF_CATEGORY.group;
+    const cat = role === 'owner' ? pair[0] : pair[1];
     return {
       type,
       ownerCount: obj._ownerCount || 1,
@@ -21618,15 +21937,27 @@
   // flere — samme backend-rolle, bare et annet visningsnavn.
   function memberCategoryTitle(type, category, count) {
     const many = count > 1;
-    if (type === 'universe') {
-      return category === 'universeOwner' ? tr(many ? 'share.coOwners' : 'share.owner') : tr('share.members');
+    // På TOPPNIVÅET trengs ingen presisering — det finnes bare ett nivå å ha
+    // en rolle på, og «Eier»/«Medlemmer» leser seg selv.
+    if (shareIsTop(type)) {
+      return category.endsWith('Owner') ? tr(many ? 'share.coOwners' : 'share.owner') : tr('share.members');
     }
     if (category === 'universeOwner') return tr(many ? 'share.coOwnersUniverse' : 'share.ownerUniverse');
     if (category === 'groupOwner') return tr(many ? 'share.coOwnersGroup' : 'share.ownerGroup');
     if (category === 'universeMember') return tr('share.membersUniverse');
+    if (category === 'noteProjectOwner') return tr(many ? 'share.coOwnersShelf' : 'share.ownerShelf');
+    if (category === 'noteFolderOwner') return tr(many ? 'share.coOwnersNotebook' : 'share.ownerNotebook');
+    if (category === 'noteOwner') return tr(many ? 'share.coOwnersNote' : 'share.ownerNote');
+    if (category === 'noteProjectMember') return tr('share.membersShelf');
+    if (category === 'noteFolderMember') return tr('share.membersNotebook');
+    if (category === 'noteMember') return tr('share.membersNote');
     return tr('share.membersGroup');
   }
-  const MEMBER_CATEGORY_ORDER = ['universeOwner', 'groupOwner', 'universeMember', 'groupMember'];
+  const MEMBER_CATEGORY_ORDER = [
+    'universeOwner', 'groupOwner', 'universeMember', 'groupMember',
+    'noteProjectOwner', 'noteFolderOwner', 'noteOwner',
+    'noteProjectMember', 'noteFolderMember', 'noteMember',
+  ];
   // Hvorfor et medlem ikke kan fjernes HER. Serveren sender koden, klienten
   // teksten — se `get_members` i supabase/users-and-sharing.sql.
   const REMOVE_HINT_KEY = {
@@ -21660,7 +21991,7 @@
     roleSel.className = 'field share-role-select';
     roleSel.setAttribute('aria-label', tr('share.roleAria'));
     [['member', tr('share.asMember')],
-      ['owner', tr(type === 'universe' ? 'share.asCoOwner' : 'share.asCoOwnerGroup')]]
+      ['owner', tr(shareIsTop(type) ? 'share.asCoOwner' : 'share.asCoOwnerGroup')]]
       .forEach(([v, label]) => {
         const o = document.createElement('option');
         o.value = v; o.textContent = label;
@@ -21988,13 +22319,14 @@
           if (closeFn) closeFn();
           const live = findAnyById(id);
           if (!live) return;
-          if (type === 'universe') deleteUniverse(live.obj);
+          if (NOTE_KIND_OF_TYPE[type]) deleteNoteObject(NOTE_KIND_OF_TYPE[type], id);
+          else if (type === 'universe') deleteUniverse(live.obj);
           else deleteGroup(live.obj);
         });
         actionsWrap.appendChild(del);
       }
       // Én forklarende linje når man verken kan forlate eller slette.
-      if (!caps.leave && !caps.delete && obj._role === 'owner' && type === 'universe') {
+      if (!caps.leave && !caps.delete && obj._role === 'owner' && shareIsTop(type)) {
         const note = document.createElement('p');
         note.className = 'share-policy-note';
         note.textContent = tr('share.onlyOwnerNote');

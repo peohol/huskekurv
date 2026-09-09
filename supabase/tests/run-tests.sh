@@ -28,6 +28,7 @@ $PSQL --no-psqlrc --echo-errors -f tests/test-email-sharing.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-tombstones.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-ideas.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-notes.sql
+$PSQL --no-psqlrc --echo-errors -f tests/test-note-sharing.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-note-links.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-account-deletion.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-notifications.sql
@@ -55,7 +56,7 @@ $PSQL --no-psqlrc --echo-errors -f tests/test-list-share-migration.sql
 $PSQL --no-psqlrc --echo-errors -f smoke-test.sql
 
 echo "✅ Alle SQL-tester grønne (roller, capabilities, mappeflytting, e-postvarsel,"
-echo "   gravsteiner, idéer, notater, arkiv og koblinger, kontosletting, varsler,"
+echo "   gravsteiner, idéer, notater, arkiv, koblinger og notatdeling, kontosletting, varsler,"
 echo "   web push (òg samtidighet), økter,"
 echo "   native varselenheter,"
 echo "   migrering av gamle listedelinger og deploy-smoke-testen — begge løp)."
