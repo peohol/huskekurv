@@ -536,10 +536,14 @@ async function run(navn, viewport, touch) {
     luft.topp === luft.bunn && luft.topp === luft.venstre && luft.topp === luft.høyre
     && parseFloat(luft.topp) > 0 && luft.skjult === false, JSON.stringify(luft));
 
-  // … og et notat UTEN tekst stopper etter hodet: ingen tom stripe under.
+  /* … og et notat UTEN tekst stopper etter hodet: ingen tom stripe under.
+     Innholdet legges tilbake NØYAKTIG slik det var etterpå — de neste sjekkene
+     leser det samme notatet, og en forenklet erstatning ville tatt blokkene de
+     venter på. */
   const tomt = await p.evaluate(() => {
     const H = window.__huskis;
     const n = H.state.notes.find((x) => x.title === 'Utvalg');
+    window.__hkDoc = n.doc;
     n.doc = H.emptyNoteDoc();
     H.renderNotes();
     const el = document.querySelector('#notes-board .note-card');
@@ -557,7 +561,8 @@ async function run(navn, viewport, touch) {
   await p.evaluate(() => {
     const H = window.__huskis;
     const n = H.state.notes.find((x) => x.title === 'Utvalg');
-    n.doc = { v: 1, blocks: [{ t: 'p', c: [{ s: 'Vanlig tekst' }] }] };
+    n.doc = window.__hkDoc;
+    delete window.__hkDoc;
     H.renderNotes();
   });
   await p.waitForTimeout(200);
