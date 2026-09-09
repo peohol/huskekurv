@@ -253,6 +253,16 @@ async function run(navn, viewport, touch) {
   // Navngivingen på plassen: ＋ Bokhylle lager kortet og åpner navnefeltet.
   await p.click('#notes-crumb');
   await p.waitForSelector('#notes-nav-board .notes-add-project button', { timeout: 5000 });
+  /* Modaltittelen navngir BEGGE nivåene med hvert sitt ikon, nøyaktig som
+     listenes «[område] Områder og [mappe] mapper» (tests/nav-modal.test.js) —
+     to ikoner, ikke ett. */
+  const notesTittel = await p.evaluate(() => {
+    const h = document.getElementById('notes-nav-title');
+    return { text: h.innerText.replace(/\s+/g, ' ').trim(), ikoner: h.querySelectorAll('svg.icon').length };
+  });
+  log(navn + ': modaltittelen er «[bokhylle] Bokhyller og [notatbok] notatbøker»',
+    notesTittel.text === 'Bokhyller og notatbøker' && notesTittel.ikoner === 2,
+    JSON.stringify(notesTittel));
   await p.click('.notes-add-project button');
   const navnefelt = await p.evaluate(() => {
     const el = document.querySelector('#notes-nav-board .card .edit-input');
