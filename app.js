@@ -22921,6 +22921,11 @@
       markAppReady();  // skjermen er malt, og den er alt appen har å vise
       return;
     }
+    /* `no-auth` står allerede på <body> fra index.html — appen skal være låst
+       FØR app.js rekker å kjøre, ikke først her (se kommentaren ved <body>).
+       Linjen blir stående fordi den er tilstandens eneste feste i JS: den er
+       en no-op ved oppstart, og gjør jobben om `initAccounts()` en gang
+       skulle kjøres på nytt etter at gaten var åpnet. */
     document.body.classList.add('no-auth');
     authScreen.hidden = false;
     setAuthMode('login');
