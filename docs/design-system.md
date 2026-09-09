@@ -165,10 +165,32 @@ legge seg oppå det, så feltet som redigeres kan bli liggende under det. Sidens
 
 Egendefinert SVG-ikonsett, **fargelagt**: streker er SVARTE (`stroke="#111"`,
 hardkodet — IKKE lenger `currentColor`) og flater fylles med hvit + palettfarger
-der motivet tilsier det (kart under). **stroke-width 1.05** (30 % tynnere enn
-opprinnelig 1.5), viewBox 0 0 24 24, avrundede linjer/hjørner. Alle ikoner har
-klassen `.icon` (`width/height: 1em` — skalerer med `font-size` på listepunktet de
-limes inn i).
+der motivet tilsier det (kart under). viewBox 0 0 24 24, avrundede
+linjer/hjørner. Alle ikoner har klassen `.icon` (`width/height: 1em` — skalerer
+med `font-size` på listepunktet de limes inn i).
+
+**ÉN PIKSEL STREK, UANSETT HVOR STORT IKONET VISES.** Hvert ikon står med
+`stroke-width="1"`, og `styles.css` gir formene inni `.icon`/`.brand-logo`
+`vector-effect: non-scaling-stroke` (se «ÉN PIKSEL STREK» ved `.icon` der).
+Streken måles da i SKJERMPIKSLER i stedet for i 24-rutenettet, så «1» er 1 px
+enten ikonet vises i 15 px (en chip i hendelseslista) eller i 60 px
+(tom-tilstandene). En strek som skalerer med tegningen gir det motsatte: en
+hårstrek i den ene enden av størrelsesskalaen og en tykk kontur i den andre, av
+det samme settet.
+
+Tre invarianter følger av det:
+
+- **Skriv aldri et annet tall enn 1** i en `stroke-width` i `icons.js`,
+  `index.html` eller `favicon.svg`. `tests/icon-stroke.test.js` er vakten.
+- **Kompenser ikke for en `<g transform="scale(…)">`** (som `groupCategory`
+  har): streken ser ikke skaleringen.
+- **To streker som møtes må dele NØYAKTIG samme koordinat**, ikke ligge et
+  hakk fra hverandre: én px pluss én px side om side leses som én 2 px strek.
+  Bokhylla er mønsteret — se fargekartet under.
+
+`vector-effect` arves ikke, så regelen står på etterkommerne (`.icon *`), ikke
+på `<svg>`. `favicon.svg` bærer sin egen kopi i en `<style>`, fordi den også
+lastes frittstående (`<link rel="icon">`) der stilarket ikke gjelder.
 
 **Fargekart.** Fyllene er hardkodet hex, valgt PER IKONMOTIV — ikke lenger låst
 til appens seks kortfarger (HSL S=20 % L=60 %, `#ad8585 #adad85 #85ad85 #85adad
@@ -203,7 +225,7 @@ menyprikker) er uendret, `#c0c4c9`. Ingen av fyllene inverteres mellom drakter
 | Listepunkt (item) | hvit plate, svart punkt + linje — samme motiv som lista, én rad i stedet for tre |
 | Notat (`note`) | hvitt ark med brettet hjørne — samme hvite flate som lista, men motivet er et DOKUMENT |
 | Notatbok (`noteFolder`) | rød perm `#c15c56` med de hvite sidene stikkende fram til høyre |
-| Bokhylle (`noteProject`) | hvit reol med to hyller fargede bokrygger: `#c15c56 #6fa8e0 #e8bd3e #5da172` øverst, `#85adad #c9a06a #ad85ad #c96b45` nederst |
+| Bokhylle (`noteProject`) | treplaten og de to brakettene under den i eik `#b07d4a` (egen tone, bevisst ulik mappens manila-tan); nøyaktig tre bokrygger oppå, i rødt `#c15c56`, blått `#6fa8e0` og gult `#e8bd3e`. Bøkene fyller ~75 % av platens bredde og **deler kantene sine**: bok 1/2 møtes på x=9.8, bok 2/3 på x=14.3, bøkenes bunn ER platens overkant og brakettenes overkant ER platens underkant — samme koordinat på begge sider, aldri to streker ved siden av hverandre. Ryggene tegnes som ÉN kontur pluss to skillestreker, så hver delte kant finnes bare én gang |
 | Arkiv (`archive`, notatenes arkiv) | lokket mappens manila-tan `#c9a06a`, kroppen hvit — ingen NY motivfarge: den skal kjennes igjen som beslektet med mappa, og skille seg fra søppelkassen ved siden av |
 | Kobling (`link`, Lister ↔ Notater) | ingen fyllflate — to ledd i strek, som «Flytt» |
 | Forstørrelsesglass (søk) | linsen klar «søkeblå» `#6fa8e0`, skaftet kun strek |
@@ -239,7 +261,7 @@ glyfen har ingen fyll, bare streker i `currentColor`.
 svarte (`#111`) som resten av settet, også på de fargede knappene.
 
 **Kryss-ikonet** (`ICONS.xmark`, samt inline i `index.html`): lukkeknappenes ✕
-er en egen SVG med samme strek (1.05) og runde ender som resten av settet,
+er en egen SVG med samme 1 px-strek og runde ender som resten av settet,
 `stroke="currentColor"` så CSS styrer farge; de arver `.icon-btn`-fargen
 (`--ink-soft`). Objektene har ikke lenger noe ✕ — sletting ligger i
 objektmenyen (`docs/menus.md`).
@@ -262,18 +284,20 @@ objektmenyen (`docs/menus.md`).
   (prikk + strek). Logoen er fargelagt: **svarte** streker/prikker, og de tre
   kortene fylles med palettfarge **3/2/1** (bakerst→fremst — det fremste kortet
   har farge 1), slik at det fremste kortet dekker strekene på kortene bak →
-  «papirbunke»-effekt. Tynnere strek enn ikonsettet (0.9) så listepunktene
-  overlever i 16px favicon. Logoen finnes tre steder (samme motiv):
+  «papirbunke»-effekt. Samme 1 px-strek som resten av settet — den skalerer
+  ikke, så listepunktene overlever både i en 16px favicon og i den 52px store
+  `.brand-mark`. Logoen finnes tre steder (samme motiv):
   `favicon.svg` (frittstående fil, siden `<link rel="icon">` ikke kan peke på en
   JS-streng), inline i `.brand-mark` (`index.html`) — de to med samme markup —
   og i Android-skallet som appikon og splash-bilde, der den er UTLEDET av
   `favicon.svg` og ikke tegnet på nytt (`docs/mobilapp-plan.md`, «Appikonet og
   splash-bildet»). Endrer du motivet/fargene, oppdater alle tre: de to første
   for hånd, den tredje ved å generere rasterfilene og vektoren om.
-- `--icon-stroke` (token, 1.05px): linjetykkelsen for CSS-tegnede (ikke-SVG)
-  streker som skal matche ikonsettets stroke-width visuelt — brukt av
-  sveipefeltets pil (`.swipe-arrow::before`/`::after`), som tidligere hadde en
-  hardkodet, tykkere strek (2.5px).
+- `--icon-stroke` (token, 1px): linjetykkelsen for CSS-tegnede (ikke-SVG)
+  streker som skal matche ikonsettets strek — brukt av sveipefeltets pil
+  (`.swipe-arrow::before`/`::after`), som tidligere hadde en hardkodet, tykkere
+  strek (2.5px). Tallet er nå den samme konstanten som ikonene har, ikke et
+  anslag på hvor tykk en skalert strek blir.
 
 ## Fargede knapper: `.btn-solid` + `.btn-green`/`.btn-accent`/`.btn-red`/`.btn-yellow`
 
@@ -501,7 +525,7 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   linjer — trenger størrelsen for å lese tydelig, og ＋-en matcher det).
 - **Delt ＋-ikon** (`ICONS.plus`, samt inline-kopier i `index.html`): ALLE
   «legg til»-knappene (listepunkt/liste/mappe/område) bruker nå samme SVG-tegnede
-  ＋ (to rette streker, `stroke-width="1.05"`, runde ender, `stroke="#111"` —
+  ＋ (to rette streker, 1 px, runde ender, `stroke="#111"` —
   svart også på de fargede knappene) i stedet for tekst-glyfen ＋ — som har
   annen linjestil/tykkelse enn resten av ikonsettet og dermed brøt den ellers
   konsekvente streken. De tekst+ikon-

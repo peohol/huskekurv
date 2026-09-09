@@ -248,9 +248,12 @@
   /* Skygge bak hvit skrift så den er lesbar også på lyse kort-/mappefarger. */
   --text-shadow: 0 1px 2px rgba(0, 0, 0, 0.42);
 
-  /* Samme linjetykkelse som ikonsettets stroke-width (se icons.js/index.html),
-     for CSS-tegnede streker (f.eks. sveipefeltets pil) som skal matche ikonene. */
-  --icon-stroke: 1.05px;
+  /* Samme linjetykkelse som ikonsettets strek (se icons.js/index.html), for
+     CSS-tegnede streker (f.eks. sveipefeltets pil) som skal matche ikonene.
+     Ikonstreken er nå 1 px i ALLE størrelser (non-scaling-stroke, se «ÉN
+     PIKSEL STREK» ved .icon lenger ned), så dette tallet er den samme
+     konstanten — ikke lenger et anslag på hvor tykk en skalert strek blir. */
+  --icon-stroke: 1px;
 
   /* ========== DRAKT-TOKENS (lys) ==========
      Alt under er verdier som SNUR i mørk drakt. De sto tidligere hardkodet
@@ -758,6 +761,30 @@ body {
   height: 1em;
 }
 
+/* ÉN PIKSEL STREK, UANSETT HVOR STORT IKONET VISES.
+   Ikonene tegnes i et 24×24-rutenett og vises i alt fra 15 px (en chip i
+   hendelseslista) til 60 px (tom-tilstandene) og 52 px (merket på
+   innloggingsskjermen). Uten dette skalerte streken med tegningen: samme
+   `stroke-width` ble en hårstrek i det minste ikonet og nesten 3 px i det
+   største, så settet så ut som to ulike sett.
+
+   `vector-effect: non-scaling-stroke` tar stroke-width UT av 24-rutenettet og
+   måler den i skjermpiksler i stedet. Da betyr `stroke-width="1"` i markup
+   nøyaktig 1 px i alle størrelser, og det er derfor hvert eneste ikon (og
+   logoen) står med `stroke-width="1"` — ingen størrelsesavhengige tall, og
+   ingen kompensasjon for <g transform="scale(…)">, som streken ikke lenger
+   ser.
+
+   Egenskapen ARVES IKKE, så den må stå på formene selv, ikke på <svg> eller
+   en <g> — derav etterkommer-selektoren. `favicon.svg` bærer den samme regelen
+   i sin egen <style>, fordi den også lastes frittstående (<link rel="icon">)
+   der dette stilarket ikke gjelder. Autoritativt: docs/design-system.md →
+   «Ikoner». */
+.icon *,
+.brand-logo * {
+  vector-effect: non-scaling-stroke;
+}
+
 /* Pinner --icon-paper (og --icon-grey, ubrukt av kalenderen selv, men med for
    å matche .btn-solid/.event-icon-mønsteret) til den LYSE verdien i BEGGE
    drakter — samme grep som .btn-solid/.event-icon (docs/mork-drakt.md →
@@ -1013,7 +1040,7 @@ body {
    Størrelse/form for knappene i knapperadene; fargen på FLATEN kommer fra
    .btn-solid .btn-green. .icon-only = kvadratisk, med kun ICONS.plus (se
    index.html) — ingen tekst-glyf lenger, så streken matcher resten av
-   ikonsettet (1.05, runde ender, svart #111 — også på de fargede knappene). */
+   ikonsettet (1 px, runde ender, svart #111 — også på de fargede knappene). */
 .btn-add {
   flex: 0 0 auto;
   appearance: none;
