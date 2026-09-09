@@ -50,7 +50,13 @@ const results = [];
 const log = (n, ok, x = '') => { results.push(ok); console.log((ok ? 'PASS' : 'FAIL') + ' — ' + n + (x ? '  [' + x + ']' : '')); };
 
 const KORT = 'Kort';
-const LANG = 'Et betydelig lengre notat med lang tittel';
+/* Tittelen er lang MED VILJE, og lengden er en del av fiksturet: de to kortene
+   skal ha tydelig forskjellig høyde, og utdraget alene rekker ikke — det er
+   klippet til tre linjer. Den skal brekke over like mange linjer på mobil som
+   på desktop; blir tittelen mer plass verdt (chipen ved siden av krymper,
+   skriften endres), er det HER marginen hentes inn igjen — med ETT ord, ikke
+   med en setning: kortets høyde er også dragets geometri lenger ned. */
+const LANG = 'Et betydelig lengre notat med en lang tittel';
 
 async function register(p) {
   await p.goto(BASE + '/?mock=1');

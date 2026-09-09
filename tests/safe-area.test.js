@@ -35,6 +35,12 @@
        kanten, ikke til skjermkanten (landskap, hakk i høyre side).
    10. En MINSTEBREDDE vinner over en maks-bredde: objektmenyens minstebredde
        må trekke fra sonen på en smal skjerm (delt skjerm, liten WebView).
+   11. NOTAT-EDITOREN er et eget fullskjermsbilde mot alle fire kantene, og
+       legger sonen på selv: verktøylinjen kommer ikke under statusfeltet,
+       skriveflaten ikke under gestelinjen, og panelene (lenke/spesialtegn)
+       holder seg innenfor. Editoren festes dessuten til det SYNLIGE feltet,
+       ikke til layoutviewportet — så et tastatur som krymper det ene lar
+       verktøylinjen bli stående.
 
   Kjør:
     python3 -m http.server 8000                     # fra repo-roten, i egen terminal
@@ -515,6 +521,76 @@ async function run(label, viewport, touchMode) {
   log(label + ': et felt som åpnes under toppmenyen rulles fram under den',
     plassert && !!dekket && dekket.top >= dekket.barBunn - 1,
     dekket ? 'felt topp ' + Math.round(dekket.top) + ', meny bunn ' + Math.round(dekket.barBunn) : '—');
+
+  /* ---------- 11) Notat-editoren mot alle fire kantene ---------- */
+  await p.keyboard.press('Escape');
+  await p.setViewportSize(viewport);
+  await p.waitForTimeout(300);
+  await settSone(p, SONE);
+  const editorRekt = await sikkerRekt(p, SONE);
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    H.setMainTab('notes');
+    const pr = H.addNoteProject();
+    H.setActiveProject(pr.id);
+    H.setActiveNoteFolder(null);
+    const n = H.addNote();          // åpner editoren med det samme
+    n.title = 'Sonen';
+    n.doc = { v: 1, blocks: [{ t: 'p', c: [{ s: 'Tekst nok til å fylle arket. '.repeat(30) }] }] };
+    H.renderNotes();
+  });
+  await p.waitForFunction(() => !document.getElementById('note-editor').hidden,
+    null, { timeout: 5000, polling: 50 });
+  await p.waitForTimeout(300);
+  const barPad = await css(p, '.note-editor-bar', ['paddingTop', 'paddingLeft', 'paddingRight']);
+  log(label + ': editorens verktøylinje legger sonen på i topp og sider',
+    !!barPad && nær(barPad.paddingTop, 10 + SONE.top) && nær(barPad.paddingLeft, 10 + SONE.left)
+    && nær(barPad.paddingRight, 10 + SONE.right), JSON.stringify(barPad));
+  const kroppPad = await css(p, '#note-editor-body', ['paddingBottom', 'paddingLeft', 'paddingRight']);
+  log(label + ': skriveflaten holder seg over gestelinjen og innenfor sidene',
+    !!kroppPad && kroppPad.paddingBottom >= SONE.bottom
+    && kroppPad.paddingLeft >= SONE.left && kroppPad.paddingRight >= SONE.right,
+    JSON.stringify(kroppPad));
+  const tilbake = await innenfor(p, '#note-back', editorRekt);
+  log(label + ': tilbakeknappen er innenfor sonen', tilbake.ok, tilbake.evidens);
+  // Panelene henger på hver sin knapp og skal klemmes inn mot sonen, ikke
+  // mot skjermkanten — samme krav som objektmenyens minstebredde i del 10.
+  for (const [navn, cmd, sel] of [['lenke', 'link', '#note-link-panel'], ['spesialtegn', 'symbol', '#note-symbol-panel']]) {
+    await p.evaluate((c) => window.__huskis.runNoteCommand(c), cmd);
+    await p.waitForTimeout(300);
+    const pan = await innenfor(p, sel, editorRekt, 2);
+    log(label + ': ' + navn + '-panelet holder seg innenfor sonen', pan.ok, pan.evidens);
+  }
+  await p.evaluate(() => window.__huskisSystemBack ? window.__huskisSystemBack() : window.__huskis.systemBack());
+  await p.waitForTimeout(250);
+
+  /* Tastaturet i editoren: bildet er festet til `--viewport-h`, ikke til
+     layoutviewportet, så verktøylinjen skal bli STÅENDE synlig når feltet
+     krymper. Playwright har ingen ekte visualViewport-krymping, så tokenet
+     settes slik sporingen ville satt det, og geometrien måles. */
+  await p.evaluate(() => {
+    const r = document.documentElement.style;
+    r.setProperty('--viewport-h', (window.innerHeight - 300) + 'px');
+    r.setProperty('--viewport-top', '0px');
+  });
+  await p.waitForTimeout(200);
+  const festet = await p.evaluate(() => {
+    const ed = document.getElementById('note-editor').getBoundingClientRect();
+    const bar = document.querySelector('.note-editor-bar').getBoundingClientRect();
+    return { edBunn: Math.round(ed.bottom), vh: window.innerHeight,
+      barTopp: Math.round(bar.top), barBunn: Math.round(bar.bottom) };
+  });
+  log(label + ': editoren krymper med det synlige feltet, og verktøylinjen blir stående',
+    festet.edBunn <= festet.vh - 250 && festet.barBunn <= festet.edBunn && festet.barTopp >= -1,
+    JSON.stringify(festet));
+  await p.evaluate(() => {
+    document.documentElement.style.removeProperty('--viewport-h');
+    document.documentElement.style.removeProperty('--viewport-top');
+  });
+  await p.evaluate(() => window.__huskis.closeNoteEditor());
+  await p.evaluate(() => window.__huskis.setMainTab('lists'));
+  await settSone(p, null);
+  await p.waitForTimeout(250);
 
   log(label + ': ingen JS-feil', errs.length === 0, errs.join(' | ') || 'ingen');
   await b.close();

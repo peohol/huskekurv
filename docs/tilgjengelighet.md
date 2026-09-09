@@ -143,7 +143,7 @@ oppført i konto-modalens Tips-skuff (`.menu-keys`, se `docs/menus.md`).
 | `Alt` + `M` | «Flytt til …» — ny forelder (for en idé: hvilken idékategori, [`ideer.md`](ideer.md)) |
 | `F2` | endre navn — på ALLE nivåer (klikk på navnet omdøper nå bare listepunkter, idéer og kategorier) |
 | `Enter` / `Mellomrom` | på et korthode: kollaps/utvid. På en mapperad: naviger. På et listepunkt eller en idé: endre navn. **På et notatkort: åpne editoren** |
-| `Escape` | lukk øverste modal — eller avbryt en navneendring. **I notat-editoren: lukk et åpent panel, ellers gå tilbake** |
+| `Escape` | lukk øverste modal — eller avbryt en navneendring. **I notat-editoren: lukk et åpent panel, ellers gå tilbake** — begge er trinn i den SAMME stigen (`closeTopLayer`), så systemets tilbakeknapp gjør nøyaktig det samme |
 
 **Hovedbryteren er en `tablist`.** `Lister ↔ Notater` er tegnet som ÉN
 segmentert kontroll, men semantikken er uendret og følger WAI-ARIA-mønsteret:
@@ -172,10 +172,14 @@ en kobling til et mål som ikke er tilgjengelig er en AVSKRUDD knapp med en
 forklaring, ikke en rad som forsvinner.
 Notatkortets håndtak er hele kortet — det er også dra-sonen — og `Enter`/
 `Mellomrom` åpner editoren, så `F2` er ikke bundet der: tittelen redigeres i
-editoren.
+editoren. Kortet navngir seg SELV (`aria-label`: «Notatet «Blodprøver». Sist
+endret i dag kl. 10:46»), for `role="button"` ville ellers regnet navnet ut av
+alt innholdet — tittel, tidspunkt, menyknappens eget navn og utdraget i én
+lang setning.
 
 **I editoren** flytter Tab som vanlig mellom tilbakeknapp, verktøylinje,
-idé-/draktknappen, tittel og skrivefeltet. Verktøylinjen BRYTER over flere
+idé-/draktknappen, tittel og skrivefeltet. Resten av appen er `inert` mens
+bildet står, så Tab kommer ikke ut i board-et bak. Verktøylinjen BRYTER over flere
 linjer i stedet for å rulle vannrett, så hvert verktøy er synlig og treffbart
 uten å måtte letes fram — også på telefon. Overskriftsknappene har tre ulike
 skriftstørrelser, så rangordenen er synlig og ikke bare navngitt. Verktøyknappene tar ALDRI markeringen fra dokumentet
@@ -184,6 +188,21 @@ hver kommando), så `Cmd/Ctrl`+`B`/`I`/`U`/`K` og knappene gjør nøyaktig det
 samme. `Cmd/Ctrl`+`Z` angrer, `Cmd/Ctrl`+`Shift`+`Z` (og `Ctrl`+`Y`) gjør om
 igjen. Lagringsstatusen er et `role="status"` med `aria-live="polite"`, så
 «Lagrer …»/«Lagret» leses opp uten å avbryte.
+
+**Verktøyknappene og spesialtegnene treffes som alt annet.** De tegnes små
+(38 og 40 px) fordi seksten verktøy og femti tegn skal få plass uten å rulle,
+men berøringsflaten er 44×44 som overalt ellers — og luften er nøyaktig det
+utvidelsen krever, så to nabo-flater møtes uten å dekke hverandre
+(«Berøringsflater» nederst). Det gjelder også tilbakeknappen, som på telefon
+krymper til bare pilen.
+
+**Å ÅPNE en lenke i et notat har tre veier, og alle er tastaturnåbare.**
+`Cmd/Ctrl`+`K` (eller lenkeknappen) åpner lenke-panelet for lenken markøren
+står i, og der er «Åpne» en vanlig knapp. `Cmd/Ctrl`+klikk på lenken går rett
+ut. Og i et SKRIVEBESKYTTET notat — der verktøylinjen er borte, så panelet ikke
+finnes — er lenkene selv tabbstopp med `role="link"` og en synlig fokusring;
+`Enter`/`Mellomrom` åpner dem. I et redigerbart dokument står de UTENFOR
+tabbrekkefølgen: der eier markøren tastaturet.
 
 **Sortering = bytt plass.** `Alt`+pil bytter objektet med naboen, som er
 nøyaktig dra-motorens egen semantikk («≥ 20 % overlapp bytter plass»,
@@ -298,7 +317,17 @@ gulvet.
   jobber.
 - **Etter sletting/oppløsning**: `focusTargetAfterRemoval()` velger naboen under,
   ellers naboen over, ellers ＋-knappen i containeren. Kalles FØR objektet
-  forsvinner.
+  forsvinner. **Å ARKIVERE teller som det samme**: objektet forlater visningen,
+  og fokus må ha et sted å gå — den motsatte veien (ut av arkivet) lander på
+  objektet som kom tilbake.
+- **Men en åpen modal eier fokus.** Kasse- og arkivmodalen kaller den samme
+  koden som board-et, og et fokusønske derfra ville pekt på et objekt BAK en
+  `aria-modal`-dialog — usynlig for den som bruker tastatur, og et `Enter`
+  ville truffet det tildekkede kortet. Ønsket settes derfor ikke mens modalen
+  står åpen; den velger selv neste rad, ellers «Tøm», ellers ✕.
+- **Notat-editoren** er ingen modal, men den følger den samme regelen: den
+  lukkes tilbake til NOTATKORTET man åpnet, ikke til breadcrumben. Er kortet
+  borte (arkivert, slettet, en annen mappe), er breadcrumben fallbacken.
 
 ## Bevegelse
 
@@ -333,6 +362,11 @@ Unntak, med vilje:
 - `.meta-chip` (26 px) og `.item-text` er stablet med 3 px mellom seg inne i
   raden og kan ikke vokse uten å overlappe hverandre. Begge er over AA-gulvet på
   24 px, og begge er tekstmål, ikke ikonknapper.
+
+Notat-editoren har sine egne to tall av samme grunn: verktøyknappene er 38 px
+med `gap: 6`, spesialtegnene 40 px med `gap: 4` — begge summerer til nøyaktig
+44, så flatene møtes uten å overlappe. Endrer du størrelsen, må gapen følge
+med.
 
 `tests/a11y-runtime.test.js` måler dette i nettleseren, i begge viewporter:
 den FAKTISKE flaten (unionen av knappen og `::after`) må være ≥ 44×44, ingen to

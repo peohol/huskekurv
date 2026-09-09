@@ -42,10 +42,22 @@
        overskrifter gir gyldig struktur, innlimt markup blir tekst
    19. Idéer og drakt finnes i editoren, og tilbaketrykket tar modalen over
        editoren først
-   20. Spesialtegn-panelet forankres under knappen, innenfor skjermen
+   20. Spesialtegn-panelet forankres under knappen, innenfor skjermen — og et
+       trykk UTENFOR panelet lukker det (på en kort skjerm dekker panelet
+       knappen man åpnet det med, så den er ikke alltid en vei ut)
    21. Editoren festes til det synlige feltet (`visualViewport`)
    22. Forelder-invarianten: flyttes en notatbok, følger notatene med — ingen
        blir igjen i en bokhylle som kan slettes under dem
+   23. Editorens knapper har 44×44 berøringsflate og overlapper ikke hverandre
+       (WCAG 2.5.5) — verktøyene tegnes 38 px og spesialtegnene 40, med
+       nøyaktig den luften utvidelsen krever (docs/tilgjengelighet.md) — og
+       arket ruller INNE i bildet, med de siste linjene over synk-pillen
+   24. Editoren lukkes tilbake til NOTATKORTET man åpnet — ikke til
+       breadcrumben — og kortet navngir seg selv i stedet for å la
+       `role="button"` regne navnet ut av hele innholdet
+   25. «Sist endret» er kort og kommer fra appens egen datoordbok: i dag →
+       klokkeslettet, i går → «i går», ellers → «9. sep». Hele tidspunktet
+       ligger i hjelpeteksten
 
   Kjøres på BÅDE desktop- og mobil-viewport der oppførselen avhenger av layout.
 
@@ -1025,7 +1037,27 @@ async function run(navn, viewport, touch) {
   log(navn + ': symbolpanelet henger under knappen og holder seg innenfor skjermen',
     anker.fast && anker.under && anker.innenfor && (anker.avvik <= 4 || anker.klemt),
     JSON.stringify(anker));
-  await p.keyboard.press('Escape');
+  // 20b. Et trykk utenfor lukker panelet — men et trykk PÅ panelet gjør det ikke.
+  await p.click('#note-symbol-panel button');   // velger et tegn: panelet lukkes av valget
+  await p.waitForTimeout(250);
+  await p.click('.note-tool[data-cmd="symbol"]');
+  await p.waitForSelector('#note-symbol-panel button', { timeout: 3000 });
+  const påPanelet = await p.evaluate(() => {
+    const panel = document.getElementById('note-symbol-panel');
+    panel.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    return !panel.hidden;
+  });
+  log(navn + ': et trykk PÅ panelet lukker det ikke', påPanelet === true, String(påPanelet));
+  const utenfor = await p.evaluate(() => {
+    document.getElementById('note-title-input')
+      .dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    return {
+      symbol: document.getElementById('note-symbol-panel').hidden,
+      editor: document.getElementById('note-editor').hidden,
+    };
+  });
+  log(navn + ': et trykk utenfor lukker panelet — og bare det',
+    utenfor.symbol === true && utenfor.editor === false, JSON.stringify(utenfor));
   await p.click('#note-back');
   await editorLukket(p);
 
@@ -1159,6 +1191,142 @@ async function run(navn, viewport, touch) {
   });
   log(navn + ': ingen notater er igjen i en bokhylle notatboken har forlatt',
     konsistent.uenige === 0 && konsistent.bokhyller === 2, JSON.stringify(konsistent));
+
+  /* ---------- 23. Berøringsflatene i editoren ---------- */
+  /* Samme måling som tests/a11y-runtime.test.js gjør på board-et: unionen av
+     knappen og `::after`, altså det fingeren treffer. Den kjøres her fordi
+     editoren er et eget fullskjermsbilde a11y-runtime aldri åpner — og fordi
+     knappene der er de minste i appen (38 og 40 px). */
+  const førsteKort = await p.evaluate(() => {
+    const el = document.querySelector('#notes-board .note-card');
+    return el ? el.dataset.id : null;
+  });
+  if (førsteKort) {
+    await p.evaluate((id) => window.__huskis.openNoteEditor(id), førsteKort);
+    await editorÅpen(p);
+    await p.click('.note-tool[data-cmd="symbol"]');
+    await p.waitForSelector('#note-symbol-panel button', { timeout: 3000 });
+    const flater = await p.evaluate(() => {
+      const hit = (e) => {
+        const r = e.getBoundingClientRect();
+        const a = getComputedStyle(e, '::after');
+        const w = parseFloat(a.width) || 0, h = parseFloat(a.height) || 0;
+        if (!w || !h) return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height };
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        return { left: Math.min(r.left, cx - w / 2), right: Math.max(r.right, cx + w / 2),
+          top: Math.min(r.top, cy - h / 2), bottom: Math.max(r.bottom, cy + h / 2),
+          width: Math.max(r.width, w), height: Math.max(r.height, h) };
+      };
+      // KUN editorens egne kontroller: board-et bak ligger i et annet lag, og
+      // en overlapp mot det er z-rekkefølge, ikke to mål som slåss om en finger.
+      const el = [...document.querySelectorAll('#note-editor .note-tool, #note-editor .note-symbol, #note-editor .note-back, #note-editor .note-editor-btn')]
+        .filter((e) => e.offsetParent && !e.closest('[hidden]'))
+        .map((e) => ({ navn: (e.dataset.cmd || e.id || e.className.split(' ')[0]), box: hit(e) }));
+      const små = el.filter((x) => x.box.width < 44 || x.box.height < 44)
+        .map((x) => x.navn + ': ' + Math.round(x.box.width) + 'x' + Math.round(x.box.height));
+      const overlapp = [];
+      for (let i = 0; i < el.length; i++) {
+        for (let j = i + 1; j < el.length; j++) {
+          const w = Math.min(el[i].box.right, el[j].box.right) - Math.max(el[i].box.left, el[j].box.left);
+          const h = Math.min(el[i].box.bottom, el[j].box.bottom) - Math.max(el[i].box.top, el[j].box.top);
+          if (w > 0.5 && h > 0.5) overlapp.push(el[i].navn + ' × ' + el[j].navn);
+        }
+      }
+      return { antall: el.length, små, overlapp };
+    });
+    log(navn + ': hver kontroll i editoren har 44×44 berøringsflate (WCAG 2.5.5)',
+      flater.antall > 20 && flater.små.length === 0, flater.små.join(', ') || flater.antall + ' kontroller');
+    log(navn + ': ingen to berøringsflater i editoren overlapper hverandre',
+      flater.overlapp.length === 0, flater.overlapp.join(', ') || 'ingen');
+    await p.keyboard.press('Escape');
+    await p.waitForTimeout(200);
+
+    /* 23b. BUNNEN AV ET LANGT NOTAT. Synk-pillen er `position: fixed` over
+       bildet, og uten en klaring lå de siste linjene under den. Måles helt
+       nederst i rullingen, som er der problemet finnes. */
+    await p.evaluate((id) => {
+      const H = window.__huskis;
+      const n = H.state.notes.find((x) => x.id === id);
+      n.doc = { v: 1, blocks: Array.from({ length: 60 }, (_, i) =>
+        ({ t: 'p', c: [{ s: 'Avsnitt ' + i + ' med litt tekst som fyller linjen.' }] })) };
+      H.closeNoteEditor();
+      H.openNoteEditor(id);
+    }, førsteKort);
+    await editorÅpen(p);
+    await p.waitForTimeout(300);
+    await p.evaluate(() => {
+      const b = document.getElementById('note-editor-body');
+      b.scrollTop = b.scrollHeight;
+    });
+    await p.waitForTimeout(300);
+    const bunnen = await p.evaluate(() => {
+      const pille = document.getElementById('sync-status');
+      const siste = document.querySelector('#note-doc').lastElementChild;
+      const pr = pille ? pille.getBoundingClientRect() : null;
+      const sr = siste.getBoundingClientRect();
+      const b = document.getElementById('note-editor-body');
+      return {
+        pilleSynlig: !!pr && pr.height > 0 && getComputedStyle(pille).visibility !== 'hidden',
+        sisteBunn: Math.round(sr.bottom), pilleTopp: pr ? Math.round(pr.top) : null,
+        ruller: b.scrollHeight > b.clientHeight,
+        vindusScroll: window.scrollY,
+      };
+    });
+    log(navn + ': arket ruller inne i editoren — siden bak flytter seg ikke',
+      bunnen.ruller === true && bunnen.vindusScroll === 0, JSON.stringify(bunnen));
+    log(navn + ': siste linje i et langt notat ligger OVER synk-pillen',
+      !bunnen.pilleSynlig || bunnen.sisteBunn <= bunnen.pilleTopp, JSON.stringify(bunnen));
+    await p.evaluate(() => window.__huskis.closeNoteEditor());
+    await editorLukket(p);
+    await p.waitForTimeout(200);
+
+    /* ---------- 24. Fokus tilbake til kortet, og kortets eget navn ---------- */
+    const navnPåKort = await p.evaluate((id) => {
+      const el = document.querySelector('.note-card[data-id="' + id + '"]');
+      return el ? { label: el.getAttribute('aria-label'), role: el.getAttribute('role') } : null;
+    }, førsteKort);
+    await p.evaluate((id) => window.__huskis.openNoteEditor(id), førsteKort);
+    await editorÅpen(p);
+    await p.click('#note-back');
+    await editorLukket(p);
+    await p.waitForTimeout(250);
+    const fokus = await p.evaluate((id) => {
+      const a = document.activeElement;
+      return { erKortet: !!(a && a.classList.contains('note-card') && a.dataset.id === id),
+        hva: a ? (a.id || a.className) : 'ingen' };
+    }, førsteKort);
+    log(navn + ': editoren lukkes tilbake til notatkortet man åpnet',
+      fokus.erKortet === true, JSON.stringify(fokus));
+    log(navn + ': notatkortet navngir seg selv («Notatet …»), ikke av hele innholdet',
+      !!navnPåKort && navnPåKort.role === 'button'
+      && /^Notatet «/.test(navnPåKort.label || '')
+      && (navnPåKort.label || '').indexOf('Meny for') === -1,
+      JSON.stringify(navnPåKort));
+
+    /* ---------- 25. «Sist endret» er kort, og kommer fra ordboken ---------- */
+    const dato = await p.evaluate((id) => {
+      const H = window.__huskis;
+      const n = H.state.notes.find((x) => x.id === id);
+      const nå = new Date();
+      const døgn = (off) => { const d = new Date(nå.getTime()); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + off); return d.getTime(); };
+      const les = (ts) => { const før = n.ts; n.ts = ts; const t = H.noteEditedText(n); n.ts = før; return t; };
+      return {
+        iDag: les(nå.getTime()),
+        iGår: les(døgn(-1)),
+        eldre: les(døgn(-40)),
+        kortet: (document.querySelector('.note-card[data-id="' + id + '"] .note-card-meta') || {}).textContent,
+        hjelp: (document.querySelector('.note-card[data-id="' + id + '"] .note-card-meta') || {}).title,
+      };
+    }, førsteKort);
+    log(navn + ': «sist endret» er klokkeslettet i dag, «i går» i går og en dato ellers',
+      /^\d{2}:\d{2}$/.test(dato.iDag) && dato.iGår === 'i går'
+      && /^\d{1,2}\. [a-zæøå]{3}/.test(dato.eldre) && dato.eldre.indexOf(':') === -1,
+      JSON.stringify(dato));
+    log(navn + ': chipen på kortet er kort, og hele tidspunktet ligger i hjelpeteksten',
+      (dato.kortet || '').length <= 8 && /kl\./.test(dato.hjelp || ''), JSON.stringify(dato));
+  } else {
+    log(navn + ': fant et notatkort å måle editoren fra', false, 'ingen .note-card');
+  }
 
   log(navn + ': ingen JS-feil', errs.length === 0, errs.join(' | ') || 'ingen');
   await browser.close();

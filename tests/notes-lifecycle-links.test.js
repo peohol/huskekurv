@@ -34,6 +34,17 @@
        kobling som fjernes blir borte der også
    13. Mock-backenden speiler DB-kontrakten: en koblingsrad med null eller to
        id-er på en side avvises, som produksjonens to `check`-vilkår
+   14. Fokus overlever at et objekt LEGGES BORT: å arkivere tar raden ut av
+       visningen akkurat som å slette, og fokus skal lande på naboen — ellers
+       på ＋-knappen — aldri på `<body>` (docs/tilgjengelighet.md, «Fokus»)
+   15. Raden «Frie notater» er bokhyllens egen plass, ikke en notatbok: den har
+       ingen objektmeny, og malens menyknapp står derfor ikke igjen som et
+       navnløst tabbstopp
+   16. Utdraget i en kasse-/arkivrad er KORT. Med kortets 160 tegn ble raden
+       fire linjer høy på telefon, og radens to knapper havnet midt i teksten
+   17. MODALEN EIER FOKUS mens den er åpen: en gjenoppretting (eller et
+       «Slett») derfra legger ikke fokus på objektet BAK dialogen, som er
+       `aria-modal` og dermed ikke finnes for tastaturet — det blir i modalen
 
   Kjøres på BÅDE desktop- og mobil-viewport der oppførselen avhenger av layout.
 
@@ -915,6 +926,156 @@ async function run(navn, viewport, touch) {
   log(M('7 … og ut av begge forsvinner etiketten helt'),
     !utenfor.tekst && utenfor.slett === false && utenfor.arkiv === false,
     JSON.stringify(utenfor));
+
+  /* ---------- 14. Fokus når noe arkiveres ---------- */
+  /* Sletting har alltid flyttet fokus FØR raden forsvant; arkivet gjorde det
+     ikke, og fokus falt til `<body>` — nettopp der man trenger et sted å
+     fortsette fra. Måles på begge utfallene: med en nabo igjen, og på det
+     SISTE notatet, der ＋-knappen er stedet. */
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    H.setMainTab('notes');
+    (H.state.notes || []).slice().forEach((n) => { n.archived = false; n.trashed = false; });
+    H.renderNotes();
+  });
+  await p.waitForTimeout(300);
+  const arkivFokus = await p.evaluate(async () => {
+    const H = window.__huskis;
+    const kort = [...document.querySelectorAll('#notes-board .note-card')];
+    if (kort.length < 2) return { for_få: kort.length };
+    const første = kort[0].dataset.id;
+    kort[0].focus();
+    H.setNoteArchived('note', første, true);
+    await new Promise((r) => setTimeout(r, 250));
+    const a = document.activeElement;
+    const medNabo = { erBody: a === document.body, hva: a ? (a.id || a.className) : 'ingen' };
+    // …og så det siste som står igjen.
+    const igjen = [...document.querySelectorAll('#notes-board .note-card')];
+    const alle = igjen.map((el) => el.dataset.id);
+    alle.forEach((id, i) => { if (i < alle.length - 1) H.setNoteArchived('note', id, true); });
+    await new Promise((r) => setTimeout(r, 200));
+    const sisteEl = document.querySelector('#notes-board .note-card');
+    const siste = sisteEl && sisteEl.dataset.id;
+    if (sisteEl) sisteEl.focus();
+    if (siste) H.setNoteArchived('note', siste, true);
+    await new Promise((r) => setTimeout(r, 250));
+    const b = document.activeElement;
+    return { medNabo, sisteHva: b ? (b.id || b.className) : 'ingen', sisteErBody: b === document.body };
+  });
+  log(M('14 fokus lander på NABOKORTET når et notat arkiveres, ikke på <body>'),
+    !arkivFokus.for_få && arkivFokus.medNabo && arkivFokus.medNabo.erBody === false
+    && /note-card/.test(arkivFokus.medNabo.hva || ''),
+    JSON.stringify(arkivFokus.medNabo || arkivFokus));
+  log(M('14 … og det SISTE notatet sender fokus til ＋-knappen'),
+    arkivFokus.sisteHva === 'add-note-btn', JSON.stringify({ hva: arkivFokus.sisteHva, body: arkivFokus.sisteErBody }));
+
+  /* ---------- 15. «Frie notater» har ingen objektmeny ---------- */
+  await p.evaluate(() => window.__huskis.openNotesNav());
+  await p.waitForTimeout(400);
+  const friRad = await p.evaluate(() => {
+    const rad = document.querySelector('#notes-nav-board .note-free-row');
+    if (!rad) return null;
+    const knapp = rad.querySelector('.obj-menu-btn');
+    return {
+      finnes: !!knapp,
+      skjult: !!(knapp && knapp.hidden),
+      // Et navnløst tabbstopp er det egentlige problemet: en knapp uten navn
+      // leses som «knapp» og gjør ingenting.
+      navnløseTabbstopp: [...document.querySelectorAll('#notes-nav-board button')]
+        .filter((b) => b.offsetParent && !b.getAttribute('aria-label') && !(b.textContent || '').trim())
+        .length,
+    };
+  });
+  log(M('15 raden «Frie notater» har ingen objektmeny — og ingen navnløs knapp står igjen'),
+    !!friRad && friRad.skjult === true && friRad.navnløseTabbstopp === 0, JSON.stringify(friRad));
+  await p.evaluate(() => window.__huskis.closeNotesNav());
+  await p.waitForTimeout(250);
+
+  /* ---------- 16. Utdraget i en kasse-/arkivrad ---------- */
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    const n = (H.state.notes || [])[0];
+    if (!n) return;
+    n.archived = true;
+    n.doc = { v: 1, blocks: [{ t: 'p', c: [{ s: 'Hemoglobin, ferritin, CRP og SR måles på nytt om fjorten dager, og svaret ringes inn til pasienten samme dag.' }] }] };
+    H.renderNotes();
+    H.openNotesArchive();
+  });
+  await p.waitForTimeout(400);
+  const radMål = await p.evaluate(() => {
+    const rad = document.querySelector('#trash-modal .trash-row');
+    if (!rad) return null;
+    const meta = rad.querySelector('.trash-meta');
+    const knapper = [...rad.querySelectorAll('button')];
+    const rr = rad.getBoundingClientRect();
+    const modal = rad.closest('.modal').getBoundingClientRect();
+    return {
+      tekst: meta ? meta.textContent : '',
+      lengde: meta ? meta.textContent.length : 0,
+      høyde: Math.round(rr.height),
+      knapper: knapper.length,
+      innenfor: rr.right <= modal.right + 1 && rr.left >= modal.left - 1,
+      overlapp: knapper.some((b) => {
+        if (!meta) return false;
+        const a = b.getBoundingClientRect(), m = meta.getBoundingClientRect();
+        return Math.min(a.right, m.right) - Math.max(a.left, m.left) > 0.5
+          && Math.min(a.bottom, m.bottom) - Math.max(a.top, m.top) > 0.5;
+      }),
+    };
+  });
+  log(M('16 utdraget i en arkivrad er kort, og raden holder seg innenfor modalen'),
+    !!radMål && radMål.lengde > 0 && radMål.lengde <= 50 && radMål.innenfor === true,
+    JSON.stringify(radMål));
+  log(M('16 … og radens knapper ligger ikke oppå teksten'),
+    !!radMål && radMål.overlapp === false && radMål.knapper === 2, JSON.stringify(radMål));
+
+  /* ---------- 17. Fokus blir i modalen ---------- */
+  /* To arkiverte notater, så det finnes en rad igjen å gå til. Deretter
+     trykkes «Hent ut av arkivet» på den FØRSTE — med ekte klikk, for det er
+     nettopp knappen i modalen som er handlingen. */
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(250);
+  await p.evaluate(() => {
+    const H = window.__huskis;
+    (H.state.notes || []).slice(0, 2).forEach((n) => { n.archived = true; n.trashed = false; });
+    H.renderNotes();
+    H.openNotesArchive();
+  });
+  await p.waitForTimeout(400);
+  const førAntall = await p.evaluate(() => document.querySelectorAll('#trash-modal .trash-row').length);
+  await p.locator('#trash-modal .trash-row').first().locator('.btn').last().click();
+  await p.waitForTimeout(400);
+  const etterHent = await p.evaluate(() => {
+    const a = document.activeElement;
+    const modal = document.getElementById('trash-modal');
+    return {
+      modalÅpen: !modal.hidden,
+      fokusIModalen: !!(a && modal.contains(a)),
+      hva: a ? (a.id || a.className || a.tagName) : 'ingen',
+      rader: document.querySelectorAll('#trash-modal .trash-row').length,
+    };
+  });
+  log(M('17 en gjenoppretting fra arkivmodalen lar fokus bli INNE i dialogen'),
+    førAntall === 2 && etterHent.modalÅpen === true && etterHent.fokusIModalen === true,
+    JSON.stringify(Object.assign({ førAntall: førAntall }, etterHent)));
+  // … og når siste rad er borte, er det fortsatt modalens egne kontroller.
+  const sisteKnapp = p.locator('#trash-modal .trash-row .btn').last();
+  if (await sisteKnapp.count()) {
+    await sisteKnapp.click();
+    await p.waitForTimeout(400);
+  }
+  const etterSiste = await p.evaluate(() => {
+    const a = document.activeElement;
+    const modal = document.getElementById('trash-modal');
+    return { modalÅpen: !modal.hidden, fokusIModalen: !!(a && modal.contains(a)),
+      hva: a ? (a.id || a.className || a.tagName) : 'ingen',
+      rader: document.querySelectorAll('#trash-modal .trash-row').length };
+  });
+  log(M('17 … også når den siste raden er hentet ut'),
+    etterSiste.modalÅpen === true && etterSiste.fokusIModalen === true && etterSiste.rader === 0,
+    JSON.stringify(etterSiste));
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(250);
 
   log(M('ingen JS-feil'), jsFeil.length === 0, jsFeil.join(' | ') || 'ingen');
   await browser.close();

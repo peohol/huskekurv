@@ -41,6 +41,7 @@
   "tests/locked-group-creation.test.js": 25,
   "tests/nav-modal.test.js": 63,
   "tests/no-legacy-domain.test.js": 0,
+  "tests/note-link-open.test.js": 22,
   "tests/notes-lifecycle-links.test.js": 14,
   "tests/notes-sharing.test.js": 30,
   "tests/notes-tab.test.js": 30,

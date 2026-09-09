@@ -984,6 +984,10 @@
 
   let focusIntent = null;
   function keepFocus(sel) { focusIntent = sel || null; }
+  // Ble ønsket stående uinnfridd? Da fantes ikke noden, og den som ba om det
+  // må velge et annet sted å legge fokus (se `closeNoteEditor`).
+  const focusIntentPending = () => focusIntent !== null;
+  const clearFocusIntent = () => { focusIntent = null; };
   // Ønsket tømmes KUN når det faktisk ble innfridd. `render()` kjører renderNav()
   // før renderBoard(), og et ønske om et element på board-et finnes ikke ennå når
   // nav-modalen er ferdig — tømte vi her, ville board-rendringen etterpå ikke hatt
@@ -1174,6 +1178,13 @@
     if (kind === 'idea' || kind === 'ideacat') return '#add-idea-btn';
     if (kind === 'card') return '#nav-crumb';
     if (kind === 'universe') return '.nav-add-uni button';
+    /* Notatsiden har de samme tre trinnene: ＋-knappen for det som forsvant,
+       og bokhyllens ＋ når det var siste notatbok. Uten disse falt fokus til
+       `<body>` når man slettet eller arkiverte det ENESTE objektet på nivået
+       — det er nettopp da man trenger et sted å fortsette fra. */
+    if (kind === 'note') return '#add-note-btn';
+    if (kind === 'noteFolder') return '.notes-add-project button';
+    if (kind === 'noteProject') return '.notes-add-project button';
     return null;
   }
 
@@ -6774,8 +6785,9 @@
 
   /* DEN SIKRE SONEN, for de lagene som plasseres i JS.
      De faste elementene får den fra CSS (`--safe-*`, se styles.css og
-     docs/design-system.md), men to lag regnes ut i viewport-koordinater og må
-     lese tallene: demonstrasjonens kort og popover-skallet. De klemmes mot
+     docs/design-system.md), men noen lag regnes ut i viewport-koordinater og må
+     lese tallene: demonstrasjonens kort, popover-skallet og notat-editorens
+     paneler (`placeNotePanel`). De klemmes mot
      rektangelet denne gir, ikke mot skjermkanten — ellers ville de kunnet
      havne under statusfeltet eller gestelinjen.
      `env()` erstattes når custom-propertyen regnes ut, så de fire løser seg
@@ -9315,6 +9327,24 @@
     modalOpenedAt = Date.now();
     updateModalOpenClass();
   }
+  /* MODALEN EIER FOKUS MENS DEN ER ÅPEN. Radhandlingene («Gjenopprett», «Hent
+     ut av arkivet», arkivets «Slett») kaller den samme koden board-et bruker,
+     og den legger igjen et fokusønske på objektet — som nå står BAK en
+     `aria-modal`-dialog. Fokus ville dermed havnet på noe brukeren verken ser
+     eller kan nå, og et `Enter` ville truffet det tildekkede kortet. */
+  const trashModalOpen = () => !!trashModal && !trashModal.hidden;
+  /* … og etter at raden er borte, velger modalen selv hvor fokus går: raden
+     som tok plassen, ellers den siste som ble igjen, ellers «Tøm», ellers ✕.
+     Samme trapp som `focusTargetAfterRemoval` går på board-et. */
+  function focusInTrashModal(i) {
+    if (!trashModalOpen()) return;
+    const knapper = [...trashList.querySelectorAll('.trash-row > .btn:last-child')]
+      .filter((b) => !b.disabled);
+    const mål = knapper[Math.min(i, knapper.length - 1)]
+      || (trashEmptyBtn && !trashEmptyBtn.disabled ? trashEmptyBtn : null)
+      || trashClose;
+    if (mål) { try { mål.focus(); } catch (e) { /* noden kan ha rukket å forsvinne */ } }
+  }
   function renderTrashModalBody() {
     if (!modalCfg) return;
     const rows = modalCfg.rows();
@@ -9333,7 +9363,7 @@
     // `purge` skiller seg fra `manage` kun for områder/mapper, der «Tøm» også
     // kan bety å FORLATE; ellers er det samme svar.
     trashEmptyBtn.disabled = !rows.some((r) => (r.purge !== undefined ? r.purge : r.manage) !== false);
-    rows.forEach((r) => {
+    rows.forEach((r, i) => {
       const row = document.createElement('div');
       row.className = 'trash-row';
       if (r.color) {
@@ -9369,7 +9399,7 @@
         ex.type = 'button';
         ex.textContent = r.extra.label;
         if (r.extra.aria) ex.setAttribute('aria-label', r.extra.aria);
-        ex.addEventListener('click', () => { r.extra.fn(); renderTrashModalBody(); });
+        ex.addEventListener('click', () => { r.extra.fn(); renderTrashModalBody(); focusInTrashModal(i); });
         row.appendChild(ex);
       }
       const restore = document.createElement('button');
@@ -9398,6 +9428,7 @@
         if (r.pending) undoBufferedDelete(r.id);
         else r.restore();
         renderTrashModalBody();
+        focusInTrashModal(i);
       });
       row.appendChild(restore);
       trashList.appendChild(row);
@@ -9873,8 +9904,18 @@
        `z-index: 200`, editoren 60. Idémodalen og drakten er tilgjengelige fra
        editorens egen verktøylinje, så en modal KAN stå oppå den — og da skal et
        tilbaketrykk lukke modalen, ikke bildet under. Editoren er derfor det
-       SISTE laget i stigen. Et åpent panel i den lukkes av editorens egen
-       Escape-lytter, som stopper hendelsen der. */
+       SISTE laget i stigen.
+
+       Lenke- og spesialtegnpanelet er ETT TRINN OVER editoren, ikke ved siden
+       av den: de ligger inne i bildet, og et tilbaketrykk der skal lukke
+       panelet man nettopp åpnet — ikke hele notatet. De sto tidligere kun i
+       editorens egen Escape-lytter, så systemets tilbakeknapp hoppet rett forbi
+       dem og lukket editoren med panelet åpent. */
+    if (noteEditorOpen() && notePanelsOpen()) {
+      closeNotePanels();
+      if (noteDocEl) noteDocEl.focus();
+      return true;
+    }
     if (noteEditorOpen()) { closeNoteEditor(); return true; }
     return false;
   }
@@ -15423,6 +15464,12 @@
   const NOTE_MAX_RUNS = 800;      // tak per blokk
   const NOTE_MAX_RUN_LEN = 20000; // tak per tekstbit
   const NOTE_EXCERPT_LEN = 160;   // utdraget på kortet
+  /* Utdraget i en KASSE-/ARKIVRAD er kort. Raden er én linje på desktop og en
+     smal modal på telefon, med to knapper ved siden av seg, og den skal si
+     HVILKET notat dette er — ikke gjengi det. Med kortets 160 tegn ble raden
+     fire linjer høy på 390 px, og «Slett»/«Hent ut av arkivet» sto midt i
+     teksten. De andre nivåene har allerede korte metatekster («3 lister»). */
+  const NOTE_ROW_EXCERPT_LEN = 48;
 
   function emptyNoteDoc() { return { v: NOTE_DOC_V, blocks: [] }; }
 
@@ -15441,6 +15488,44 @@
       const u = new URL(s);
       return NOTE_URL_SCHEMES.indexOf(u.protocol.toLowerCase()) === -1 ? '' : u.href;
     } catch (e) { return ''; }
+  }
+
+  /* ---- ÉN VEI UT AV HUSKIS ----
+     Appen genererer fortsatt ingen utgående LENKER: ingen `<a href>`, ingen
+     `target="_blank"` i markup (docs/domains-and-urls.md). Men en lenke i et
+     notat skal kunne åpnes, og da må adressen forlate appen ett sted. Dette er
+     det stedet — det ENESTE — og det er derfor en funksjon og ikke et mønster
+     som kan gjentas.
+
+     `window.open(…, '_blank')` er valgt fordi den er den SAMME mekanismen i
+     begge kjøremiljøene:
+       • i nettleseren åpnes en ny fane, og `noopener` gir den ingen `opener`
+         å røre Huskis med;
+       • i mobilskallet står WebView-en med `supportMultipleWindows = false`
+         (Capacitors standard — `BridgeWebChromeClient` har ingen
+         `onCreateWindow`), så `window.open` blir en vanlig navigasjon som går
+         gjennom `BridgeWebViewClient.shouldOverrideUrlLoading` →
+         `Bridge.launchIntent()`. Den sender hver adresse med et annet
+         skjema+vert enn appens ut som `Intent.ACTION_VIEW` og svarer `true`,
+         så siden lastes ALDRI inne i WebView-en (docs/mobilapp-plan.md,
+         «Eksterne lenker»). Huskis blir stående med tilstanden sin.
+
+     Adressen normaliseres på nytt her, uansett hvor den kommer fra: en lagret
+     `data-url` er allerede gjennom `safeNoteUrl`, men en vakt som bare gjelder
+     én vei inn er ingen vakt. `javascript:`/`data:`/`blob:` blir tom streng og
+     åpnes ikke. */
+  function openExternalUrl(raw) {
+    const url = safeNoteUrl(raw);
+    if (!url) { showToast(tr('notes.linkInvalid')); return false; }
+    /* Returverdien sjekkes IKKE, og det er med vilje: med `noopener` skal
+       `window.open` ALLTID svare null (HTML-standarden), så null sier ingenting
+       om hvorvidt det gikk bra. En «det gikk ikke»-melding basert på den ville
+       kommet hver eneste gang. Prisen for det er verdt å betale — uten
+       `opener` har siden som åpnes ingen referanse til Huskis' vindu i det hele
+       tatt. */
+    try { window.open(url, '_blank', 'noopener'); }
+    catch (e) { showToast(tr('notes.linkOpenFailed')); return false; }
+    return true;
   }
 
   const sameNoteMarks = (a, b) =>
@@ -15505,12 +15590,13 @@
     return out.join('\n');
   }
   // Kortets utdrag: første lesbare linjer, klippet på et ordskille.
-  function noteExcerpt(note) {
+  function noteExcerpt(note, max) {
+    const lim = max || NOTE_EXCERPT_LEN;
     const t = noteDocText(note.doc).replace(/\s+/g, ' ').trim();
-    if (t.length <= NOTE_EXCERPT_LEN) return t;
-    const cut = t.slice(0, NOTE_EXCERPT_LEN);
+    if (t.length <= lim) return t;
+    const cut = t.slice(0, lim);
     const sp = cut.lastIndexOf(' ');
-    return (sp > NOTE_EXCERPT_LEN * 0.6 ? cut.slice(0, sp) : cut) + '…';
+    return (sp > lim * 0.6 ? cut.slice(0, sp) : cut) + '…';
   }
   // Tittelen slik den VISES: en tom tittel faller tilbake på første linje i
   // teksten, og først når også den er tom på «Uten navn».
@@ -15524,6 +15610,19 @@
   /* ---- Dokument → DOM ----
      Bygger nodene selv. Ingen `innerHTML`, ingen strengbygget markup: et notat
      er brukerinnhold, og det skal aldri kunne bli til markup underveis. */
+  /* ÉN plass som gjør et element til en notatlenke: klassen, adressen,
+     hjelpeteksten og rollen. Både rendringen av et lagret dokument og
+     lenkeknappen i editoren går gjennom den — en lenke som nettopp ble laget
+     skal være en lenke for skjermleseren MED EN GANG, ikke først etter at
+     editoren er lukket og åpnet igjen. `tabindex` settes ikke her: det er
+     `applyNoteEditorAccess` som vet om dokumentet kan redigeres. */
+  function stampNoteLink(el, url) {
+    el.className = 'note-link';
+    el.dataset.url = url;
+    el.title = url;
+    el.setAttribute('role', 'link');
+    return el;
+  }
   function noteRunNode(run) {
     let node = document.createTextNode(run.s);
     const wrap = (tag) => { const el = document.createElement(tag); el.appendChild(node); node = el; };
@@ -15535,13 +15634,16 @@
     if (run.url) {
       /* Lenken er MERKET tekst, ikke et anker. Huskis' UI produserer ingen
          utgående lenker (docs/domains-and-urls.md), og et notat skal ikke bli
-         unntaket som stille åpner den døren: adressen bæres i `data-url`,
-         vises i `title`, og kan kopieres fra lenke-popoveren. Å ÅPNE den hører
-         til det steget som også tar mobilskallets ruting. */
-      const el = document.createElement('span');
-      el.className = 'note-link';
-      el.dataset.url = run.url;
-      el.title = run.url;
+         unntaket som stille åpner den døren: adressen bæres i `data-url` og
+         vises i `title`. Å ÅPNE den går gjennom `openExternalUrl` — appens ene
+         vei ut — ikke gjennom en `href` nettleseren kan følge selv.
+
+         `role="link"` fordi det ER en lenke for den som leser med skjermleser;
+         at den ikke er et anker er en implementasjonsdetalj. Fokuserbar blir
+         den bare i et SKRIVEBESKYTTET notat (`applyNoteEditorAccess`): i et
+         redigerbart dokument eier markøren tastaturet, og et tabbstopp midt i
+         teksten ville kjempet mot skrivingen. */
+      const el = stampNoteLink(document.createElement('span'), run.url);
       el.appendChild(node);
       node = el;
     }
@@ -15800,17 +15902,52 @@
   const addNoteBtn = document.getElementById('add-note-btn');
   const noteCardTpl = document.getElementById('note-card-template');
 
-  const NOTE_DATE_OPTS = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
   /* «Sist endret» leses av innholdsregisteret: `ts` er den hybride logiske
      klokken, som er millisekunder siden epoken når den ikke er blitt dyttet
      framover av en enhet med feil klokke. Den er dermed den samme verdien
      LWW-en bruker — ingen egen tidskolonne å holde i takt. */
-  function noteEditedText(note) {
+  /* «Sist endret» på notatkortet, i appens EGEN datovokabular (`date.*`) og så
+     KORT som mulig:
+
+       i dag   → klokkeslettet   («10:46»)
+       i går   → «i går»
+       ellers  → «9. sep» (med året når det ikke er i år)
+
+     To grunner. Den ene er språk: den gamle formen gikk utenom ordboken
+     (`toLocaleString('nb-NO')`) og ga en annen månedsforkortelse enn resten av
+     appen. Den andre er PLASS. Korthodet deler bredden mellom ikon, tittel,
+     denne chipen og menyknappen, og en full dato + klokkeslett tok en tredjedel
+     av et notatkort — tittelen ble presset ned i en smal søyle som brøt etter
+     to ord. Et notatkort skal si hvor FERSKT notatet er; nøyaktig hvilket
+     sekund det ble lagret hører hjemme i hjelpeteksten, som `noteEditedFull`
+     gir. */
+  function noteEditedParts(note) {
     const ts = note.ts || 0;
-    if (!ts) return '';
-    try {
-      return new Date(ts).toLocaleString(I18N.lang() === 'en' ? 'en-GB' : 'nb-NO', NOTE_DATE_OPTS);
-    } catch (e) { return ''; }
+    if (!ts) return null;
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return null;
+    const day = localDateStr(d);
+    const clock = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    const now = Date.now();
+    // `rel` er MARKØREN, ikke den oversatte teksten: en sammenligning mot
+    // `tr('date.today')` ville vært en sammenligning mot en streng som endrer
+    // seg med språket.
+    const rel = day === dayOffsetStr(now, 0) ? 'today'
+      : day === dayOffsetStr(now, -1) ? 'yesterday' : '';
+    return { day: day, clock: clock, rel: rel, named: rel ? tr('date.' + rel) : '' };
+  }
+  function noteEditedText(note) {
+    const p = noteEditedParts(note);
+    if (!p) return '';
+    if (p.rel === 'today') return p.clock;
+    return p.named || fmtDay(p.day);
+  }
+  // Hele tidspunktet, til `title` og til kortets opplesning: chipen er kort,
+  // men informasjonen skal ikke være borte.
+  function noteEditedFull(note) {
+    const p = noteEditedParts(note);
+    if (!p) return '';
+    return tr('date.at', { date: p.named || fmtDay(p.day), clock: p.clock });
   }
 
   function buildNoteCard(note) {
@@ -15828,7 +15965,18 @@
     // undertittel noen har skrevet.
     ex.querySelector('.note-card-excerpt-text').textContent = text ? quoted(text) : '';
     ex.hidden = !text;
-    el.querySelector('.note-card-meta').textContent = noteEditedText(note);
+    const meta = el.querySelector('.note-card-meta');
+    meta.textContent = noteEditedText(note);
+    // Chipen er kort («10:46»); hele tidspunktet ligger i hjelpeteksten.
+    const full = noteEditedFull(note);
+    if (full) meta.title = tr('label.noteEdited', { when: full });
+    /* KORTET ER `role="button"` og har ingen `aria-label` av seg selv, så
+       navnet ville blitt regnet ut av ALT innholdet: tittel + tidspunkt +
+       menyknappens eget navn + utdraget. Den navngir seg derfor selv, som
+       `<article class="card">` gjør på listesiden (docs/tilgjengelighet.md),
+       og navnet settes på nytt ved omdøping fordi kortet bygges om da. */
+    el.setAttribute('aria-label', tr('label.note', { name: quoted(noteDisplayTitle(note)) })
+      + (full ? '. ' + tr('label.noteEdited', { when: full }) : ''));
     /* Koblingschipen står i KORTKROPPEN, under utdraget — ikke i hodet.
        Hodet er allerede fullt (ikon, tittel, «sist endret» og menyknappen), og
        en chip til presset tittelen ned i en smal søyle på et notatkort, som er
@@ -16106,6 +16254,11 @@
     txt.removeAttribute('title');
     txt.removeAttribute('data-i18n-title');
     el.querySelector('.title-line').appendChild(noteRowCount(noteCountIn(p.id, null)));
+    /* Raden er ingen NOTATBOK — den er bokhyllens egen plass — så den har
+       ingenting en objektmeny kunne gjort. Malens menyknapp må derfor bort:
+       den sto igjen uten lytter og uten navn, altså et tomt tabbstopp som
+       skjermleseren leste som en navnløs knapp. */
+    el.querySelector('.obj-menu-btn').hidden = true;
     el.addEventListener('click', () => {
       setActiveProject(p.id);
       setActiveNoteFolder(null);
@@ -16344,6 +16497,19 @@
     const cfg = NOTE_KINDS[kind];
     const o = cfg && cfg.find(id);
     if (!o || !!o.archived === !!on) return;
+    /* Å ARKIVERE TAR OBJEKTET UT AV VISNINGEN, akkurat som å slette gjør — og
+       da må fokus få et sted å gå FØR raden forsvinner, ellers faller det til
+       `<body>` (docs/tilgjengelighet.md, «Fokus»). Sletting har alltid gjort
+       dette; arkivet glemte det.
+
+       Naboen regnes ut FØR flagget settes: `focusTargetAfterRemoval` leser de
+       LEVENDE radene, og et objekt som allerede er arkivert står ikke blant
+       dem — da finner den ingen nabo og faller rett til ＋-knappen. Den
+       motsatte veien er enklere: objektet kommer tilbake, og da er det
+       objektet selv fokus skal lande på. */
+    if (!trashModalOpen()) {
+      keepFocus(on ? focusTargetAfterRemoval(kind, id, null) : handleSelector(kind, id));
+    }
     o.archived = !!on;
     stampContent(o);
     validateActiveNotes(state);
@@ -16377,7 +16543,8 @@
        bokhyllen skal derfor utvides til `.card`. */
     const node = sel && host ? host.querySelector(sel) : null;
     const ghost = ghostFrom(kind === 'noteProject' ? ((node && node.closest('.card')) || node) : node);
-    keepFocus(focusTargetAfterRemoval(kind, id, null));
+    // Arkivmodalens «Slett» går hit med modalen åpen; da eier den fokus.
+    if (!trashModalOpen()) keepFocus(focusTargetAfterRemoval(kind, id, null));
     bufferDelete(obj, kind, (o) => setTrashed(o, kind, true));
     validateActiveNotes(state);
     renderNotesNav();   // kassene blir synlige FØR animasjonen starter
@@ -16496,7 +16663,7 @@
   function noteRowMeta(kind, o) {
     if (kind === 'noteProject') return noteFolderWord((o.folders || []).filter(live).length);
     if (kind === 'noteFolder') return noteWord(allNotes().filter((n) => live(n) && n.folder === o.id).length);
-    return noteExcerpt(o) || '';
+    return noteExcerpt(o, NOTE_ROW_EXCERPT_LEN) || '';
   }
   function openNotesTrash() {
     const pid = state.activeProject, fid = state.activeFolder;
@@ -17583,6 +17750,7 @@
   const noteLinkApply = document.getElementById('note-link-apply');
   const noteLinkRemove = document.getElementById('note-link-remove');
   const noteLinkCopy = document.getElementById('note-link-copy');
+  const noteLinkOpen = document.getElementById('note-link-open');
   const noteSymbolPanel = document.getElementById('note-symbol-panel');
   // Idéer og drakt tilhører HELE Huskis, ikke listefanen: de finnes derfor også
   // i editorens verktøylinje, koblet til de samme funksjonene som hjørnegruppen.
@@ -17678,6 +17846,7 @@
     if (!noteEditorOpen()) return;
     flushNoteSave();
     const back = noteReturn;
+    const lukketId = noteOpenId;
     noteOpenId = null;
     noteReturn = null;
     closeNotePanels();
@@ -17692,11 +17861,21 @@
         validateActiveNotes(state);
       }
     }
-    renderNotes();
+    /* FOKUS GÅR TILBAKE TIL KORTET MAN ÅPNET (docs/tilgjengelighet.md, «Fokus»)
+       — ikke til breadcrumben, som var det editoren gjorde uansett hvor man kom
+       fra. Ønsket settes FØR rendringen, slik at `renderNotes()` kan innfri det
+       på den nye noden; er notatet ikke lenger å se (arkivert, slettet, en
+       annen mappe), faller det tilbake på breadcrumben, som er det nærmeste
+       stedet det gir mening å stå. */
+    if (lukketId) keepFocus(handleSelector('note', lukketId));
+    renderNotes();   // innfrir ønsket på den nye noden (applyFocusIntent)
+    if (!lukketId || focusIntentPending()) {
+      clearFocusIntent();
+      if (notesCrumbBtn) notesCrumbBtn.focus();
+    }
     // Scrollposisjonen gjenopprettes ETTER rendringen, som er det som gir
     // dokumentet høyden igjen.
     if (back) requestAnimationFrame(() => window.scrollTo(0, back.scrollY || 0));
-    if (notesCrumbBtn) notesCrumbBtn.focus();
   }
 
   /* ---- Autosave ---- */
@@ -17725,6 +17904,18 @@
     if (noteTitleInput) noteTitleInput.readOnly = !on;
     if (noteEditorEl) noteEditorEl.classList.toggle('is-readonly', !on);
     if (noteToolsEl) noteToolsEl.hidden = !on;
+    /* LENKENE BLIR TABBSTOPP NÅR NOTATET IKKE KAN REDIGERES. Verktøylinjen er
+       borte da, så lenke-panelet — den veien tastaturet ellers har til en
+       adresse — finnes ikke; uten dette var en lenke i et delt, låst notat
+       umulig å åpne uten mus. I et redigerbart dokument står de UTENFOR
+       tabbrekkefølgen: der eier markøren tastaturet, og `Cmd/Ctrl`+`K` åpner
+       panelet for lenken den står i. */
+    if (noteDocEl) {
+      noteDocEl.querySelectorAll('.note-link').forEach((el) => {
+        if (on) el.removeAttribute('tabindex');
+        else el.setAttribute('tabindex', '0');
+      });
+    }
     if (!on) setNoteStatus('notes.readOnly');
   }
   /* Notatet kan forsvinne under editoren: slettet for alle, eller tilgangen
@@ -17927,6 +18118,8 @@
      et anker: Huskis' UI produserer ingen utgående lenker
      (docs/domains-and-urls.md). Panelet er derfor der man ser, endrer, kopierer
      og fjerner adressen. */
+  const notePanelsOpen = () => !!((noteLinkPanel && !noteLinkPanel.hidden)
+    || (noteSymbolPanel && !noteSymbolPanel.hidden));
   function closeNotePanels() {
     if (noteLinkPanel) noteLinkPanel.hidden = true;
     if (noteSymbolPanel) noteSymbolPanel.hidden = true;
@@ -17950,8 +18143,7 @@
     if (!url) { showToast(tr('notes.linkInvalid')); return; }
     const cur = noteCurrentLink();
     if (cur) {
-      cur.dataset.url = url;
-      cur.title = url;
+      stampNoteLink(cur, url);
     } else {
       noteRestoreRange();
       const sel = window.getSelection();
@@ -17959,10 +18151,7 @@
         showToast(tr('notes.linkNeedsSelection'));
         return;
       }
-      const span = document.createElement('span');
-      span.className = 'note-link';
-      span.dataset.url = url;
-      span.title = url;
+      const span = stampNoteLink(document.createElement('span'), url);
       try { sel.getRangeAt(0).surroundContents(span); }
       catch (e) {
         // Markeringen krysser en elementgrense: pakk innholdet i stedet.
@@ -17985,6 +18174,19 @@
     closeNotePanels();
     scheduleNoteSave();
     refreshNoteTools();
+  }
+  /* «Åpne» virker på det som STÅR i feltet, ikke bare på en eksisterende
+     lenke: har man skrevet inn en adresse for å sjekke den, er det den man
+     mener. Og den regelen gjelder BEGGE veier — et felt brukeren har tømt er
+     et svar, ikke et fravær, så det skal ikke falle tilbake på adressen som
+     nettopp ble strøket. Uten feltet (skulle det mangle i DOM-en) er lenkens
+     egen adresse det eneste vi har. Panelet lukkes etterpå — man er på vei ut
+     av notatet. */
+  function openNoteLink() {
+    const cur = noteCurrentLink();
+    const url = noteLinkInput ? noteLinkInput.value.trim() : (cur ? cur.dataset.url : '');
+    if (!url) { showToast(tr('notes.linkInvalid')); return; }
+    if (openExternalUrl(url)) closeNotePanels();
   }
   function copyNoteLink() {
     const cur = noteCurrentLink();
@@ -18106,16 +18308,32 @@
      feltet (`visualViewport`, ikke `innerHeight`: med tastaturet oppe er de to
      ikke det samme), og snudd over ankeret når det ikke er plass under. */
   const NOTE_PANEL_MARGIN = 8;
+  /* Det synlige feltet MINUS den sikre sonen. Panelene plasseres i JS, og da
+     gjelder den samme regelen som for demonstrasjonens kort og popover-skallet:
+     de klemmes mot det BRUKBARE rektangelet, ikke mot skjermkanten
+     (docs/design-system.md, `safeInsets`). Uten dette la et panel seg 8 px fra
+     kanten — altså under hakket eller gestelinjen på en telefon som har dem. */
   function noteVisibleBox() {
+    const s = safeInsets();
     const v = window.visualViewport;
-    if (!v) return { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
-    return { left: v.offsetLeft, top: v.offsetTop, right: v.offsetLeft + v.width, bottom: v.offsetTop + v.height };
+    const rå = v
+      ? { left: v.offsetLeft, top: v.offsetTop, right: v.offsetLeft + v.width, bottom: v.offsetTop + v.height }
+      : { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight };
+    return {
+      left: rå.left + s.left, top: rå.top + s.top,
+      right: rå.right - s.right, bottom: rå.bottom - s.bottom,
+    };
   }
   function placeNotePanel(panel, anchor) {
     if (!panel || !anchor) return;
     const box = noteVisibleBox();
     const m = NOTE_PANEL_MARGIN;
     panel.style.maxHeight = Math.max(140, box.bottom - box.top - m * 2) + 'px';
+    /* Og BREDDEN, av samme grunn som høyden: på telefon får panelene
+       `width: auto` og vokser med innholdet (spesialtegnene er femti knapper).
+       Å bare klemme venstrekanten flytter et for bredt panel — det gjør det
+       ikke smalere, og høyrekanten ble liggende under sonen. */
+    panel.style.maxWidth = Math.max(160, box.right - box.left - m * 2) + 'px';
     const a = anchor.getBoundingClientRect();
     const size = panel.getBoundingClientRect();
     const maxLeft = Math.max(box.left + m, box.right - size.width - m);
@@ -18282,12 +18500,28 @@
     noteDocEl.addEventListener('paste', noteOnPaste);
     noteDocEl.addEventListener('keyup', refreshNoteTools);
     noteDocEl.addEventListener('mouseup', refreshNoteTools);
-    // Klikk på en lenke i editoren åpner lenke-panelet — det er der adressen
-    // ses, endres, kopieres og fjernes.
+    /* Klikk på en lenke: i et REDIGERBART notat åpner den lenke-panelet — der
+       adressen ses, endres, åpnes, kopieres og fjernes — mens `Cmd/Ctrl`-klikk
+       går rett ut, som i enhver annen editor. I et SKRIVEBESKYTTET notat er
+       det ingenting å redigere, så et vanlig klikk (og `Enter`/`Mellomrom` på
+       den fokuserbare lenken) åpner den med én gang. */
+    const åpneLenke = (link) => openExternalUrl(link.dataset.url);
     noteDocEl.addEventListener('click', (ev) => {
       const link = ev.target.closest ? ev.target.closest('.note-link') : null;
-      if (link) toggleNoteLinkPanel();
-      else refreshNoteTools();
+      if (!link) { refreshNoteTools(); return; }
+      if (ev.metaKey || ev.ctrlKey || noteDocEl.contentEditable !== 'true') {
+        ev.preventDefault();
+        åpneLenke(link);
+        return;
+      }
+      toggleNoteLinkPanel();
+    });
+    noteDocEl.addEventListener('keydown', (ev) => {
+      if (ev.key !== 'Enter' && ev.key !== ' ' && ev.key !== 'Spacebar') return;
+      const link = ev.target.closest ? ev.target.closest('.note-link') : null;
+      if (!link || noteDocEl.contentEditable === 'true') return;
+      ev.preventDefault();
+      åpneLenke(link);
     });
     noteToolsEl.addEventListener('click', (ev) => {
       const btn = ev.target.closest('[data-cmd]');
@@ -18306,23 +18540,31 @@
     noteToolsEl.addEventListener('mousedown', (ev) => {
       if (ev.target.closest('[data-cmd]')) ev.preventDefault();
     });
+    /* ET TRYKK UTENFOR ET ÅPENT PANEL LUKKER DET. Knappen man åpnet det med er
+       ikke alltid en vei ut: på en kort skjerm (telefon i landskap) legger
+       spesialtegnpanelet seg OVER verktøylinjen, og da er den knappen dekket.
+       Panelknappene selv er unntatt — de veksler, og skal fortsette å gjøre
+       det. `pointerdown` og ikke `click`, så markeringen i dokumentet fortsatt
+       settes av det samme trykket. */
+    noteEditorEl.addEventListener('pointerdown', (ev) => {
+      if (!notePanelsOpen()) return;
+      if (ev.target.closest('.note-panel, .note-tool[data-cmd="link"], .note-tool[data-cmd="symbol"]')) return;
+      closeNotePanels();
+    });
     noteLinkApply.addEventListener('click', applyNoteLink);
     noteLinkRemove.addEventListener('click', removeNoteLink);
     noteLinkCopy.addEventListener('click', copyNoteLink);
+    if (noteLinkOpen) noteLinkOpen.addEventListener('click', openNoteLink);
     noteLinkInput.addEventListener('keydown', (ev) => {
       if (ev.key === 'Enter') { ev.preventDefault(); applyNoteLink(); }
-      else if (ev.key === 'Escape') { ev.preventDefault(); closeNotePanels(); noteDocEl.focus(); }
     });
-    /* Escape lukker et åpent panel først, deretter editoren. Hendelsen stoppes
-       her: dokumentets egen Escape-lytter (`closeTopLayer`) ville ellers lukket
-       hele editoren i det samme trykket som bare skulle lukke panelet. */
-    noteEditorEl.addEventListener('keydown', (ev) => {
-      if (ev.key !== 'Escape') return;
-      ev.stopPropagation();
-      if (noteLinkPanel.hidden && noteSymbolPanel.hidden) { closeNoteEditor(); return; }
-      closeNotePanels();
-      noteDocEl.focus();
-    });
+    /* ESCAPE HAR ÉN STIGE, og det er `closeTopLayer` (den samme systemets
+       tilbakeknapp går i). Editoren hadde tidligere sin egen Escape-lytter i
+       tillegg, og de to trakk i hver sin retning: lenkefeltets lytter lukket
+       panelet, hendelsen boblet videre, og editorens lytter så to lukkede
+       paneler og lukket HELE editoren i det samme trykket. Nå er panelet ett
+       trinn i den felles stigen, så Escape og tilbakeknappen gjør det samme —
+       og gjør det bare én gang. */
     document.addEventListener('selectionchange', () => {
       if (!noteEditorOpen()) return;
       noteTrackRange();
@@ -24978,6 +25220,10 @@
     openNoteEditor, closeNoteEditor, flushNoteSave, runNoteCommand,
     notesIn, noteDocText, noteExcerpt, noteDisplayTitle,
     sanitizeNoteDoc, safeNoteUrl, noteDocFromEl, noteDocIntoEl, emptyNoteDoc,
+    // Appens ENE vei ut (docs/domains-and-urls.md). Eksponert så testen kan
+    // stille den spørsmål et klikk ikke kan svare på — hva den gjør med et
+    // `mailto:` eller et `javascript:` — uten å måtte lese en ny fane.
+    openExternalUrl, noteEditedText,
     /* Livssyklus og koblinger (docs/notater-plan.md). Testene bruker dem både
        til oppsett og til å måle utfallet uten å gå veien om DOM-en. */
     setNoteArchived, deleteNoteObject, restoreNoteObject,

@@ -50,6 +50,13 @@ seg over det siste kortet. Det samme leddet flytter toasten, synk-pillen og
 oppdateringsbanneret opp: de bor i det samme hjørnet av viewportet, og en toast
 oppå søppelkassen ville dekket nøyaktig det man nettopp brukte.
 
+Reserven gjelder **ikke mens notat-editoren står åpen**: bildet dekker foten, så
+det er ingenting å holde klar av — og en pille løftet for en fot ingen ser ville
+svevd midt oppi notatteksten i stedet for å ligge i klaringen nederst. Editoren
+holder til gjengjeld av plass til selve pillen (`--sync-pill-h`), som ligger
+over bildet og skal bli der: den er det eneste stedet «frakoblet» sier fra, og
+det er nettopp mens man skriver man trenger å vite det.
+
 ## Slett ved å DRA objektet i kassen
 
 **Dette er den ene slettegesten** på de fire hierarkinivåene og de tre
@@ -320,6 +327,12 @@ bryter raden i stedet for å presse. Knappen faller ned på sin egen linje
 (fortsatt høyrestilt, uendret berøringsflate), og metadataen legger seg under
 navnet. Er det plass til alt, ligger raden på én linje som før — gulvet måles
 mot radens FAKTISKE bredde, som er modalens, så det trengs ingen breakpoint.
+
+**Metadataen er derimot kort, og skal være det.** Den sier hva slags rad dette
+er («3 lister», «Mappekategori»), ikke hva som står i den. Notatene er det ene
+nivået der metadataen er et UTDRAG av innholdet, og der klippes det kortere enn
+på kortet: med kortets lengde ble raden fire linjer høy på en telefon, og
+arkivets to knapper havnet midt i teksten.
 
 Navnet vises alltid i sin helhet, aldri kappet med ellipsis: raden er nettopp
 der brukeren skal kjenne igjen hva som ble slettet (samme grunn som toasten, se

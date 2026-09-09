@@ -1407,14 +1407,16 @@
                 data-i18n-title="notes.noteMenu" data-i18n-aria-label="notes.noteMenu"></button>
       </div>
     </header>
-    <!-- Lenke-panelet: adressen ses, endres, kopieres og fjernes her. Huskis'
-         UI produserer ingen utgående lenker (docs/domains-and-urls.md), så
-         lenken i et notat er MERKET tekst med adressen i data-url. -->
+    <!-- Lenke-panelet: adressen ses, endres, åpnes, kopieres og fjernes her.
+         Huskis' UI produserer ingen utgående lenker (docs/domains-and-urls.md),
+         så lenken i et notat er MERKET tekst med adressen i data-url — og
+         «Åpne» går gjennom appens ene vei ut (openExternalUrl i app.js). -->
     <div class="note-panel note-link-panel" id="note-link-panel" role="dialog" data-i18n-aria-label="notes.link" hidden>
       <input class="field note-link-input" id="note-link-input" type="text" inputmode="url"
              data-i18n-placeholder="notes.linkPlaceholder" data-i18n-aria-label="notes.linkAddress" />
       <div class="note-panel-actions">
         <button class="btn btn-solid btn-accent btn-small" id="note-link-apply" type="button" data-i18n="notes.linkApply">Bruk</button>
+        <button class="btn btn-ghost btn-small" id="note-link-open" type="button" data-i18n="notes.linkOpen">Åpne</button>
         <button class="btn btn-ghost btn-small" id="note-link-copy" type="button" data-i18n="notes.linkCopy" hidden>Kopier</button>
         <button class="btn btn-ghost btn-small" id="note-link-remove" type="button" data-i18n="notes.linkRemove" hidden>Fjern lenke</button>
       </div>
