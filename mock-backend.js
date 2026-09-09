@@ -668,6 +668,13 @@
   };
   // Typene som HAR lås/unntak, og raden låsen står på.
   var LOCKABLE = { universe: 1, group: 1, card: 1, note_project: 1, note_folder: 1, note: 1 };
+  // Nivået tilgangen kommer FRA, i bestemt form (som public.parent_word).
+  function parentWord(type) {
+    if (type === 'group') return 'området';
+    if (type === 'note_folder') return 'bokhyllen';
+    if (type === 'note') return 'notatboken eller bokhyllen';
+    return 'nivået over';
+  }
   function lockRow(db, type, id) {
     if (type === 'universe') return findU(db, id);
     if (type === 'group') return findG(db, id);
@@ -2291,7 +2298,7 @@
       create_share_invite: function (p) {
         var role = p.p_role || 'member';
         if (!SHAREABLE_TYPES[p.p_type])
-          throw new Error('kan ikke deles (fikk: ' + p.p_type + ')');
+          throw new Error('lister kan ikke deles — de arver mappens tilgang (fikk: ' + p.p_type + ')');
         if (['member', 'owner'].indexOf(role) < 0) throw new Error('ugyldig rolle: ' + role);
         var em = String(p.p_email).toLowerCase().trim();
         if (em === '' || em.indexOf('@') < 0) throw new Error('ugyldig e-postadresse');
@@ -2410,7 +2417,7 @@
           // Tilgang uten direkte rolle kommer OVENFRA — og da er det DER den
           // må fjernes. En forklarende feil, ikke en stille no-op.
           if (canReadAny(db, p.p_type, p.p_id, p.p_user))
-            throw new Error('brukeren har tilgang ovenfra og må fjernes der');
+            throw new Error('brukeren har tilgang via ' + parentWord(p.p_type) + ' og må fjernes der');
           throw new Error('brukeren er ikke medlem her');
         }
         if ((p.p_type === 'universe' || p.p_type === 'note_project') &&
@@ -2460,7 +2467,7 @@
             throw new Error('du er siste eier — gi eierskap til noen andre først');
         } else if (!canLeave(db, p.p_type, p.p_id, uid)) {
           if (canReadAny(db, p.p_type, p.p_id, uid))
-            throw new Error('du har tilgang ovenfra — forlat der i stedet');
+            throw new Error('du har tilgang via ' + parentWord(p.p_type) + ' — forlat der i stedet');
           throw new Error('du har ingen rolle her');
         }
         purgeAccess(db, p.p_type, p.p_id, uid);

@@ -3264,6 +3264,17 @@ returns text[] language sql immutable set search_path = public as $$
   select array['universe', 'group', 'note_project', 'note_folder', 'note']::text[];
 $$;
 
+-- Nivået tilgangen kommer FRA, i bestemt form. Feilmeldingene skal peke på det
+-- stedet brukeren faktisk må gå til, ikke bare si «ovenfra».
+create or replace function public.parent_word(p_type text)
+returns text language sql immutable set search_path = public as $$
+  select case p_type
+    when 'group'       then 'området'
+    when 'note_folder' then 'bokhyllen'
+    when 'note'        then 'notatboken eller bokhyllen'
+    else 'nivået over' end;
+$$;
+
 -- Inviterer en e-postadresse til et OMRÅDE eller en MAPPE.
 --   * p_role = 'member' → vanlig medlemsinvitasjon: eier på nivået, ELLER et
 --     effektivt medlem når invitasjonspolicyen tillater videreinvitasjon.
@@ -3283,7 +3294,9 @@ declare
 begin
   if uid is null then raise exception 'ikke innlogget'; end if;
   if not (p_type = any (public.shareable_types())) then
-    raise exception 'kan ikke deles (fikk: %)', p_type;
+    -- Lister, listepunkter og kategorier arver mappens tilgang og har ingen
+    -- egen medlemsliste — også fra en gammel eller modifisert klient.
+    raise exception 'lister kan ikke deles — de arver mappens tilgang (fikk: %)', p_type;
   end if;
   if p_role not in ('member', 'owner') then raise exception 'ugyldig rolle: %', p_role; end if;
   if em = '' or position('@' in em) = 0 then
@@ -3569,7 +3582,7 @@ begin
     if public.can_read(p_type, p_id, p_user) then
       raise exception using
         errcode = 'PT409',
-        message = 'brukeren har tilgang ovenfra og må fjernes der';
+        message = 'brukeren har tilgang via ' || public.parent_word(p_type) || ' og må fjernes der';
     end if;
     raise exception 'brukeren er ikke medlem her';
   end if;
@@ -3654,7 +3667,7 @@ begin
       if public.can_read(p_type, p_id, uid) then
         raise exception using
           errcode = 'PT409',
-          message = 'du har tilgang ovenfra — forlat der i stedet';
+          message = 'du har tilgang via ' || public.parent_word(p_type) || ' — forlat der i stedet';
       end if;
       raise exception 'du har ingen rolle her';
     end if;
