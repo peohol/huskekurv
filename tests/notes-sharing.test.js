@@ -8,7 +8,8 @@
     2. Delemodalen er den SAMME: medlemsliste med kategorier, invitasjonsfelt,
        rollevelger og «Forlat»/«Slett» etter serverens capabilities
     3. Eier / redaktør / REN LESER: låsen er det som lager leseren, og en leser
-       får verken omdøping, sletting, ＋-knapper eller en skrivbar editor
+       får verken omdøping, sletting, ＋-knapper eller en skrivbar editor —
+       men beholder «Kopier alt»/«Kopier som Markdown», som er lesing
     4. Deling DIREKTE på notatbok og notat: mottakeren ser objektet i den
        virtuelle «Delt med meg»-bokhyllen, og aldri navnet på bokhyllen over
     5. Tilbakekalling: objektet forsvinner ved neste synk, editoren lukkes, og
@@ -302,6 +303,17 @@ async function run(label, viewport, mobile) {
     return !!(b && b.hidden);
   }, projSel);
   log(label + ' 4: … og ＋-knappen er borte', bLåstAdd === true, String(bLåstAdd));
+  /* KOPIERING ER LESING. En ren leser mister verktøylinjen og skriveretten,
+     men skal fortsatt få hele notatet ut av Huskis: «Kopier alt» og «Kopier
+     som Markdown» krever ingen skriverett (docs/notater-plan.md,
+     «Utklippstavlen»). */
+  await p.evaluate(() => window.__huskis.closeNotesNav());
+  await p.waitForTimeout(300);
+  await gotoFolder(p, ids.P, ids.F);
+  const bLåstKopi = await menuRows(p, noteSel);
+  log(label + ' 4: … men «Kopier alt» og «Kopier som Markdown» står igjen — det som kan leses, kan kopieres',
+    bLåstKopi.some((r) => /^Kopier alt$/.test(r)) && bLåstKopi.some((r) => /^Kopier som Markdown$/.test(r)),
+    bLåstKopi.join(' | '));
   // Serveren er autoritativ: et rått skriveforsøk endrer ingenting.
   const bSkriv = await p.evaluate(async (id) => {
     const r = await window.__huskis.client.from('notes')

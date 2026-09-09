@@ -39,7 +39,8 @@
    17. Tegnreglene « - »→« – », «...»→«…», « * »→« · » — og at de IKKE tar
        «e-post», «2*3» eller en bindestrek først på linjen
    18. contenteditable: lister lages/avsluttes, Enter/Backspace rundt
-       overskrifter gir gyldig struktur, innlimt markup blir tekst
+       overskrifter gir gyldig struktur, og markup limt inn som REN TEKST blir
+       stående som tekst (utklippstavlen ellers: tests/notes-clipboard.test.js)
    19. Idéer og drakt finnes i editoren, og tilbaketrykket tar modalen over
        editoren først
    20. Spesialtegn-panelet forankres under knappen, innenfor skjermen — og et

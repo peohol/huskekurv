@@ -432,8 +432,14 @@ appen (`.obj-menu-btn` → `#obj-menu`), med de radene notatsiden faktisk har:
 | 4 | **Lås for redigering** / **Gjør unntak** | alle tre, når objektet er delt og man kan styre låsen |
 | 5 | **Forlat …** | alle tre, når man kan forlate ([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14) |
 | 6 | **Koblinger** | alle tre — åpner koblingsmodalen, med antallet som hint |
-| 7 | **Arkiver** / **Hent ut av arkivet** | alle tre, ved redigeringsrett |
-| 8 | **Slett …** | alle tre, ved sletterett (til søppelkassen, i rødt og sist) |
+| 7 | **Kopier alt** | bare notatet — hele notatet til utklippstavlen, med formatering |
+| 8 | **Kopier som Markdown** | bare notatet — hele notatet som Markdown |
+| 9 | **Arkiver** / **Hent ut av arkivet** | alle tre, ved redigeringsrett |
+| 10 | **Slett …** | alle tre, ved sletterett (til søppelkassen, i rødt og sist) |
+
+De to kopieringsradene krever ingen skriverett: kopiering er lesing, så de står
+også i et skrivebeskyttet notat, der verktøylinjen er borte
+([`notater-plan.md`](notater-plan.md), «Utklippstavlen»).
 
 Notatet har menyen både på kortet og i editorens verktøylinje (`#note-menu-btn`),
 så et åpent notat ikke er en blindvei. **Deling ligger i den vanlige menyen på

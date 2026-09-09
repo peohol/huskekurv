@@ -67,7 +67,7 @@ foten listefanen har for sin kasse; begge er beskrevet i
 
 Notatkortet har den SAMME menyknappen som resten av appen (tre prikker,
 `.obj-menu-btn` → `#obj-menu`): der ligger «Endre navn», «Flytt», «Koblinger»,
-«Arkiver» og «Slett». Ingen egen popover-type ble innført —
+«Kopier alt», «Kopier som Markdown», «Arkiver» og «Slett». Ingen egen popover-type ble innført —
 [`menus.md`](menus.md) er autoritativ for radene. Har notatet koblinger, står
 det en liten chip med antallet i kortkroppen, under utdraget.
 
@@ -129,6 +129,99 @@ Første versjon skal støtte:
 Aktuelle editorfunksjoner og UX-mønstre kan gjenbrukes fra `peohol/mdeditz`, men
 Huskis skal ikke få unødvendig teknisk kompleksitet eller en egen tung editor-
 arkitektur dersom enklere gjenbruk er tilstrekkelig.
+
+## Utklippstavlen
+
+Et notat skal kunne flyttes HELT ut av Huskis og inn i et annet program — og
+tilbake igjen — uten å miste formatering. Utklippstavlen er veien, ikke filer:
+den finnes overalt, den krever ingen nedlasting, og den treffer Word, Outlook,
+Google Docs, Markdown-editorer og ethvert riktekstfelt i en nettleser.
+
+Notatets objektmeny har derfor to rader, på kortet OG inne i editoren:
+
+- **«Kopier alt»** — hele notatet, uavhengig av hva som er markert;
+- **«Kopier som Markdown»** — det samme dokumentet som ryddig Markdown.
+
+Begge er LESING, og krever ingen skriverett: de står også i et skrivebeskyttet
+notat, der verktøylinjen er borte.
+
+### Formatene som skrives
+
+«Kopier alt» skriver **`text/html` og `text/plain` i samme skriving**, slik at
+mottakeren velger selv. HTML-en er ren og portabel — `<h1>`–`<h3>`, `<p>`,
+`<strong>`, `<em>`, `<u>`, `<sup>`, `<sub>`, `<ul>`/`<ol>`/`<li>`, `<hr>`,
+`<br>` og `<a href>` — og ingenting annet. Ingen klasser, ingen id-er, ingen
+`data-*`, ingen metadata: den bygges av den STRUKTURERTE modellen, ikke av
+editorens DOM, og modellen inneholder ikke noe av det.
+
+Notatets tittel følger med som dokumentets første `<h1>` (og som første linje i
+ren tekst / `# ` i Markdown). Et notat uten tittel starter rett på innholdet.
+
+Om `<a href>` i clipboard-HTML-en: se
+[`domains-and-urls.md`](domains-and-urls.md) → «Ankeret som forlater appen».
+Kort sagt: strengen går rett til utklippstavlen og settes aldri inn i Huskis'
+eget DOM, og adressen normaliseres av `safeNoteUrl()` først — en adresse med et
+skjema som kan kjøre kode blir aldri en lenke, bare tekst.
+
+### Markdown
+
+`noteDocToMarkdown()` skriver dokumentet linje for linje: `#`/`##`/`###` for
+overskriftene, `**fet**`, `*kursiv*`, `-` for punktlister, `1.`, `2.`, `3.` for
+nummererte, `---` for skillelinjen og `[tekst](adresse)` for lenker. Tegn som
+ellers ville betydd noe i Markdown escapes, og et linjeskift inne i en blokk
+blir et hardt linjeskift (to mellomrom).
+
+Tre av Huskis' markeringer har ingen universell Markdown-form. De skrives som
+den **inline-HTML-en Markdown selv tillater** — `<u>`, `<sup>`, `<sub>` — fordi
+den er lesbar for et menneske, forstås av Pandoc, GitHub og de fleste editorer,
+og aldri mister tekst. Gjennomstreking finnes ikke i modellen og skrives derfor
+ikke.
+
+### Innliming
+
+Fremmed markup havner **aldri** i editorens DOM. Den tolkes i et DØDT dokument
+(`DOMParser`, uten browsing context: ingen skript kjører, ingen ressurser
+lastes), oversettes til Huskis' modell, og går gjennom `sanitizeNoteDoc()` før
+noe settes inn. Det som settes inn er modellen bygget opp igjen med appens
+EGNE noder.
+
+Underveis:
+
+- **Word** og **Google Docs** leses på formateringen de faktisk skriver:
+  `<b>`/`<i>`/`<u>` OG inline-stilene `font-weight`, `font-style`,
+  `text-decoration` og `vertical-align`. Den NÆRMESTE definisjonen vinner, så
+  Google Docs' innpakning `<b style="font-weight:normal">` ikke gjør hele
+  utklippet fett. Words listeavsnitt (`mso-list`) blir en ekte liste, og de
+  falske kulepunkttegnene forsvinner.
+- **Struktur som ikke finnes i modellen** degraderes trygt: nøstede lister
+  flates til ett nivå, `h4`–`h6` blir `h3`, en tabellrad blir ett avsnitt med
+  cellene skilt av tabulator, og ukjente tagger blir avsnitt eller tekst.
+- **Alt farlig faller bort:** `<script>`, `<style>`, `<iframe>`, `<img>`,
+  `on*`-attributter, fremmed CSS og klassenavn — og `javascript:`/`data:`-
+  adresser mister lenken, men beholder teksten.
+- **Ren tekst** limes inn som tekst, som før. Ser den ut som Markdown, tolkes
+  kodene Huskis selv skriver ut; ellers står tegnene som de er (`2*3` er
+  fortsatt `2*3`).
+
+Selve innsettingen er nettleserens egen (`insertHTML`) med markup Huskis har
+bygget fra sin egen modell — den deler blokken markøren står i, flytter
+markøren og legger innlimingen på angre-stabelen. Uten støtte for kommandoen
+faller innlimingen ned på ren tekst.
+
+### Når plattformen ikke kan alt
+
+Utklippstavlen er ulik i hver nettleser og hver WebView, så kopieringen har tre
+trinn: `ClipboardItem` (begge formatene), den gamle `copy`-hendelsen (også
+begge), og til slutt `writeText` (ren tekst). Toasten sier hva som faktisk
+skjedde — «Notatet er kopiert.» eller at formateringen ikke fulgte med. En
+plattformbegrensning gjør aldri funksjonen ubrukelig.
+
+### Filer
+
+Import og eksport av notater som **filer** (JSON, PDF, DOCX) er IKKE prioritert.
+Utklippstavlen dekker det brukeren faktisk trenger — å få notatet ut i et annet
+program og inn igjen — uten et nytt dokumentformat, en nedlastingsflyt eller en
+filvelger å vedlikeholde.
 
 ## Lagring og synk
 
@@ -512,6 +605,8 @@ Omfang:
 Sanntids samarbeid i samme dokument inngår ikke. Import/eksport av notater som
 filer inngår heller ikke: det er en faglig uavhengig funksjon med egne
 produktspørsmål, og den viste seg ikke å være nødvendig for robusthetsarbeidet.
+(Behovet den skulle dekke — å få notatet inn og ut av andre programmer — er nå
+dekket av utklippstavlen; se PR 4 og «Utklippstavlen».)
 
 Status: **gjennomført**.
 
@@ -561,6 +656,43 @@ uten meny, radutdraget), `tests/system-back.test.js` (panelet som eget trinn i
 stigen) og `tests/safe-area.test.js` (editoren og panelene mot alle fire
 kantene, og festet til det synlige feltet).
 
+### PR 4 — Kopiering og innliming mellom Huskis og andre programmer
+
+**Mål:** Få hele notatet ut av Huskis og inn i Word, Outlook, Google Docs, en
+Markdown-editor eller et hvilket som helst riktekstfelt — og tilbake igjen —
+uten å miste formatering.
+
+Omfang: «Kopier alt» (`text/html` + `text/plain`), «Kopier som Markdown», og en
+gjennomgang av innlimingen den andre veien. Filimport/-eksport inngår ikke, og
+er ikke lenger et planlagt neste steg — se «Utklippstavlen» → «Filer».
+
+Status: **gjennomført**. Hvordan det virker står i «Utklippstavlen», som er den
+autoritative beskrivelsen; her er bare det som er verdt å vite om VALGENE:
+
+- **Konverteringene er fire, hver med én retning**: dokument → HTML, dokument →
+  ren tekst, dokument → Markdown, og fremmed HTML/tekst → dokument. Alle går ut
+  fra den strukturerte modellen. Editorens DOM er verken lagrings- eller
+  eksportformat, og det er grunnen til at ingenting Huskis-internt kan lekke ut:
+  klassene, id-ene og `data-*`-attributtene finnes ikke i det som serialiseres.
+- **Ett anker, ett sted.** Clipboard-HTML-en har `<a href>` fordi Word og
+  Google Docs trenger det. Strengen settes aldri inn i appens eget DOM, og
+  tekstvakten i `tests/capacitor-android.test.js` fritar nøyaktig denne ene
+  forekomsten — og KREVER at den finnes, som fritaket for `window.open`
+  ([`domains-and-urls.md`](domains-and-urls.md)).
+- **Innsettingen ved innliming er nettleserens egen** (`insertHTML`), med markup
+  Huskis har bygget fra sin egen modell. Det er derfor angre tar hele
+  innlimingen i én operasjon, og derfor blokken markøren står i deles riktig.
+- **Ingen Markdown-motor.** Innlimt tekst tolkes bare når den faktisk ser ut som
+  Markdown, og bare på de kodene Huskis selv skriver ut.
+
+Dekket av `tests/notes-clipboard.test.js` (ny: begge formatene, den semantiske
+markupen, at ingenting internt lekker, farlige adresser, Markdown-formen,
+randtilfellene, fallback-trinnene, innliming fra Word/Google Docs/rotete
+markup/skript, og en EKTE kopier → lim inn-runde i et vanlig riktekstfelt), av
+en ny sjekk i `tests/notes-sharing.test.js` (en ren leser beholder begge
+kopieringsradene) og av de to nye påstandene i `tests/capacitor-android.test.js`
+(ankeret finnes, står i `noteHtmlAnchor`, og normaliseres først).
+
 ## Prinsipper for gjennomføring
 
 - Bygg vertikale leveranser som kan testes end-to-end.
@@ -591,6 +723,7 @@ databasekontrakten; døp dem ikke om.
 | PR 2 — Livssyklus + integrasjon | **Gjennomført** |
 | PR 3A — Deling og rettigheter | **Gjennomført** |
 | PR 3B — Robusthet og polering | **Gjennomført** |
+| PR 4 — Kopiering og innliming | **Gjennomført** |
 
 **Leveranseplanen er gjennomført.** Notatene er en hel del av appen: de kan
 deles på alle tre nivåene med den samme serverhåndhevede modellen som listene,
@@ -600,11 +733,12 @@ fokus, berøringsflater, den sikre sonen og systemets tilbakeknapp.
 
 **Det som gjenstår er egne leveranser, ikke restarbeid:**
 
-- **Import/eksport av notater som filer.** En faglig uavhengig funksjon med
-  egne produktspørsmål (formater, navngiving, hva som skjer med koblinger og
-  deling). Datamodellen er forberedt — dokumentet er strukturert og kan
-  serialiseres — men ingenting er implementert.
 - **Sanntids samskriving i samme notat.** Konfliktmodellen er per DOKUMENT, som
   planen sier; en CRDT-editor er et eget prosjekt.
 - `object_links` kan bære flere typer per side enn de seks som finnes i dag —
   men bare de seks er koblingsbare nå.
+
+**Import/eksport av notater som filer er IKKE et neste steg.** Utklippstavlen
+dekker det brukeren faktisk trenger — notatet ut i et annet program og inn igjen
+— og en filflyt ville lagt til et dokumentformat, en nedlasting og en filvelger
+uten å løse mer. Se «Utklippstavlen» → «Filer».

@@ -174,6 +174,20 @@
                                  'Select the text the link should cover first.'],
     'notes.noteMenu':   ['Notatmeny', 'Note menu'],
 
+    /* Utklippstavlen (docs/notater-plan.md). «Kopier alt» legger notatet på
+       utklippstavlen med formatering der plattformen støtter det, og som ren
+       tekst der den ikke gjør det — tilbakemeldingen sier hvilken av delene
+       som faktisk skjedde. */
+    'notes.copyAll':    ['Kopier alt', 'Copy everything'],
+    'notes.copyAllHint': ['Hele notatet, med formatering', 'The whole note, with formatting'],
+    'notes.copyMarkdown': ['Kopier som Markdown', 'Copy as Markdown'],
+    'notes.copyMarkdownHint': ['Ren tekst med Markdown-koder', 'Plain text with Markdown codes'],
+    'notes.copied':     ['Notatet er kopiert.', 'The note was copied.'],
+    'notes.copiedMarkdown': ['Markdown er kopiert.', 'The Markdown was copied.'],
+    'notes.copiedPlain': ['Notatet er kopiert som ren tekst — denne nettleseren kopierer ikke formatering.',
+                          'The note was copied as plain text — this browser cannot copy formatting.'],
+    'notes.copyFailed': ['Kunne ikke kopiere notatet.', 'Could not copy the note.'],
+
     /* Livssyklus: arkiv og søppelkasse for alle tre nivåene
        (docs/notater-plan.md). «Arkiver» legger til side; «Slett» legger i
        søppelkassen, som fortsatt kan hentes fra. */
