@@ -16185,14 +16185,27 @@
      Ingen full Markdown-motor: nettopp de kodene Huskis selv skriver ut, og
      bare når teksten FAKTISK ser ut som Markdown. Ellers ville en stjerne i et
      vanlig avsnitt begynt å bety noe. */
-  const NOTE_MD_SIGNS = /(?:^|\n)[ ]{0,3}(?:#{1,6} |[-*+] |\d+[.)] |> |\u0060{3}|(?:-{3,}|\*{3,}|_{3,})[ ]*(?:\n|$))|\[[^\]\n]*\]\([^)\s]+\)|\*\*[^*\n]+\*\*|__[^_\n]+__|~~[^~\n]+~~|<\/(?:u|sup|sub)>/;
+  /* KURSIV ALENE teller også — ellers ville et avsnitt hvis eneste formatering
+     er kursiv (nettopp det `noteDocToMarkdown` skriver) blitt limt inn med
+     stjernene stående. Men bare den VELFORMEDE formen: markøren må åpne på et
+     ordskille og lukke på et, slik at «2*3 = 6 og 4*5» fortsatt er tall og
+     stjerner. `\1` binder de to markørene sammen, så `*a_` ikke teller. */
+  const NOTE_MD_ITALIC = '(?:^|[\\s(\\[{«"\'])([*_])(?![\\s*_])[^\\n]*?[^\\s\\n*_]\\1(?=$|[\\s.,;:!?)\\]}»"\'])';
+  const NOTE_MD_SIGNS = new RegExp(
+    '(?:^|\\n)[ ]{0,3}(?:#{1,6} |[-*+] |\\d+[.)] |> |\u0060{3}|(?:-{3,}|\\*{3,}|_{3,})[ ]*(?:\\n|$))'
+    + '|\\[[^\\]\\n]*\\]\\([^)\\s]+\\)|\\*\\*[^*\\n]+\\*\\*|__[^_\\n]+__|~~[^~\\n]+~~|<\\/(?:u|sup|sub)>'
+    + '|' + NOTE_MD_ITALIC);
   const noteLooksLikeMarkdown = (text) => NOTE_MD_SIGNS.test(String(text == null ? '' : text));
 
   // Tegnene en Markdown-kode kan begynne med (\u0060 = bakkevendt apostrof).
   const NOTE_MD_START = /[\\[*_~\u0060<]/;
   const NOTE_MD_TOKENS = [
     ['esc', /\\([\\`*_{}[\]()#+\-.!~<>|])/y],
-    ['link', /\[((?:[^[\]\\]|\\.)*)\]\(\s*<?([^\s)<>]*)>?(?:\s+"[^"]*")?\s*\)/y],
+    /* Lenkemålet tåler PARENTESER: `noteDocToMarkdown` skriver dem som `\(`
+       og `\)`, og en adresse som Wikipedias `…/A_(B)` bærer dem balansert.
+       Uten begge formene stoppet målet ved den første `)`, og resten av
+       adressen ble stående som tekst. */
+    ['link', /\[((?:[^[\]\\]|\\.)*)\]\(\s*<?((?:[^\s()<>\\]|\\.|\([^\s()<>]*\))*)>?(?:\s+"[^"]*")?\s*\)/y],
     ['b', /\*\*(\S(?:[\s\S]*?\S)?)\*\*/y],
     ['b', /__(\S(?:[\s\S]*?\S)?)__/y],
     ['i', /\*(\S(?:[^*\n]*?\S)?)\*/y],
@@ -16208,6 +16221,9 @@
     ['i', /<(?:i|em)>([\s\S]*?)<\/(?:i|em)>/iy],
     ['auto', /<((?:https?|mailto):[^>\s]+)>/iy],
   ];
+  // Motstykket til `noteMdUrl`: en eskapert parentes i et lenkemål er tegnet,
+  // ikke skråstreken foran det.
+  const noteMdUnesc = (s) => String(s).replace(/\\([()\\])/g, '$1');
   function noteMdInlineRuns(src, base, depth) {
     base = base || {};
     depth = depth || 0;
@@ -16235,7 +16251,7 @@
       }
       let neste = base;
       if (kind === 'link') {
-        const u = safeNoteUrl(hit[2]);
+        const u = safeNoteUrl(noteMdUnesc(hit[2]));
         // En lenke uten brukbar adresse mister lenken, aldri teksten.
         neste = u ? Object.assign({}, base, { url: u }) : base;
       } else if (kind !== 'plain') {
@@ -16394,7 +16410,12 @@
           'text/html': new Blob([html], { type: 'text/html' }),
           'text/plain': new Blob([text], { type: 'text/plain' }),
         });
-        return nav.write([item]).then(() => 'rich', () => noteClipboardPlain(text));
+        /* En AVVIST skriving er ikke det samme som «kan ikke riktekst»:
+           tillatelsen kan mangle, eller nettleseren kan nekte akkurat den
+           typen. Den gamle veien tar begge formatene og virker ofte likevel,
+           så den prøves FØR vi gir opp formateringen. */
+        return nav.write([item]).then(() => 'rich',
+          () => (noteClipboardLegacy(html, text) ? 'rich' : noteClipboardPlain(text)));
       } catch (e) { /* faller ned et trinn */ }
     }
     if (html && noteClipboardLegacy(html, text)) return Promise.resolve('rich');

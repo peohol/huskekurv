@@ -24,13 +24,16 @@
        Unicode, og et langt dokument
     8. Fallback: uten `ClipboardItem` (og uten den gamle kopi-veien) faller
        kopieringen ned på ren tekst, og toasten sier fra
+   8c. … men en AVVIST `ClipboardItem`-skriving prøver den gamle veien først,
+       så formateringen ikke tapes der begge finnes
    8b. Kopiering tar med det autosaven har KØET, men ikke rukket å skrive
     9. Innliming fra Word, Google Docs, vanlig riktekst, lister, overskrifter,
        lenker og rotete/nøstet markup blir et GYLDIG Huskis-dokument
    10. Innliming er trygg: skript, `onclick`, `javascript:`-lenker, fremmed CSS
        og ukjent styling finnes ikke igjen — verken i dokumentet eller i DOM-et
    11. Markdown limt inn som ren tekst blir struktur; vanlig tekst blir det
-       IKKE (en stjerne i et avsnitt betyr fortsatt en stjerne)
+       IKKE (en stjerne i et avsnitt betyr fortsatt en stjerne) — og det Huskis
+       selv skrev kommer hel tilbake, kursiv alene og parenteser i adressen med
    12. Angre tar hele innlimingen tilbake i én operasjon
 
   Kjøres på BÅDE desktop- og mobil-viewport: kopieringen skjer fra en meny som
@@ -448,6 +451,27 @@ async function run(navn, viewport, touch) {
     /Tittelen på notatet/.test(fall.tekst) && /punkt én/.test(fall.tekst),
     JSON.stringify({ hvordan: fall.hvordan, toast: fall.toast }));
 
+  /* ---------- 8c. En AVVIST riktekst-skriving prøver den gamle veien ----------
+     `ClipboardItem` finnes, men skrivingen avvises (manglende tillatelse, en
+     type nettleseren ikke tar). Da skal formateringen ikke være tapt: den
+     gamle `copy`-veien tar begge formatene, og prøves før vi gir opp. */
+  const avvist = await p.evaluate(async (id) => {
+    const ekte = navigator.clipboard.write;
+    navigator.clipboard.write = () => Promise.reject(new Error('nekta'));
+    let hvordan = '';
+    try { hvordan = await window.__huskis.copyNoteAll(id); }
+    finally { navigator.clipboard.write = ekte; }
+    const ut = {};
+    for (const it of await navigator.clipboard.read()) {
+      for (const t of it.types) ut[t] = await (await it.getType(t)).text();
+    }
+    return { hvordan, typer: Object.keys(ut).sort().join(','), html: ut['text/html'] || '' };
+  }, id);
+  log(navn + ' 8c: en avvist ClipboardItem-skriving faller til den gamle veien, ikke til ren tekst',
+    avvist.hvordan === 'rich' && /text\/html/.test(avvist.typer) &&
+    /<strong>fet<\/strong>/.test(avvist.html),
+    JSON.stringify({ hvordan: avvist.hvordan, typer: avvist.typer }));
+
   /* ---------- 8b. Kopiering tar det som står på skjermen NÅ ----------
      Autosaven har en pause på et halvsekund. Kopieres notatet i mellomtiden,
      skal den siste setningen likevel være med: `copyNoteAll` tømmer køen
@@ -576,11 +600,43 @@ async function run(navn, viewport, touch) {
   /* Vanlig tekst limes inn som FØR: som tekst, der markøren står. Stjerner,
      bindestreker og tall blir stående som de tegnene de er. (Linjeskiftet blir
      en ny blokk — det er nettleserens egen `insertText`, uendret.) */
+  /* Rundturen: det Huskis SKRIVER som Markdown skal komme hel tilbake når det
+     limes inn igjen — også når den eneste formateringen er kursiv, og også når
+     adressen bærer parenteser. Begge sto på grensen mellom «ser ut som
+     Markdown» og «er vanlig tekst». */
+  const rundtur2 = await p.evaluate((doc) => {
+    const H = window.__huskis;
+    const md = H.noteDocToMarkdown(doc, '');
+    return { md, erMd: H.noteLooksLikeMarkdown(md), tilbake: H.noteDocFromMarkdown(md).blocks };
+  }, { v: 1, blocks: [
+    { t: 'p', c: [{ s: 'En ' }, { s: 'kursiv', i: 1 }, { s: ' setning.' }] },
+    { t: 'p', c: [{ s: 'Se ' }, { s: 'artikkelen', url: 'https://no.wikipedia.org/wiki/Tre_(plante)' }, { s: '.' }] },
+  ] });
+  log(navn + ' 11: Markdown Huskis selv skrev kommer hel tilbake (kursiv alene, adresse med parenteser)',
+    rundtur2.erMd &&
+    JSON.stringify(rundtur2.tilbake[0].c) === JSON.stringify([{ s: 'En ' }, { s: 'kursiv', i: 1 }, { s: ' setning.' }]) &&
+    rundtur2.tilbake[1].c.some((r) => r.url === 'https://no.wikipedia.org/wiki/Tre_(plante)') &&
+    rundtur2.tilbake[1].c.map((r) => r.s).join('') === 'Se artikkelen.',
+    JSON.stringify(rundtur2));
+
   const vanlig = await limInn(p, '', 'Et vanlig avsnitt med 2*3 = 6 og en e-post.\nAndre linje.');
   log(navn + ' 11: vanlig tekst blir IKKE tolket som Markdown',
     GYLDIG(vanlig.typer) && !/h1|h2|h3|ul|ol|hr/.test(vanlig.typer) &&
     /2\*3 = 6/.test(vanlig.tekst) && /Andre linje/.test(vanlig.tekst),
     vanlig.typer + ' — ' + JSON.stringify(vanlig.tekst));
+
+  // Grensen selv: hva signaturen sier ja og nei til.
+  const grense = await p.evaluate(() => {
+    const md = window.__huskis.noteLooksLikeMarkdown;
+    return {
+      ja: ['En *kursiv* setning.', 'En _kursiv_ setning.', '*Kursiv* først.', '# Overskrift', '- ett']
+        .every(md),
+      nei: ['Et avsnitt med 2*3 = 6 og 4*5.', 'bruk snake_case_navn her', 'helt vanlig tekst',
+        '<b>limt</b> tekst', '*a_'].some(md),
+    };
+  });
+  log(navn + ' 11: signaturen kjenner kursiv alene, men ikke ganging eller understrek i et navn',
+    grense.ja && !grense.nei, JSON.stringify(grense));
 
   /* ---------- 12. Angre tar hele innlimingen ---------- */
   const angret = await p.evaluate(async () => {
