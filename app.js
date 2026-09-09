@@ -7252,9 +7252,16 @@
       reverseRatio: Math.max(DND_HYST.swapRatio, tak * DND_REACH),
     });
   }
+  /* AVGJØRELSEN, ETT STED. Både sorteringen, proben og testen kaller denne
+     ene funksjonen, så det som måles ER det som kjøres. Ren: den leser bare
+     tilstanden den får, og har ingen bivirkning — derfor kan en test mate den
+     en tilstand med valgt klokke og kreve nøyaktig svar. */
+  function dndSortAdmits(tilstand) {
+    return !!tilstand && Smett.admitsSwap(tilstand, dndHyst(tilstand));
+  }
   function dndSortCollision(input) {
     const tilstand = dndSortTilstand(input.droppable, input.dragOperation);
-    if (!tilstand || !Smett.admitsSwap(tilstand, dndHyst(tilstand))) return null;
+    if (!dndSortAdmits(tilstand)) return null;
     const d = Math.hypot(tilstand.senter.dx, tilstand.senter.dy);
     return {
       id: input.droppable.id,
@@ -7279,7 +7286,7 @@
       if (!t) return null;
       const h = dndHyst(t);
       return { ratio: t.ratio, crossRatio: t.crossRatio, reversing: t.reversing,
-        sinceSwapMs: t.sinceSwapMs, admits: Smett.admitsSwap(t, h),
+        sinceSwapMs: t.sinceSwapMs, admits: dndSortAdmits(t),
         maks: t.maks, lockMs: h.reverseLockMs, reverseRatio: h.reverseRatio,
         swapRatio: h.swapRatio };
     }
@@ -24981,8 +24988,11 @@
     get notesNavCardBoard() { return notesNavCardBoard; },
     get notesNavRowBoard() { return notesNavRowBoard; },
     // Sorteringens hysterese-tilstand for ETT mål, lest direkte. Se
-    // `dndSortProbe`: låsen kan ikke observeres av DOM-en.
+    // `dndSortProbe`: låsen kan ikke observeres av DOM-en. `dndSortAdmits` er
+    // selve avgjørelsen sorteringen bruker, ren og med klokken i tilstanden,
+    // så tidslåsen kan kreves nøyaktig uten å måle ekte pekertiming.
     dndSortProbe,
+    dndSortAdmits,
     openAccount, closeAccount,
     canonical, reconcile, emptyDoc, docFromMyState, contentDocFromMy, applyMyDoc, cloudCycle,
     isSchemaMismatch, isTombstoneReject, isNetworkError, tombIds,

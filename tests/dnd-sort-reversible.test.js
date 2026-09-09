@@ -13,13 +13,18 @@
     1. To notater med bevisst svært ulik kompakt form (tittel OG utdrag).
     2. Løft det SMALE/LAVE: A→B→A i ett sammenhengende drag.
     3. Løft det BREDE/HØYE: samme, motsatt vei.
-    4. REVERSERINGSLÅSEN, lest direkte fra tilstanden (`dndSortProbe`).
-       Hysteresen er Huskis' egen nå, ikke Smetts plugin, så den må voktes for
-       seg. Det avgjørende leddet er at naboen i det hele tatt KJENNES IGJEN
-       som reversering: 104 ms-regresjonen var nettopp at hukommelsen ble
-       overskrevet av kolonne-mål, så `reversing` sto usant og låsen forsvant
-       stille. I tillegg påstås låsens kontrakt — bytte tilbake krever både at
-       tiden har løpt og at overlappet er over den høyere terskelen.
+    4. REVERSERINGSLÅSEN, i to ledd som svarer på hver sin fare.
+       a) HUKOMMELSEN, målt i et ekte drag (`dndSortProbe`): kjennes naboen
+          igjen som reversering etter byttet? 104 ms-regresjonen var nettopp
+          at kolonne-mål overskrev hukommelsen, så `reversing` sto usant og
+          låsen forsvant stille.
+       b) SELVE LÅSEN, med klokken satt i tilstanden (`dndSortAdmits`, den
+          samme funksjonen sorteringen kjører). Ekte pekertiming kan ikke
+          fremtvinge et avslag på under 300 ms — én CDP-berøring pluss en
+          avlesning tar lengre tid enn det på touch — så tiden mates inn i
+          stedet. Da kan kravet være eksakt: reversering innenfor vinduet
+          AVVISES, utenfor GODTAS når overlappet holder, og en senket
+          retur-terskel (uoppnåelig tak) endrer ikke tiden.
     5. Terskelen står: en liten bevegelse bytter fortsatt ingenting.
     6. `pos` etter slippet stemmer med rekkefølgen på skjermen.
 
@@ -28,7 +33,7 @@
   forhåndsvisningen tilbake til utgangspunktet, som er nøyaktig den samme
   rekkefølgen et fullført bytte tilbake ville gitt. De to er derfor umulige å
   skille utenfra. De funksjonelle sjekkene (2 og 3) venter derfor låsen ut der
-  returen skal skje, mens sjekk 4 leser tilstanden direkte.
+  returen skal skje, mens sjekk 4 går rett på avgjørelsen.
 
   Kjøres på desktop og touch. Notatfanen er aldri låst til én akse
   (`sideTargets`), så begge pekertypene måler den samme sorteringen.
@@ -221,24 +226,60 @@ async function run(label, viewport, touch) {
     await p.waitForTimeout(500);
     return { byttet, iLåsen, etterLåsen };
   })();
-  log(label + ' 4: naboen kjennes igjen som REVERSERING etter byttet',
+  log(label + ' 4a: naboen kjennes igjen som REVERSERING etter byttet',
     !!lås.iLåsen && lås.iLåsen.reversing === true, JSON.stringify(lås.iLåsen));
-  /* … OG DA GJELDER LÅSENS EGEN KONTRAKT: et bytte tilbake godtas bare når
-     BEGGE leddene er oppfylt — låsen utløpt OG overlappet over den høyere
-     terskelen. Påstanden er formulert som kontrakten, ikke som et bestemt
-     tidspunkt: én CDP-berøring pluss en avlesning tar lengre tid enn de 300 ms
-     på touch, så et krav om å lese INNENFOR vinduet ville vært umulig å
-     oppfylle der uten å måle noe annet enn koden. */
-  const kontrakt = (t) => !!t && t.admits === (t.sinceSwapMs >= t.lockMs && t.ratio >= t.reverseRatio);
-  log(label + ' 4: … og låsens kontrakt holder: både tid OG overlapp må til',
-    kontrakt(lås.iLåsen), JSON.stringify(lås.iLåsen));
-  /* ETTER låsen er det overlappet alene som avgjør, mot den HØYERE terskelen.
-     Påstanden er kontrakten, ikke et bestemt tall: hvor stort overlappet blir
-     på akkurat dette punktet avhenger av kortenes høyder, og de er ikke like
-     på de to viewportene. */
-  log(label + ' 4: … mens overlappet ALENE avgjør når låsen har løpt ut',
-    !!lås.etterLåsen && lås.etterLåsen.sinceSwapMs >= lås.etterLåsen.lockMs
-    && kontrakt(lås.etterLåsen), JSON.stringify(lås.etterLåsen));
+  log(label + ' 4a: … og hukommelsen holder mens pekeren står stille',
+    !!lås.etterLåsen && lås.etterLåsen.reversing === true
+    && lås.etterLåsen.sinceSwapMs > lås.iLåsen.sinceSwapMs,
+    JSON.stringify({ i: lås.iLåsen && lås.iLåsen.sinceSwapMs,
+      etter: lås.etterLåsen && lås.etterLåsen.sinceSwapMs }));
+  /* DEN EKTE GEOMETRIEN, MED KLOKKEN SATT. Samme tilstand som ble målt i
+     draget over, bare med tiden byttet ut: så lenge vi er innenfor vinduet
+     skal returen avvises uansett hvor godt overlappet er. Uten låsen ville
+     dette svaret vært sant. */
+  const settTid = async (t, ms) => p.evaluate(
+    ([s, n]) => window.__huskis.dndSortAdmits(Object.assign({}, s, { sinceSwapMs: n })),
+    [t, ms]);
+  const ekteIVinduet = lås.iLåsen
+    ? await settTid(Object.assign({}, lås.iLåsen, { ratio: 1, crossRatio: 1 }),
+      lås.iLåsen.lockMs - 1)
+    : null;
+  log(label + ' 4b: ekte geometri + FULLT overlapp INNENFOR vinduet avvises',
+    ekteIVinduet === false, JSON.stringify({ lockMs: lås.iLåsen && lås.iLåsen.lockMs,
+      admits: ekteIVinduet }));
+
+  /* SELVE LÅSEN, punkt for punkt. `dndSortAdmits` er den samme funksjonen
+     `dndSortCollision` kjører, og den er ren: tilstanden inn, svaret ut. Da
+     kan tiden settes eksakt, og kravet blir deterministisk på begge
+     pekertypene — det var nettopp det ekte touch-timing ikke klarte. */
+  const admit = (t) => p.evaluate((s) => window.__huskis.dndSortAdmits(s), t);
+  const grunn = { crossRatio: 1, maks: 1 };
+  const saker = [
+    ['reversering med rikelig overlapp AVVISES innenfor 300 ms',
+      { ratio: 0.9, reversing: true, sinceSwapMs: 299 }, false],
+    ['reversering på grensen (299,9 ms) avvises fortsatt',
+      { ratio: 1, reversing: true, sinceSwapMs: 299.9 }, false],
+    ['reversering GODTAS etter 300 ms når overlappet er over 0,5',
+      { ratio: 0.51, reversing: true, sinceSwapMs: 301 }, true],
+    ['… men ikke med for lite overlapp, selv lenge etterpå',
+      { ratio: 0.49, reversing: true, sinceSwapMs: 5000 }, false],
+    ['et FØRSTE bytte trenger bare 0,2, og venter ikke',
+      { ratio: 0.21, reversing: false, sinceSwapMs: 0 }, true],
+    ['… men ikke under 0,2',
+      { ratio: 0.19, reversing: false, sinceSwapMs: 0 }, false],
+    /* UOPPNÅELIG TAK: retur-terskelen senkes til `maks * 0,9`, men TIDEN
+       røres ikke. Uten det siste leddet ville den senkede terskelen ha
+       åpnet for en øyeblikkelig retur. */
+    ['uoppnåelig tak senker retur-terskelen …',
+      { ratio: 0.22, reversing: true, sinceSwapMs: 301, maks: 0.234 }, true],
+    ['… men ikke tidslåsen',
+      { ratio: 0.22, reversing: true, sinceSwapMs: 299, maks: 0.234 }, false],
+  ];
+  for (const [navn, tilstand, vent] of saker) {
+    const svar = await admit(Object.assign({}, grunn, tilstand));
+    log(label + ' 4b: ' + navn, svar === vent,
+      JSON.stringify({ inn: tilstand, fikk: svar, ventet: vent }));
+  }
 
   /* ---------- 5) Terskelen står: en liten bevegelse bytter ingenting ---------- */
   const smått = await p.evaluate(() => null).then(async () => {

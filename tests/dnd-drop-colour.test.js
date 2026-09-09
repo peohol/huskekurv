@@ -20,6 +20,13 @@
        likhet med et token.
     3. Teksten på objektet er lesbar mot den nye flaten (kontrast ≥ 4,5:1).
 
+  ÅTTE DRAG PÅ RAD, ikke bare det første: hver kombinasjon måles med sitt eget
+  løft, og målingen krever et skjermbilde tatt MENS draget pågår. Det er tøft
+  for fjernstyringen — et slikt skjermbilde kan låse pekerkøen i flere sekunder
+  etterpå — så løftet i `dnd-gestures.js` prøver igjen med voksende pause, og
+  slipper aldri knappen der den ble trykket ned (et klikk der ville åpnet
+  notatet og lagt editoren over brettet).
+
   Kjør:
     python3 -m http.server 8000                       # fra repo-roten, i egen terminal
     NODE_PATH=$(npm root -g) node tests/dnd-drop-colour.test.js
