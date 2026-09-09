@@ -46,6 +46,15 @@ se likt ut uansett om det er en idé eller en kategori som skal lande i det — 
 det løftede objektet mistet den halvgjennomsiktige løfteflaten og den kompakte
 polstringen klonen måles mot.
 
+**Tom-tilstanden er ren CSS** (`.items-container:empty + .ideas-empty`), slik at
+den ikke kan komme i utakt med listen — heller ikke midt i et drag, der dnd-kits
+klone gjør beholderen «ikke tom». Og er beholderen tom, er det ingenting å
+slippe i den heller: den legges flat, og kortet blir en ren tekstboks med LIK
+luft hele veien rundt. Kortets vanlige polstring er 10 px opp/ned og 0 til
+sidene (radene bærer sitt eget innrykk), så teksten sto ellers 34 px fra toppen
+— kortets 10 + den tomme beholderens minstehøyde 14 + hyllegapet 10 — og klint
+mot venstrekanten.
+
 **Knappene** står i modalens FOT (`.modal-foot.ideas-foot`), utenfor det
 rullende feltet: er listen lengre enn modalen, blir de stående. Kassen står i
 det samme feltet. Ellers er de listas — men med idéikonet i stedet for ＋:

@@ -94,7 +94,17 @@ av den avstanden bare ble støy.
 ### Tidshorisonten
 
 Under tittelen står et fast panel med overskriften **«Tidshorisont»** og en
-bryter med tre posisjoner (`role="radiogroup"`, rullende tabindex, piltaster):
+bryter med tre posisjoner (`role="radiogroup"`, rullende tabindex, piltaster).
+
+Bryteren er appens **segmenterte kontroll** (`.seg`, se
+[`design-system.md`](design-system.md)) — den samme som hovedbryteren
+Lister ↔ Notater og søkets scopevelger. Den arver derfor både den grønne flaten
+som GLIR mellom stillingene og dra-gesten: en bryter som så ut som de andre,
+men verken bar den grønne markeringen eller lot seg dra, leste som den samme
+kontrollen i ustand. `paintSeg` melder `aria-checked` her (og `aria-selected`
+der bruksstedet er en fane-rekke) — det er rollen på beholderen som avgjør,
+ikke to ulike malere. Panelet strekker bryteren ut i full bredde; ellers er
+ingenting av formen dens dette bruksstedets.
 
 | Posisjon | Vindu | Virkning |
 |---|---|---|

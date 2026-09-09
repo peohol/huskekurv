@@ -2590,6 +2590,17 @@ body.is-dragging * {
    overstyringen var en vakt som ikke voktet noe (MÅLT: et grønt kort leste
    fortsatt grønt over søppelkassen).
 
+   HELE IKONTRIOEN PINNES, ikke bare streken. Ikonene er fargelagte: papiret i
+   et notat-, liste- eller kalenderikon males av `--icon-paper`, og den snur med
+   drakten (hvit i lys, nesten svart i mørk). Sto den igjen mens flaten skiftet
+   til den KJENTE målfargen, ble et notat som ble dratt over arkivet et sort
+   hull på det lyse tanet — og over søppelkassen i lys drakt et hvitt felt med
+   hvit strek, altså en klatt uten motiv (MÅLT begge veier). Flaten er kjent
+   her, akkurat som for tittelen under, så ikonet tegnes som ren strek PÅ den:
+   papiret får flatens egen farge og forsvinner inn i den, mens streken bærer
+   motivet i det semantiske blekket. Grått er den samme regningen, bare dempet,
+   så en grå masse (kassen, menyprikkene) fortsatt leses som en masse.
+
    `to-trash`/`to-archive` settes fra JS (`setDragTrashTarget` /
    `setDragArchiveTarget`). `dnd-drop-colour.test.js` måler den FAKTISKE malte
    fargen, ikke tokenet. */
@@ -2603,6 +2614,8 @@ body.is-dragging * {
   --ink: var(--drag-danger-ink) !important;
   --ink-soft: var(--drag-danger-ink) !important;
   --icon-ink: var(--drag-danger-ink) !important;
+  --icon-paper: var(--drag-danger-face) !important;
+  --icon-grey: color-mix(in srgb, var(--drag-danger-ink) 40%, var(--drag-danger-face)) !important;
 }
 /* Sikter man på ARKIVET, skifter objektet til arkivfargen på nøyaktig samme
    måte — samme lag, samme grunn, bare en annen betydning. */
@@ -2631,6 +2644,8 @@ body.is-dragging * {
   --ink: var(--drag-archive-ink) !important;
   --ink-soft: var(--drag-archive-ink) !important;
   --icon-ink: var(--drag-archive-ink) !important;
+  --icon-paper: var(--drag-archive-face) !important;
+  --icon-grey: color-mix(in srgb, var(--drag-archive-ink) 40%, var(--drag-archive-face)) !important;
 }
 /* … OG DEN SIER HVA SOM SKJER. En fargeendring alene er et svakt signal — den
    forutsetter at man kjenner fargen fra før — så det løftede objektet får i
@@ -4136,12 +4151,51 @@ body.no-auth .corner-controls { display: none; }
   vertical-align: -0.13em;
   margin-right: 6px;
 }
-.share-body { display: flex; flex-direction: column; gap: 10px; }
+/* MODALEN ER FIRE SEKSJONER, IKKE ÉN RAMSE: slippe noen inn, hvem som er
+   inne, låsen, og de to endelige knappene. De ble tidligere lagt rett etter
+   hverandre med det samme lille gapet (10 px) som skiller to felt INNE i en
+   seksjon, og da var det ingenting som sa hvor den ene sluttet og den neste
+   begynte — verst på mobil, der alt står under hverandre og skjermen er full.
+
+   Grensen er ÉN luft-verdi (`--share-sec-gap`) på hver side av en hårfin
+   linje, den samme linjen som modalhodet bruker. Luften INNE i en seksjon er
+   det halve, så nivåene leses på avstanden alene og streken bare bekrefter
+   dem. På mobil er verdien større: der er seksjonene høye, og luften er det
+   eneste som holder dem fra hverandre når alt ligger i én kolonne.
+
+   Første SYNLIGE seksjon har ingen linje over seg — hodets egen ligger der
+   allerede. Invitasjonsseksjonen er den eneste som kan skjules i sin helhet
+   (den som ikke kan invitere, har ingenting der), og den er alltid først, så
+   ett unntak for `[hidden] + *` dekker det. En seksjon uten innhold i det hele
+   tatt (ingen «Forlat», ingen «Slett») faller ut på samme vis. */
+.share-body {
+  --share-sec-gap: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.share-sec {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--share-sec-gap) / 2);
+  margin-top: var(--share-sec-gap);
+  padding-top: var(--share-sec-gap);
+  border-top: 1px solid var(--line);
+}
+.share-body > .share-sec:first-child,
+.share-body > [hidden] + .share-sec {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.share-actions:empty { display: none; }
 .share-invite-form { display: flex; gap: 8px; }
 .share-invite-form .field { flex: 1; min-width: 0; }
 /* Invitasjonspolicy-avmerking (under e-postfeltet): la andre invitere folk.
-   Interaktiv kun for autoriserte; ellers lesbar status via .share-policy-note. */
-.share-policy-row { margin: 2px 0 2px; }
+   Interaktiv kun for autoriserte; ellers lesbar status via .share-policy-note.
+   Ingen egen marg: seksjonen har ÉN luft-verdi, og en marg oppå den ville lagt
+   et fjerde tall inn i en rytme som er bygget av to. */
+.share-policy-row { margin: 0; }
 .share-policy-label { display: flex; align-items: center; gap: 8px; cursor: pointer;
   font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
 .share-policy-label input[type="checkbox"] { flex: none; }
@@ -4150,15 +4204,30 @@ body.no-auth .corner-controls { display: none; }
 /* Rollevelgeren ved siden av e-postfeltet (medlem vs. medeier). Vises kun for
    den som faktisk kan invitere til eierskap. */
 .share-role-select { flex: none; width: auto; padding-right: 26px; }
-.share-members { display: flex; flex-direction: column; }
+/* Medlemslisten har sin EGEN inndeling inni seksjonen (Eier, Medlemmer,
+   Ventende invitasjoner), og radene bærer allerede hver sin hårstrek. Den
+   arver derfor ikke seksjonsgapet — det ville lagt luft mellom radene og
+   løsnet streken fra raden under den. I stedet får hver bolk-overskrift som
+   har noe over seg sin egen pause: mindre enn mellom to seksjoner, mer enn
+   mellom to rader, så nivåene står i rekkefølge. */
+.share-members { display: flex; flex-direction: column; gap: 0; }
+.share-members > * + .share-section-title { margin-top: calc(var(--share-sec-gap) / 2); }
 /* Forklaringen under navnet når en bruker ikke kan fjernes her (arvet fra
    området) eller er siste eier. */
 .member-hint { display: block; font-size: var(--fs-xs); color: var(--ink-soft); font-weight: 500; font-style: italic; }
 /* «Forlat» og «Slett for alle» står sammen nederst: begge kan være aktuelle
    samtidig (en medeier kan både forlate og slette). */
-.share-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.share-actions {
+  display: flex;
+  /* Seksjonsskallet stabler; de to knappene står ved SIDEN av hverandre og
+     brekker bare når linjen ikke rekker. */
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
 .share-leave .icon { vertical-align: -0.15em; margin-right: 2px; }
-.share-section-title { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); margin: 2px 0; }
+.share-section-title { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); margin: 0 0 4px; }
 /* Raden har navn + inntil to rollehandlinger. Blir det for trangt (mobil), skal
    knappene falle ned på egen linje — ikke presse navnet ned til én bokstav per
    linje. Derfor: navnet får lov å ta plassen den trenger (flex-basis), knappene
@@ -4166,7 +4235,11 @@ body.no-auth .corner-controls { display: none; }
 .member-row {
   display: flex; align-items: center; gap: 10px;
   flex-wrap: wrap;
-  padding: 10px 4px;
+  /* Ingen sidepolstring: raden har ingen egen flate å polstre, og de 4 px den
+     hadde skjøv avataren inn fra bolk-overskriften og knappene inn fra
+     «Inviter» rett over. Modalens egen polstring er venstrekanten for alt i
+     kroppen. */
+  padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
 .member-row > button { flex: none; }
@@ -4202,6 +4275,24 @@ body.no-auth .corner-controls { display: none; }
 /* Arvet medlem (tilgang via området): svakere, og uten «Fjern» her. */
 .member-row.is-inherited { opacity: 0.85; }
 .member-row.is-inherited .member-avatar { background: linear-gradient(180deg, #b0bcc7, #8a97a3); }
+
+/* Telefon i portrett (samme grense som board-ets én-kolonne-grense). To ting
+   må gi etter når bredden forsvinner:
+
+   1. Seksjonene får MER luft, ikke mindre. Alt ligger i én kolonne her, og en
+      skjerm full av kontroller uten pauser er nøyaktig det som leste som
+      «crowded». Luften er det eneste som skiller dem når bredden ikke gjør det.
+   2. Invitasjonsraden brekker. Tre felt på én linje ga 130 px til e-postfeltet
+      og 110 til rollevelgeren — «E-post å» og «Som m» (MÅLT på 390 px). Feltet
+      tar derfor hele linjen, og rollevelgeren deler den neste med knappen: det
+      er den ene raden der man skriver, og den skal kunne leses mens man gjør
+      det. */
+@media (max-width: 560px) {
+  .share-body { --share-sec-gap: 22px; }
+  .share-invite-form { flex-wrap: wrap; }
+  .share-invite-form > .field:not(.share-role-select) { flex: 1 0 100%; }
+  .share-role-select { flex: 1 1 auto; width: auto; min-width: 0; }
+}
 
 /* ---------------- Plasserings-modal ---------------- */
 #place-body { display: flex; flex-direction: column; gap: 8px; }
@@ -4324,38 +4415,17 @@ body.no-auth .corner-controls { display: none; }
   font-weight: 700;
   color: var(--ink);
 }
-/* Bryteren med tre posisjoner: ett spor, tre like brede segmenter, og den
-   valgte løftet opp på modalflaten. Ingen egen farge — valget er en visning,
-   ikke en status, og fargene i denne modalen betyr noe annet. */
-.events-horizon {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--wash);
-}
-.events-horizon-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  appearance: none;
-  border: none;
-  border-radius: 999px;
-  padding: 7px 10px;
-  background: transparent;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--ink-soft);
-  transition: background 0.15s, color 0.15s;
-}
-.events-horizon-btn:hover { color: var(--ink); }
-.events-horizon-btn.is-on {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: var(--shadow-sm);
-}
-.events-horizon-btn:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 2px; }
+/* Bryteren med tre posisjoner ER appens segmenterte bryter (`.seg`, se
+   «SEGMENTERT BRYTER» lenger ned): ett spor, tre like brede segmenter, og ÉN
+   grønn flate som glir mellom dem. Formen, fargen og dra-gesten kommer derfra
+   og står ikke her — en bryter med sin egen markeringsfarge og uten gesten
+   leste som den samme kontrollen i ustand.
+
+   Det eneste bruksstedet legger til er bredden: `.seg` er `inline-grid` og
+   sentrerer seg selv, mens denne skal fylle panelet sitt som før — en sentrert
+   pille under en venstrestilt overskrift står ikke på noen linje. Panelet står
+   i selektoren fordi `.seg` kommer SENERE i fila og ellers vinner på likt. */
+.events-horizon-panel .events-horizon { align-self: stretch; }
 
 /* Luften bærer inndelingen. Gapet er det samme i begge ledd (30 px), så
    avstanden mellom to SEKSJONER er den samme som mellom to grupper og mellom
@@ -4399,6 +4469,16 @@ body.no-auth .corner-controls { display: none; }
    heller ikke midt i et drag, der dnd-kits klone gjør listen «ikke tom». */
 .ideas-empty { display: none; margin: 0; font-size: var(--fs-sm); color: var(--ink-soft); font-weight: 500; }
 .items-container:empty + .ideas-empty { display: block; }
+/* … og da er kortet en ren tekstboks, med LIK luft hele veien rundt. Kortets
+   egen polstring er 10 px opp/ned og 0 til sidene (radene bærer sitt eget
+   innrykk), så teksten sto 34 px fra toppen — kortets 10 + den tomme
+   beholderens minstehøyde 14 + hyllegapet 10 — og klint mot venstrekanten.
+   Er beholderen tom, er det heller ingenting å slippe i den: den legges flat,
+   og polstringen settes i ÉN verdi. Under et drag er beholderen ikke tom
+   (dnd-kits klone ligger i den), så slippmålet er urørt der det finnes noe å
+   slippe. */
+.ideas-card:has(> .items-container:empty) { padding: 16px; }
+.ideas-card > .items-container:empty { display: none; }
 
 /* KATEGORIENE ER MODALENS ENESTE FARGEDE FLATER, og de får fargen sin av
    POSISJONEN — samme regel som lister og områder: den øverste er alltid den
@@ -5091,9 +5171,21 @@ body.no-auth .corner-controls { display: none; }
 .obj-menu-list > * + .obj-menu-group { border-top: 1px solid var(--line); }
 /* Raden UNDER en skuff får linjen som eget strøk, ikke som `border-top`: radene
    er avrundet (`--control-radius`), så en kant på selve raden buer i endene og
-   linjen ville sett annerledes ut enn de flate linjene ellers i menyen. */
-.obj-menu-group + .obj-menu-row { position: relative; }
-.obj-menu-group + .obj-menu-row::before {
+   linjen ville sett annerledes ut enn de flate linjene ellers i menyen.
+   SAMME STRØK MELLOM TO VANLIGE RADER. Linjene fulgte tidligere bare skuffene,
+   og da fikk en meny linjer der det tilfeldigvis sto en skuff og ingen der det
+   ikke gjorde det: på notatsiden rant «Deling og medlemmer», «Lås», «Koblinger»
+   og «Arkiver» sammen til én blokk mens radene over dem sto hver for seg.
+   Skillet er MELLOM valgene, ikke rundt skuffene, så hver rad som har en
+   nabo over seg bærer det. `.obj-menu-sep` (over sletteraden) er fortsatt sin
+   egen, tydeligere pause med luft rundt: den skiller det som fjerner noe fra
+   alt annet, og skal ikke lese som nok en radgrense.
+   Bare direkte barn av lista — radene INNE i en skuff («Flytt opp/ned»,
+   ansvarlig-radene) er ett trinn ned og hører sammen. */
+.obj-menu-group + .obj-menu-row,
+.obj-menu-list > .obj-menu-row + .obj-menu-row { position: relative; }
+.obj-menu-group + .obj-menu-row::before,
+.obj-menu-list > .obj-menu-row + .obj-menu-row::before {
   content: '';
   position: absolute;
   inset: 0 0 auto;

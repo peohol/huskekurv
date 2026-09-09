@@ -70,9 +70,22 @@ knappene brukte, og feiler LUKKET — se `docs/rettigheter-og-deling.md`.
 | 7 | **Forlat …** | delt område, delt mappe | `leave` |
 | 8 | **Slett …** / **Løs opp …** | alle man kan fjerne | `delete` / `!frozen` |
 
+**Hver rad er skilt fra naboen over seg med en hårfin linje.** Skillet gjelder
+MELLOM valgene, ikke rundt skuffene: linjene fulgte tidligere bare skuffene, og
+da fikk en meny linjer der det tilfeldigvis sto en skuff og ingen der det ikke
+gjorde det — på notatsiden rant «Deling og medlemmer», «Lås», «Koblinger» og
+«Arkiver» sammen til én blokk mens radene over dem sto hver for seg. Linjen er
+det samme flate strøket i `::before` som raden under en skuff får, og av den
+samme grunnen: radene er avrundet, og en `border-top` på dem ville buet i
+endene. Alle skillelinjene i menyen skal være flate. Radene INNE i en skuff
+(«Flytt opp/ned», ansvarlig-radene) har den ikke — de er ett trinn ned og hører
+sammen.
+
 **Sletting står SIST**, bak en skillelinje og i rødt (`.obj-menu-row.is-danger`).
 Den er den eneste raden som fjerner noe, og den skal ikke ligge der fingeren
-treffer først når menyen åpner seg.
+treffer først når menyen åpner seg. Den linjen er `.obj-menu-sep` — en egen,
+tydeligere pause med luft rundt, ikke nok en radgrense: det som fjerner noe
+skal skilles fra alt annet, ikke bare fra raden over.
 
 **Bare område og mappe har delingsraden.** Det er de to nivåene som kan deles;
 lister, listepunkter og kategorier arver tilgangen og har ingen egen
@@ -89,13 +102,10 @@ den forrige, begge med animert høyde (`slideSub`, 180 ms; samme funksjon driver
 konto-modalens skuffer). Uten det ville menyen blitt lengre enn skjermen på
 mobil.
 
-Skuffene er skilt med hårfine linjer — fra hverandre og fra de vanlige radene
-over og under. En fane som kan folde seg ut er en egen blokk, ikke nok en rad i
-rekka. Linjene ligger som `border-top` på selve gruppen (ikke som egne
-elementer), så nabo-faner deler én linje og ingen ekstra luft snik-legges inn.
-Raden UNDER en skuff får linjen som et eget strøk i `::before` i stedet: radene
-er avrundet, og en `border-top` på dem buer i endene. Alle skillelinjene i
-menyen skal være flate.
+Skuffene bærer den samme hårfine linjen som radene, men på en annen måte: den
+ligger som `border-top` på selve gruppen (ikke som et eget element), så
+nabo-faner deler én linje og ingen ekstra luft snik-legges inn mellom dem. En
+fane som kan folde seg ut er en egen blokk, ikke nok en rad i rekka.
 
 Innholdet i en skuff er rykket inn, så nivåene leses uten egne rammer. Radene
 («Flytt opp», ansvarlig-radene) har sin egen polstring og får innrykket gratis;

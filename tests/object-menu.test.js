@@ -14,8 +14,9 @@
     5. «Endre navn» åpner navneredigereren på plassen — på alle nivåer.
     6. Klikk på navnet: listepunkt/kategori omdøper fortsatt, mens område/
        liste kollapser og mappe navigerer (konflikten som ble fjernet).
-    7. Skillelinjer rundt trekkspill-skuffene — og at de er FLATE (en linje
-       tegnet som `border-top` på en avrundet rad buer i endene).
+    7. Skillelinjer MELLOM alle radene — også der det ikke står en skuff — og
+       at de er FLATE (en linje tegnet som `border-top` på en avrundet rad buer
+       i endene).
     9. Escape lukker menyen og fokus går tilbake til menyknappen.
    10. «Endre navn» overlever at board-et rendres mens menyen står åpen
        (callbacken må slå opp tittelen på nytt, ikke holde på den gamle noden).
@@ -383,6 +384,22 @@ async function run(label, viewport, touchMode) {
   log(label + ' 7: alle skillelinjene er flate — ingen arver radenes avrundede hjørner',
     seps.concat(uniSeps).every((r) => r.buet === false),
     JSON.stringify(seps.concat(uniSeps).filter((r) => r.buet)));
+  /* HVER rad er skilt fra naboen over seg, ikke bare de som tilfeldigvis står
+     ved en skuff. Linjene fulgte tidligere bare skuffene, og da rant rader
+     uten skuff mellom seg sammen til én blokk (docs/menus.md). Unntakene er
+     nøyaktig to: den første raden (hodet har sin egen linje under seg) og
+     `.obj-menu-sep`, som ER en linje — og raden rett etter den, som allerede
+     er skilt av den. */
+  const alleSkilt = (rader) => rader.every((r, i) => {
+    if (i === 0 || r.type === 'linje' || rader[i - 1].type === 'linje') return true;
+    return r.linjeOver === true;
+  });
+  log(label + ' 7: hver rad er skilt fra naboen over seg',
+    alleSkilt(seps) && alleSkilt(uniSeps),
+    JSON.stringify([seps.filter((r, i) => i > 0 && r.type !== 'linje'
+      && seps[i - 1].type !== 'linje' && !r.linjeOver),
+    uniSeps.filter((r, i) => i > 0 && r.type !== 'linje'
+      && uniSeps[i - 1].type !== 'linje' && !r.linjeOver)]));
   await closeMenu(p);
   await p.evaluate(() => { const m = document.getElementById('nav-modal'); if (m) m.hidden = true; });
   await p.waitForTimeout(200);

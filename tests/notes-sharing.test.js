@@ -4,9 +4,11 @@
 
   Dekker den klientvendte oppførselen SQL-testene ikke ser:
     1. «Deling og medlemmer» ligger i den VANLIGE objektmenyen på alle tre
-       notatnivåene — ingen ny menytype
+       notatnivåene — ingen ny menytype — og hver rad i menyen er skilt fra
+       naboen over seg, også der det ikke står en skuff imellom
     2. Delemodalen er den SAMME: medlemsliste med kategorier, invitasjonsfelt,
-       rollevelger og «Forlat»/«Slett» etter serverens capabilities
+       rollevelger og «Forlat»/«Slett» etter serverens capabilities — og
+       kroppen er fire seksjoner skilt av luft og en linje, ikke én ramse
     3. Eier / redaktør / REN LESER: låsen er det som lager leseren, og en leser
        får verken omdøping, sletting, ＋-knapper eller en skrivbar editor
     4. Deling DIREKTE på notatbok og notat: mottakeren ser objektet i den
@@ -216,6 +218,40 @@ async function run(label, viewport, mobile) {
   log(label + ' 1: notatkortets meny har den òg — alle tre nivåene kan deles',
     nRows.some((r) => /Deling/i.test(r)), nRows.join(' | '));
 
+  /* … og radene er SKILT fra hverandre. Notatmenyen er den lengste i appen —
+     «Deling og medlemmer», «Lås», «Koblinger» og «Arkiver» står etter
+     hverandre uten en eneste skuff imellom — og med linjer bare rundt skuffene
+     rant nettopp de fire sammen til én blokk mens radene over dem sto hver for
+     seg (docs/menus.md). Linjen måles som malt: enten `border-top` eller
+     strøket i `::before`. */
+  await p.locator(noteSel + ' .obj-menu-btn').first().click();
+  await p.waitForTimeout(250);
+  const skilt = await p.evaluate(() => {
+    const linje = (el) => {
+      const cs = getComputedStyle(el);
+      if ((parseFloat(cs.borderTopWidth) || 0) > 0) return true;
+      const b = getComputedStyle(el, '::before');
+      return b.content !== 'none' && (parseFloat(b.height) || 0) > 0
+        && b.backgroundColor !== 'rgba(0, 0, 0, 0)';
+    };
+    const rader = [...document.querySelectorAll('#obj-menu-panel .obj-menu-list > *')];
+    return rader.map((el, i) => ({
+      navn: (el.querySelector('.obj-menu-label') || {}).textContent || '(linje)',
+      sep: el.classList.contains('obj-menu-sep'),
+      // Første rad trenger ingen linje (hodet har sin egen), og heller ikke
+      // raden rett etter `.obj-menu-sep` — den er allerede skilt av den.
+      må: i > 0 && !el.classList.contains('obj-menu-sep')
+        && !rader[i - 1].classList.contains('obj-menu-sep'),
+      har: linje(el),
+    }));
+  });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(200);
+  const uskilt = skilt.filter((r) => r.må && !r.har);
+  log(label + ' 1: … og hver rad i notatmenyen er skilt fra naboen over seg',
+    skilt.length > 4 && uskilt.length === 0,
+    JSON.stringify(uskilt.length ? uskilt : skilt.map((r) => r.navn)));
+
   /* ---------- 2) Delemodalen er den SAMME som for områder og mapper ---------- */
   await menuPick(p, noteSel, 'Deling');
   const modal = await p.evaluate(() => {
@@ -238,6 +274,41 @@ async function run(label, viewport, mobile) {
     modal.kategorier.join(' | '));
   log(label + ' 2: eieren får invitasjonsfelt, rollevelger og «Slett»',
     modal.invitasjonsfelt && modal.rollevelger && modal.slett === 1, JSON.stringify(modal));
+
+  /* Kroppen er FIRE seksjoner, ikke én ramse: invitasjon, medlemmer, lås og de
+     endelige knappene. De lå tidligere rett etter hverandre med det samme
+     lille gapet som skiller to felt INNE i en seksjon, og modalen leste som én
+     vegg av kontroller — verst på mobil (docs/design-system.md, «Del-modalen»).
+     Grensen er luft PLUSS en linje, og den FØRSTE synlige seksjonen har ingen
+     linje over seg: modalhodets egen ligger der allerede. */
+  const seksjoner = await p.evaluate(() => {
+    const kropp = document.getElementById('share-body');
+    const synlige = [...kropp.children].filter((el) => !el.hidden
+      && getComputedStyle(el).display !== 'none');
+    const luft = parseFloat(getComputedStyle(kropp).getPropertyValue('--share-sec-gap')) || 0;
+    return {
+      luft,
+      seksjoner: synlige.map((el) => {
+        const cs = getComputedStyle(el);
+        return {
+          kl: el.className,
+          linje: (parseFloat(cs.borderTopWidth) || 0) > 0,
+          over: Math.round((parseFloat(cs.marginTop) || 0) + (parseFloat(cs.paddingTop) || 0)),
+          // Luften INNE i seksjonen skal være mindre enn den MELLOM dem.
+          inni: Math.round(parseFloat(cs.rowGap) || 0),
+        };
+      }),
+    };
+  });
+  const s = seksjoner.seksjoner;
+  log(label + ' 2: delemodalens kropp er fire seksjoner, hver med sin egen klasse',
+    s.length === 4 && s.every((x) => /share-sec/.test(x.kl)), JSON.stringify(s));
+  log(label + ' 2: … skilt av en linje og LIK luft, men ikke over den første',
+    seksjoner.luft > 0 && s[0].linje === false && s[0].over === 0 &&
+    s.slice(1).every((x) => x.linje === true && x.over === seksjoner.luft * 2),
+    JSON.stringify(seksjoner));
+  log(label + ' 2: … og luften inne i en seksjon er mindre enn den mellom dem',
+    s.every((x) => x.inni < seksjoner.luft), JSON.stringify(s.map((x) => x.inni)));
   await p.keyboard.press('Escape');
   await p.waitForTimeout(300);
 

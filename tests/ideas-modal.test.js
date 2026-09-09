@@ -7,6 +7,10 @@
 
      1. Knappen finnes i toppkontrollgruppen, RETT TIL VENSTRE for draktknappen,
         og åpner modalen.
+     1b. Tom-tilstanden («Ingen idéer ennå …») står med LIK luft på alle fire
+        sider — den tomme beholderens minstehøyde og hyllegapet la seg ellers
+        oppå kortets polstring og ga 34 px over teksten mot 10 under og 0 til
+        sidene.
      2. Den grønne idéknappen lager en ukategorisert idé, den gule en kategori,
         og idéknappen NEDERST i en kategori lager en idé direkte i den.
         Navnefeltet åpnes straks; et navnløst objekt blir ikke liggende igjen.
@@ -150,6 +154,24 @@ async function run(label, viewport, touch) {
   log(label + ': knappen åpner idémodalen', true);
   log(label + ': tom modal viser tom-tilstanden',
     await p.$eval('.ideas-empty', (el) => getComputedStyle(el).display !== 'none'));
+  /* … og teksten står med LIK luft hele veien rundt. Den tomme beholderen har
+     en minstehøyde som slippmål, og kortets polstring er 0 til sidene fordi
+     radene bærer sitt eget innrykk — sammen ga de 34 px over teksten, 10 under
+     og ingenting til sidene. Er det ingenting å slippe, skal boksen lese som
+     en ren tekstboks (docs/ideer.md). */
+  const tomLuft = await p.evaluate(() => {
+    const kort = document.getElementById('ideas-card');
+    const tekst = kort.querySelector('.ideas-empty');
+    const k = kort.getBoundingClientRect(), t = tekst.getBoundingClientRect();
+    return {
+      over: Math.round(t.top - k.top), under: Math.round(k.bottom - t.bottom),
+      venstre: Math.round(t.left - k.left), høyre: Math.round(k.right - t.right),
+    };
+  });
+  const luft = Object.values(tomLuft);
+  log(label + ': tom-tilstanden har lik polstring på alle fire sider',
+    luft.every((v) => v > 0) && Math.max(...luft) - Math.min(...luft) <= 1,
+    JSON.stringify(tomLuft));
 
   /* ---- 2. Opprettelse: idé, kategori, idé i kategori ---- */
   await p.click('#add-idea-btn');

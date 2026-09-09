@@ -378,8 +378,9 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   fjerde linjen stå synlig i bunnpolstringen. Hele kortet er klikkflate og
   dra-sone, så det har pekehånd og `:focus-visible`-ring.
 - `.seg` + `.seg-btn`: den GENERELLE segmenterte bryteren — hovedbryteren
-  (`.main-tabs`) og søkets scopevelger (`Alt | Lister | Notater`) er den samme
-  kontrollen i to størrelser. Den er en EKTE bryter: markeringen er ÉN flate
+  (`.main-tabs`), søkets scopevelger (`Alt | Lister | Notater`) og
+  tidshorisonten i «Kommende hendelser» (`1 uke | 1 måned | Alle`) er den samme
+  kontrollen i tre bruk. Den er en EKTE bryter: markeringen er ÉN flate
   som GLIR mellom segmentene (`::before` på beholderen), ikke en bakgrunn som
   tones inn på det ene og ut på det andre — da ville den lest som to knapper
   som blinker. Flaten flyttes med `transform` i den samme timingen som knotten
@@ -389,10 +390,16 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   Segmentene er LIKE BREDE (`display: inline-grid` + `grid-auto-columns: 1fr`),
   og det er dét som gjør reisen til ren regning: flaten er `100% / --seg-n` bred
   og står `--seg-i * 100%` inn. De to tallene settes fra JS (`paintSeg`), som
-  også setter `aria-selected` og den rullende `tabIndex`-en — ett sted for
-  begge bryterne, så en tredje fane ville virket uten en ny utregning. (Grid og
-  ikke flex: med `flex: 1 1 0` blir beholderen bare like bred som innholdet, og
-  `min-width: auto` klemmer det lengste segmentet ut av takt.)
+  også setter valgt-attributtet og den rullende `tabIndex`-en — ett sted for
+  alle bruksstedene, så en tredje fane ville virket uten en ny utregning. (Grid
+  og ikke flex: med `flex: 1 1 0` blir beholderen bare like bred som innholdet,
+  og `min-width: auto` klemmer det lengste segmentet ut av takt.)
+
+  Hvilket attributt det er, avgjøres av ROLLEN bruksstedet satte: en fane-rekke
+  (`role="tablist"`) melder `aria-selected`, en innstilling med n stillinger
+  (`role="radiogroup"`, tidshorisonten) melder `aria-checked`. Formen,
+  bevegelsen og gesten er den samme — det er bare hva valget BETYR som skiller
+  dem, og derfor er det ÉN maler og ikke to.
 
   **Bryteren kan DRAS, ikke bare klikkes.** Ta tak i den glidende flaten, før
   den langs aksen og slipp: ved slipp snapper den til nærmeste segment. Under
@@ -745,6 +752,27 @@ Den virtuelle beholderen for frie mapper (`.free-groups-card`) har en nøytral
 grå kortfarge og ingen del-/slett-/＋-kontroller. Se `docs/menus.md`.
 
 ## Del-modalen: én visning, capability-gatede kontroller
+
+**Kroppen er FIRE seksjoner, ikke én ramse** (`.share-sec`): slippe noen inn
+(feltet, rollevelgeren, invitasjonspolicyen og kvitteringen), hvem som er inne,
+låsen, og de to endelige knappene. De lå tidligere rett etter hverandre med det
+samme lille gapet som skiller to felt INNE i en seksjon, og da var det
+ingenting som sa hvor den ene sluttet og den neste begynte.
+
+Grensen er ÉN luft-verdi (`--share-sec-gap`) på hver side av den samme hårfine
+linjen modalhodet bruker; luften INNE i en seksjon er det halve, så nivåene
+leses på avstanden alene og streken bare bekrefter dem. På telefon i portrett
+er verdien større — der er seksjonene høye, alt ligger i én kolonne, og luften
+er det eneste som holder dem fra hverandre. Samme sted brekker invitasjonsraden:
+e-postfeltet tar hele linjen, og rollevelgeren deler den neste med
+«Inviter»-knappen (tre felt på 390 px ga «E-post å» og «Som m»).
+
+Den første SYNLIGE seksjonen har ingen linje over seg — hodets egen ligger der
+allerede. Invitasjonsseksjonen er den eneste som kan skjules i sin helhet (den
+som ikke kan invitere, har ingenting der), og den står alltid først;
+handlingsseksjonen faller ut når den er tom. Medlemslisten arver ikke
+seksjonsgapet: radene bærer allerede hver sin hårstrek, og et gap ville løsnet
+streken fra raden under den.
 
 Del-modalen har ikke lenger et eier/mottaker-skille. Medlemslisten vises for
 alle med tilgang, gruppert etter rollekategori med `.share-section-title`;

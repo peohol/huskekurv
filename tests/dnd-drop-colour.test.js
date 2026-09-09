@@ -19,6 +19,9 @@
     2. Fargen er faktisk rød respektive gul — målt som fargetone, ikke som
        likhet med et token.
     3. Teksten på objektet er lesbar mot den nye flaten (kontrast ≥ 4,5:1).
+    4. TYPE-IKONET er en strektegning PÅ flaten, ikke et hull i den: ikonenes
+       «papir» (`--icon-paper`) snur med drakten, og sto det igjen mens flaten
+       skiftet til målfargen, ble et notat dratt over arkivet et sort hull.
 
   ÅTTE DRAG PÅ RAD, ikke bare det første: hver kombinasjon måles med sitt eget
   løft, og målingen krever et skjermbilde tatt MENS draget pågår. Det er tøft
@@ -177,6 +180,27 @@ async function målFarge(p, indeks, mål, touch) {
     width: Math.max(6, Math.round(el.width * 0.45)), height: Math.max(5, Math.round(el.height * 0.2)),
   } });
   const farge = medianFarge(pngPiksler(png));
+  /* TYPE-IKONET, malt. Notatikonet har et «papir» som males av `--icon-paper`,
+     og den snur med drakten. Ble den stående mens flaten skiftet til
+     målfargen, ble ikonet et SORT HULL i mørk drakt (og en hvit klatt uten
+     motiv i lys over søppelkassen). Ikonet er en 1 px strektegning på en
+     papirflate, så medianen over ikonets boks ligger nær papirfargen — trukket
+     et stykke mot streken, som er tett på så få piksler. Den skal ligge PÅ
+     flaten, ikke stå som en masse mot den. */
+  const ib = await p.locator('[data-dnd-dragging] .icon').first().boundingBox();
+  const ikon = ib ? medianFarge(pngPiksler(await p.screenshot({ clip: {
+    x: Math.round(ib.x + ib.width * 0.2), y: Math.round(ib.y + ib.height * 0.2),
+    width: Math.max(4, Math.round(ib.width * 0.6)), height: Math.max(4, Math.round(ib.height * 0.6)),
+  } }))) : null;
+  // … og tokenet bak papiret, som evidens når medianen skulle svikte.
+  const papir = await p.evaluate(() => {
+    const el = document.querySelector('[data-dnd-dragging]');
+    if (!el) return null;
+    const cs = getComputedStyle(el);
+    const flate = el.querySelector('[fill="#ffffff"]');
+    return { papir: flate ? getComputedStyle(flate).fill : null,
+      flate: cs.getPropertyValue('--card-bg').trim() };
+  });
   // Tittelens blekk, for lesbarhetssjekken.
   const blekk = await p.evaluate(() => {
     const t = document.querySelector('[data-dnd-dragging] .note-card-title');
@@ -187,7 +211,7 @@ async function målFarge(p, indeks, mål, touch) {
   await G.travel(p, { x: b.x + b.width / 2, y: b.y + 18 }, touch);
   await G.drop(p, undefined, touch);
   await p.waitForTimeout(500);
-  return { farge, hvile, blekk };
+  return { farge, hvile, blekk, ikon, papir };
 }
 const rgb = (s) => {
   const m = /(\d+),\s*(\d+),\s*(\d+)/.exec(s || '');
@@ -230,6 +254,24 @@ async function run(label, viewport, touch) {
         !!blekk && kontrast(blekk, a.farge) >= 4.5,
         JSON.stringify({ blekk: a.blekk, flate: hex(a.farge),
           kontrast: blekk ? +kontrast(blekk, a.farge).toFixed(2) : null }));
+      /* Ikonet er ikke et hull: papiret er flatens EGEN farge og forsvinner inn
+         i den, så motivet bæres av streken alene. To bevis, fordi ingen av dem
+         er hele saken alene — det malte utsnittet ser hva som faktisk kom på
+         skjermen, mens tokenet sier hvorfor.
+
+         Terskelen på 2,5 er romslig med vilje: ikonet er så lite at streken
+         drar medianen merkbart (MÅLT 1,64 i lys drakt over søppelkassen, der
+         streken er hvit). Feilen den skal fange er en helt annen
+         størrelsesorden — papiret sto igjen i draktens egen verdi og ga
+         `#262c36` på arkivets `#e6c896`, altså 6,7:1. */
+      log(label + ' ' + drakt + '/' + navn + ': type-ikonets papir har flatens egen farge',
+        !!a.papir && !!a.papir.papir && rgb(a.papir.papir) &&
+        hex(rgb(a.papir.papir)) === (a.papir.flate || '').toLowerCase(),
+        JSON.stringify(a.papir));
+      log(label + ' ' + drakt + '/' + navn + ': … så ikonet leser som en strektegning, ikke som et hull',
+        !!a.ikon && kontrast(a.ikon, a.farge) < 2.5,
+        JSON.stringify({ ikon: a.ikon && hex(a.ikon), flate: hex(a.farge),
+          kontrast: a.ikon ? +kontrast(a.ikon, a.farge).toFixed(2) : null }));
     }
   }
   await settDrakt(p, 'light');

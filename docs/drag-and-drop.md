@@ -1533,6 +1533,17 @@ Blekket pinnes i samme slengen. `.card-title` er hvit-med-skygge PÅ
 kortfargen, en kontrakt valgt for paletten — hvit på arkivets gule ga 2,5:1
 (MÅLT). Tittelen bruker derfor det semantiske blekket, uten skygge og strek.
 
+**Og HELE ikontrioen, ikke bare streken.** Ikonene er fargelagte: papiret i et
+notat-, liste- eller kalenderikon males av `--icon-paper`, og den snur med
+drakten (hvit i lys, nesten svart i mørk — [`mork-drakt.md`](mork-drakt.md)).
+Sto den igjen mens flaten skiftet til målfargen, ble et notat som ble dratt over
+arkivet et SORT HULL på det lyse tanet (MÅLT: `#262c36` på `#e6c896`), og over
+søppelkassen i lys drakt et hvitt felt med hvit strek — altså en klatt uten
+motiv. Flaten er KJENT her, akkurat som for tittelen, så ikonet tegnes som ren
+strek på den: `--icon-paper` får flatens egen farge og forsvinner inn i den,
+mens `--icon-ink` bærer motivet i det semantiske blekket. `--icon-grey` er den
+samme regningen, bare dempet, så en grå masse fortsatt leses som en masse.
+
 Målt i `dnd-drop-colour` (den FAKTISK malte fargen, lest av et skjermbilde
 piksel for piksel — `getComputedStyle` ville bare gjentatt tokenet vi selv
 skrev, og ikke sett at et indre lag maler over det), `dnd-drop-animation`

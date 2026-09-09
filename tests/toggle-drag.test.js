@@ -3,7 +3,8 @@
 
   Begge bryterformene er den samme kontrollen sett to ganger — én akse med n
   gyldige stopp og én flate som står på et av dem. Den segmenterte (`.seg`,
-  hovedbryteren Lister ↔ Notater og søkets scopevelger) har n segmenter;
+  hovedbryteren Lister ↔ Notater, søkets scopevelger og tidshorisonten i
+  «Kommende hendelser») har n segmenter;
   av/på-bryteren (`.toggle-switch`, varseltypene) har to. Gesten er derfor delt:
   ta tak, følg fingeren, slipp, snap til nærmeste stopp.
 
@@ -20,6 +21,9 @@
     6. Et drag teller ÉN gang: det etterfølgende ekte klikket svelges, så
        bryteren ikke slår tilbake igjen med det samme.
     7. TASTATUR er urørt.
+    8. TIDSHORISONTEN i «Kommende hendelser» er den SAMME bryteren: `.seg` med
+       den grønne, glidende flaten og den samme gesten — men fortsatt med
+       radiogruppens `aria-checked`, ikke fane-rekkens `aria-selected`.
 
   Kjøres på BÅDE desktop- og mobil-viewport (mus og finger er den samme
   pekerkoden, men terskelen og `touch-action` er ikke det).
@@ -177,6 +181,57 @@ async function run(label, viewport, mobile) {
   await p.waitForTimeout(500);
   const klikket = await p.evaluate((s) => document.querySelector(s).getAttribute('aria-checked'), bryter);
   log(label + ' 5: et vanlig klikk slår bryteren på igjen', klikket === 'true', String(klikket));
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(300);
+
+  /* ---------- 8) Tidshorisonten er den SAMME bryteren ----------
+     «Kommende hendelser» hadde sin egen kontroll som lignet: grå markering i
+     stedet for den grønne flaten, og ingen gest. En bryter som ser ut som de
+     andre, men verken bærer markeringen eller lar seg dra, leser som den samme
+     kontrollen i ustand. Den er nå `.seg`, og arver derfor begge deler
+     (docs/kommende-hendelser.md). Semantikken er fortsatt radiogruppens:
+     `paintSeg` melder `aria-checked` her, `aria-selected` der bruksstedet er en
+     fane-rekke. */
+  await p.evaluate(() => window.__huskis.openEventsModal());
+  await p.waitForSelector('#events-modal:not([hidden])');
+  await p.waitForTimeout(300);
+  const horisontFør = await p.evaluate(() => window.__huskis.eventsHorizon());
+  const form = await p.evaluate(() => {
+    const el = document.getElementById('events-horizon');
+    const på = el.querySelector('.events-horizon-btn[aria-checked="true"]');
+    return {
+      seg: el.classList.contains('seg'),
+      segBtn: [...el.children].every((b) => b.classList.contains('seg-btn')),
+      // Markeringen er ÉN flate på beholderen, og den er den grønne.
+      flate: getComputedStyle(el, '::before').backgroundImage,
+      // Radiogruppen melder `aria-checked`, ikke `aria-selected`.
+      aria: !!på && !på.hasAttribute('aria-selected'),
+      aktiv: !!på && på.classList.contains('is-active'),
+    };
+  });
+  log(label + ' 8: tidshorisonten er `.seg` med den grønne, glidende flaten',
+    form.seg && form.segBtn && /gradient/.test(form.flate) && form.aktiv,
+    JSON.stringify(form));
+  log(label + ' 8: … og melder fortsatt radiogruppens `aria-checked`', form.aria,
+    JSON.stringify(form));
+  const midtH = await dragToggle(p, '#events-horizon', 0.85, 0.16, { midtveisVar: '--seg-drag' });
+  const horisontEtter = await p.evaluate(() => ({
+    valgt: window.__huskis.eventsHorizon(),
+    aria: [...document.querySelectorAll('.events-horizon-btn')]
+      .map((b) => b.dataset.horizon + '=' + b.getAttribute('aria-checked')),
+    drag: document.getElementById('events-horizon').style.getPropertyValue('--seg-drag').trim(),
+  }));
+  const brøkH = parseFloat(midtH && midtH.verdi);
+  log(label + ' 8: et drag bytter tidshorisont, og flaten følger fingeren underveis',
+    horisontFør === 'all' && horisontEtter.valgt === 'week' &&
+    !!midtH && midtH.klasse === true && brøkH > 0 && brøkH < 2.001,
+    JSON.stringify({ før: horisontFør, etter: horisontEtter, midtveis: midtH }));
+  log(label + ' 8: … og overstyringen er borte ved slipp, med `aria-checked` flyttet',
+    horisontEtter.drag === '' &&
+    horisontEtter.aria.join(',') === 'week=true,month=false,all=false',
+    JSON.stringify(horisontEtter));
+  await p.evaluate(() => window.__huskis.closeEventsModal());
+  await p.waitForTimeout(250);
 
   log(label + ': ingen JS-feil', errs.length === 0, errs.slice(0, 3).join(' | '));
   await browser.close();
