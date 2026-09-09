@@ -675,6 +675,9 @@
     if (type === 'note') return 'notatboken eller bokhyllen';
     return 'nivået over';
   }
+  // Objektet siste-eier-invarianten gjelder for, i bestemt form — samme ordlyd
+  // som `memberships_before_update`/`_before_delete` gir.
+  function topWord(type) { return type === 'note_project' ? 'bokhyllen' : 'området'; }
   function lockRow(db, type, id) {
     if (type === 'universe') return findU(db, id);
     if (type === 'group') return findG(db, id);
@@ -2423,7 +2426,7 @@
         if ((p.p_type === 'universe' || p.p_type === 'note_project') &&
             directRole(db, p.p_type, p.p_id, p.p_user) === 'owner' &&
             ownerCountOf(db, p.p_type, p.p_id) <= 1) {
-          throw new Error('objektet må ha minst én eier');
+          throw new Error(topWord(p.p_type) + ' må ha minst én eier');
         }
         purgeAccess(db, p.p_type, p.p_id, p.p_user);
         return null;
@@ -2442,7 +2445,9 @@
           return m.user_id === p.p_user && m[col] === p.p_id;
         });
         if (p.p_type === 'universe' || p.p_type === 'note_project') {
-          if (ownerCountOf(db, p.p_type, p.p_id) <= 1) throw new Error('objektet må ha minst én eier');
+          if (ownerCountOf(db, p.p_type, p.p_id) <= 1) {
+            throw new Error(topWord(p.p_type) + ' må ha minst én eier');
+          }
           rad.role = p.p_role;
           return null;
         }

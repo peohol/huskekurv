@@ -19556,18 +19556,17 @@
      medlemskapsraden, ikke på objektet — `.pos` i state er da den personlige
      verdien, og den KANONISKE står i `_canon`. Den kanoniske skrives tilbake
      uendret, så en personlig omrokkering aldri kan endre hva andre ser. */
-  /* EN SKRIVING VI VET SERVEREN RULLER TILBAKE SKAL ALDRI BLI EN OP.
-     Vaktene (`*_before_update`) reverterer stille et innholds- eller
-     posisjonsregister man mangler rett til å endre. Tar vi med den lokale
-     verdien i VÅRT doc, finner fletteren den samme divergensen hver runde og
-     pusher den samme skrivingen i det uendelige — en varm løkke uten et eneste
-     signal, og en lokal kopi som ser lagret ut uten å være det.
+  /* EN ENDRING VI IKKE HAR LOV TIL Å SKRIVE SKAL IKKE BLI STÅENDE.
+     Vaktene (`*_before_update`) reverterer stille et innholdsregister man
+     mangler rett til å endre. Blir den lokale verdien liggende, finner
+     fletteren den samme divergensen hver runde og pusher den samme skrivingen
+     i det uendelige — en varm løkke uten et eneste signal — mens kopien på
+     skjermen ser lagret ut uten å være det.
 
-     Løsningen er å bygge doc-et med SERVERENS siste kjente verdi for nettopp
-     de registrene vi ikke har rett til å skrive. Da blir lokal og fjern like,
-     ingen op oppstår, og neste `applyMyDoc` viser serverens verdi — som er den
-     eneste som finnes. Rettighetene er serverens; dette er bare klienten som
-     slutter å banke på en dør som er låst.
+     Løsningen er å rulle raden tilbake til SERVERENS siste kjente verdi før
+     flettingen. Da er lokal og fjern like, ingen op oppstår, og skjermen viser
+     den eneste verdien som finnes. Rettighetene er serverens; dette er bare
+     klienten som slutter å banke på en dør som er låst.
 
      Gjelder notatsiden, som er den delen denne runden ga låser og roller. */
   const NOTE_SERVER_KEY = { note_project: 'noteProjects', note_folder: 'noteFolders', note: 'notes' };
@@ -19813,8 +19812,6 @@
         obj._ownerKey = m ? m.ownerKey : null;
         obj._caps = m && m.caps ? m.caps : null;
         obj._free = !!(m && m.free);
-        // Personlig posisjon (områder + frie mapper): den kanoniske tas vare
-        // på i _canon, og `.pos` blir brukerens egen.
         /* PERSONLIG posisjon: toppnivåene (område, bokhylle) og alt som vises i
            en VIRTUELL beholder (frie mapper, direkte delte notatbøker og
            notater). Den kanoniske plasseringen tas vare på i `_canon` og
