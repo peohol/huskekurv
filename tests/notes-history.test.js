@@ -31,6 +31,10 @@
    14. REGRESJON (frøet, andre vei): et NYTT notat virker fullt ut lokalt FØR
        serveren har svart — raden ligger i synk-køen, så første henting sier
        «finnes ikke», og det er publiseringen som venter, ikke skrivingen
+   15. REGRESJON (frøet, den farlige varianten): er projeksjonen ELDRE enn
+       loggen, og brukeren rekker å skrive før første henting svarer, skal den
+       andres avsnitt aldri leses som en sletting. Serverens dokument vinner,
+       og utkastet legges i historikken
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -370,6 +374,96 @@ async function run(navn, viewport, mobil) {
 }
 
 /* ============================================================
+   Løp 1b — en UTDATERT projeksjon skal aldri kunne slette den andres avsnitt
+
+   Den farlige varianten av frø-tilfellet: enheten har ingen lokal kopi, og
+   `body` er ELDRE enn samskrivingsloggen (en annen har skrevet et avsnitt som
+   ennå ikke har nådd oss). Rekker brukeren å skrive før den første hentingen
+   svarer, ville en forskjell mellom arket og serverens dokument lest det
+   avsnittet som en SLETTING — og neste push ville fjernet det for alle.
+   ============================================================ */
+async function runUtdatert() {
+  const navn = 'utdatert';
+  const { ids, db } = buildDB();
+  const br = await chromium.launch();
+  const ctx = await br.newContext({ viewport: { width: 1200, height: 900 } });
+  const feil = [];
+  const a = await ctx.newPage();
+  a.on('pageerror', (e) => feil.push('A: ' + e.message));
+  await loadAs(a, db, 'uA', 'a@x.no', true);
+
+  // A skriver et avsnitt og lukker. Loggen har nå rader.
+  await åpneEditor(a, ids.N);
+  await skrivSlutt(a, ' AVSNITT FRA A');
+  await a.evaluate(async () => { window.__huskis.noteLiveFlush(); await window.__huskis.pushNoteOps(); });
+  await lukkEditor(a);
+  await a.waitForTimeout(250);
+  const iLoggen = await loggRader(a, ids.N);
+  check(navn + ' 15a: loggen har rader (forutsetningen)', iLoggen > 0, { rader: iLoggen });
+
+  /* PROJEKSJONEN SETTES TILBAKE på SERVEREN, med et ferskere stempel: det er
+     nøyaktig det en enhet ser når `body` ligger etter loggen — den andres
+     avsnitt finnes i samskrivingen, men ikke i teksten vi sår fra. Og den
+     lokale kopien av CRDT-en fjernes, så enheten åpner notatet «første gang». */
+  await a.evaluate(async (x) => {
+    await window.HK_MOCK._edit((db) => {
+      const n = db.notes.find((m) => m.id === x);
+      n.body = { v: 1, blocks: [{ t: 'p', c: [{ s: 'OPPRINNELIG' }] }] };
+      n.ts = Date.now() + 60000;
+      n.org = 'annen-enhet';
+    });
+    Object.keys(localStorage).forEach((k) => {
+      if (k.indexOf('hk-note-crdt:') === 0 || k.indexOf('hk-note-ops:') === 0) localStorage.removeItem(k);
+    });
+  }, ids.N);
+
+  /* `&lag=800` holder vinduet åpent: den første hentingen bruker et drøyt
+     halvsekund, og tastetrykkene lander MENS frøet ennå er foreløpig. Uten
+     forsinkelsen rekker hentingen å svare før man får skrevet et tegn, og
+     testen ville målt noe annet enn den tror. */
+  await a.goto(BASE + '/?mock=1&lag=800');
+  await a.waitForFunction(() => {
+    const H = window.__huskis;
+    return !!(H && H.authUser && H.lastMy);
+  }, null, { timeout: 20000, polling: 200 });
+  await a.evaluate(() => window.__huskis.setMainTab('notes'));
+  await a.waitForFunction((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return n && JSON.stringify(n.doc).indexOf('AVSNITT FRA A') === -1;
+  }, ids.N, { timeout: 20000, polling: 200 });
+
+  await a.evaluate((x) => window.__huskis.openNoteEditor(x), ids.N);
+  await a.waitForFunction(() => !document.getElementById('note-editor').hidden,
+    null, { timeout: 5000, polling: 50 });
+  const iVinduet = await a.evaluate(() => window.__huskis.noteLiveInfo.seedPending);
+  check(navn + ' 15b: frøet er foreløpig når vi begynner å skrive (forutsetningen)',
+    iVinduet === true, { seedPending: iVinduet });
+  await skrivSlutt(a, ' MITT UTKAST');
+  await a.waitForFunction(() => !window.__huskis.noteLiveInfo.seedPending,
+    null, { timeout: 20000, polling: 50 });
+  await a.waitForTimeout(400);
+  await a.evaluate(async () => { window.__huskis.noteLiveFlush(); await window.__huskis.pushNoteOps(); });
+  await a.waitForTimeout(300);
+
+  const etter = { crdt: await crdtTekst(a), ark: await arkTekst(a) };
+  check(navn + ' 15: den andres avsnitt står — det ble ALDRI lest som en sletting',
+    etter.crdt.indexOf('AVSNITT FRA A') > -1 && etter.ark.indexOf('AVSNITT FRA A') > -1, etter);
+  check(navn + ' 15c: … og serverens dokument er det arket viser',
+    etter.crdt.indexOf('MITT UTKAST') === -1, etter);
+
+  // Det som ble skrevet er ikke borte: det ligger i historikken.
+  await åpneHistorikk(a, ids.N);
+  const rader = await historikkRader(a);
+  check(navn + ' 15d: utkastet som ikke kunne flettes ligger i historikken',
+    rader.some((r) => /MITT UTKAST/.test(r.text)), rader.map((r) => r.text));
+  await a.evaluate(() => window.__huskis.closeNoteHistory());
+  await lukkEditor(a);
+
+  check(navn + ': ingen JS-feil', feil.length === 0, feil.join(' | '));
+  await br.close();
+}
+
+/* ============================================================
    Løp 2 — flere brukere og flere faner
    ============================================================ */
 async function runFlere() {
@@ -519,6 +613,7 @@ async function runFlere() {
 (async () => {
   await run('desktop', { width: 1200, height: 900 }, false);
   await run('mobil', { width: 390, height: 780 }, true);
+  await runUtdatert();
   await runFlere();
   console.log('\n==== ' + pass + '/' + (pass + fail) + ' PASS ====');
   process.exit(fail ? 1 : 0);

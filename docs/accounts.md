@@ -417,7 +417,10 @@ Klientsiden ligger i tre deler, alle i notat-seksjonen i `app.js`:
   og lagring virker fra første tastetrykk — det er PUBLISERINGEN som venter:
   ingenting køes til loggen, og ingen lokal kopi skrives, før svaret har kommet.
   Det gjelder også et NYTT notat, der raden ennå ligger i synk-køen og første
-  henting derfor svarer «finnes ikke».
+  henting derfor svarer «finnes ikke». Rakk noen å skrive i vinduet, flettes
+  tegnene bare inn når projeksjonen vi sådde fra var lik serverens dokument;
+  ellers vinner serverens dokument og utkastet legges i historikken
+  ([`notater-plan.md`](notater-plan.md) → «Sanntids samskriving»).
 - **Køen** (`noteOps`, `pushNoteOps`) — radene som ennå ikke har nådd kontoen,
   lagret i enhetens lagring (`hk-note-ops:<uid>`) ved siden av en lokal kopi av
   CRDT-en (`hk-note-crdt:<uid>`). Køen rir på den SAMME synk-runden som resten

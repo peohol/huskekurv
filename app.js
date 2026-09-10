@@ -19280,6 +19280,7 @@
          verken til loggen eller til enhetens lagring — og DOM-et leses ikke
          inn i det. Se `noteLiveSettleSeed`. */
       seedPending: false,
+      seedBase: null,     // dokumentet frøet ble sådd FRA (se noteLiveSettleSeed)
       dirty: false,       // noen skrev mens frøet fortsatt var foreløpig
       pending: [],        // fjern-endringer som venter på at en komposisjon tar slutt
       mark: null,
@@ -19312,6 +19313,9 @@
     });
     const s = noteLiveSession(note.id, ydoc);
     s.seedPending = seedPending;
+    // Grunnlaget frøet ble sådd FRA. Det er dét som avgjør om en forskjell mot
+    // serverens dokument betyr det vi tror — se `noteLiveSettleSeed`.
+    if (seedPending) s.seedBase = JSON.stringify(sanitizeNoteDoc(note.doc));
     noteLive = s;
     noteLiveBindDoc(s, ydoc);
     /* FRØET KØES IKKE HER. Et frø som møter en logg noen andre alt har sådd,
@@ -19365,9 +19369,17 @@
                        av en som har skriverett).
      Loggen har rader → notatet er sådd fra før. Da skal vårt frø aldri møte
                        den: økten bygges på nytt fra radene, og det foreløpige
-                       dokumentet kastes. Rakk noen å skrive i mellomtiden,
-                       står tegnene fortsatt i DOM-et — de skrives inn som en
-                       vanlig forskjell mot det serveren har.
+                       dokumentet kastes.
+
+     RAKK NOEN Å SKRIVE I MELLOMTIDEN, er spørsmålet hva de tegnene er en
+     forskjell FRA. Frøet ble sådd av projeksjonen (`body`), og den kan være
+     utdatert: en annen enhet kan ha skrevet et avsnitt som ennå ikke har nådd
+     oss. Er projeksjonen lik serverens dokument, ER forskjellen mellom arket og
+     det dokumentet nøyaktig tastetrykkene, og de skrives inn som en vanlig
+     endring. Er den det IKKE, ville den samme forskjellen lest den andres
+     avsnitt som en SLETTING — og neste push ville fjernet det for alle. Da
+     vinner serverens dokument, og det som ble skrevet i mellomtiden legges i
+     HISTORIKKEN i stedet for å bli borte. Toasten sier hvor det ble av.
 
      MERK at et NYTT notat normalt går den første veien, men ikke med én gang:
      raden ligger i synk-køen når editoren åpnes, så den første hentingen
@@ -19376,10 +19388,18 @@
   function noteLiveSettleSeed(s, fresh) {
     const Y = noteYLib();
     if (!Y) return;
-    s.seedPending = false;
     const skrev = s.dirty;
-    s.dirty = false;
+    const base = s.seedBase;
+    /* Arket leses inn i det foreløpige dokumentet FØR noe avgjøres, slik at de
+       siste tegnene er med uansett hvilken vei det går. Økten er fortsatt
+       merket foreløpig her, så flushen publiserer ingenting — og det er
+       nettopp poenget: en op fra det foreløpige dokumentet peker på noe
+       serveren ikke har, og ville aldri kunne flettes inn hos de andre. */
+    const mittUtkast = skrev ? noteVersionState(s.id) : null;
+    const ferdig = () => { s.seedPending = false; s.dirty = false; s.seedBase = null; };
+
     if (!fresh.length) {
+      ferdig();
       const n = findNoteById(s.id);
       if (noteEditable(n)) queueNoteOp(s.id, Y.encodeStateAsUpdate(s.ydoc));
       refreshNoteSaveStatus();
@@ -19390,19 +19410,35 @@
     fresh.forEach((u) => { try { Y.applyUpdate(ydoc, u, 'remote'); } catch (e) { /* ignore */ } });
     noteLiveBindDoc(s, ydoc);
     try { gammel.destroy(); } catch (e) { /* ignore */ }
+    ferdig();          // FØRST nå er dokumentet serverens, og skrivinger kan ut
     if (!(noteEditorOpen() && noteOpenId === s.id && noteDocEl)) return;
-    if (skrev) {
-      // Behold det som ble skrevet i mellomtiden: forskjellen mellom arket og
-      // dokumentet vi nettopp fikk ER tastetrykkene.
+    const serverDoc = noteYDoc(s.ydoc);
+    // Sto projeksjonen vi sådde fra på det SAMME som serveren har? Bare da er
+    // en forskjell mot serverens dokument det samme som tastetrykkene.
+    const trygt = base === JSON.stringify(serverDoc);
+    if (skrev && trygt) {
       noteLiveFlush();
-    } else {
-      noteApplyingDoc = true;
-      noteDocIntoEl(noteDocEl, noteYDoc(s.ydoc));
-      noteApplyIndent();
-      noteApplyingDoc = false;
+      scheduleNoteSave();
+      refreshNoteTools();
+      return;
     }
+    if (skrev) noteKeepStrandedDraft(s.id, mittUtkast);
+    noteApplyingDoc = true;
+    noteDocIntoEl(noteDocEl, serverDoc);
+    noteApplyIndent();
+    noteApplyingDoc = false;
     scheduleNoteSave();   // projeksjonen tar igjen
     refreshNoteTools();
+  }
+
+  /* Det som ble skrevet oppå et frø vi måtte kaste. Det kan ikke settes inn i
+     serverens dokument uten å risikere å slette noe andre skrev, men det skal
+     heller ikke bare forsvinne: bildet legges i historikken, der brukeren kan
+     se det og hente det tilbake selv. */
+  function noteKeepStrandedDraft(id, utkast) {
+    if (!utkast) return;
+    captureNoteVersion(id, { doc: utkast.doc, title: utkast.title });
+    showToast(tr('notes.historyStranded'));
   }
   function closeNoteLive() {
     const s = noteLive;
@@ -19814,7 +19850,7 @@
     const n = findNoteById(id);
     if (!n) return null;
     const åpen = noteEditorOpen() && noteOpenId === id;
-    const live = noteLive && noteLive.id === id && !noteLive.seedPending ? noteLive : null;
+    const live = noteLive && noteLive.id === id ? noteLive : null;
     if (live && åpen) noteLiveFlush();
     const doc = sanitizeNoteDoc(live ? noteYDoc(live.ydoc) : n.doc);
     const title = åpen && noteTitleInput ? noteTitleInput.value.trim() : String(n.title || '');
@@ -19839,10 +19875,16 @@
     if (!n || !noteEditable(n)) return null;
     const client = acli();
     if (!client) return null;
-    const st = noteVersionState(id);
+    /* Vanligvis er bildet av tilstanden NÅ. `opts.doc` er unntaket: et utkast
+       som ikke lenger finnes noe sted (se `noteKeepStrandedDraft`), og som
+       derfor ikke kan leses ut av økten. */
+    const st = opts.doc
+      ? { title: String(opts.title || ''), doc: sanitizeNoteDoc(opts.doc) }
+      : noteVersionState(id);
     if (!st) return null;
     const sig = noteVersionSig(st.title, st.doc);
-    if (!opts.pinned && noteVersionLast.id === id && noteVersionLast.sig === sig) return null;
+    if (!opts.pinned && !opts.doc
+        && noteVersionLast.id === id && noteVersionLast.sig === sig) return null;
     try {
       const res = await client.rpc('note_version_save', {
         p_note: id,
@@ -19859,7 +19901,9 @@
         if (res.error.code === '54000') showToast(tr('notes.historyKeepFull'));
         return null;   // nett, eller retten er borte — neste runde prøver igjen
       }
-      noteVersionLast = { id, sig };
+      // Et eksplisitt utkast sier ingenting om hva økten står på NÅ, så merket
+      // over «hvilken tilstand har vi alt bedt om et bilde av» røres ikke.
+      if (!opts.doc) noteVersionLast = { id, sig };
       return res && res.data ? res.data : null;
     } catch (e) {
       return null;     // uten nett tas ingen bilder; se filhodet

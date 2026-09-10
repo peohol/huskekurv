@@ -6749,6 +6749,21 @@ begin
     raise exception 'for mange merkede bilder' using errcode = '54000';
   end if;
 
+  /* ÉN AV GANGEN PER NOTAT. Fingeravtrykket sammenlignes mot det ferskeste
+     bildet, og «det ferskeste» er ikke en fast størrelse under samtidighet: to
+     enheter som ber om et bilde i det samme øyeblikket leser hver sin
+     transaksjons øyeblikksbilde, ser den SAMME forrige raden, og legger inn
+     hver sin — med hver sin klientgenererte id, så `on conflict (id)` fanger
+     dem ikke. Historikken fikk da to like rader, og de ble stående, siden den
+     siste timen er unntatt uttynningen.
+
+     Det er nettopp når flere har det samme notatet åpent at dette skjer, altså
+     akkurat det historikken finnes for. Låsen er en RÅDGIVENDE lås på notatet,
+     ikke en radlås: den holder de to skrivingene fra hverandre uten å røre
+     `notes`-raden, som innholdsskrivingene bruker. Den varer transaksjonen ut
+     og dekker derfor både lesingen av `siste` og innsettingen. */
+  perform pg_advisory_xact_lock(hashtextextended('note_version:' || p_note::text, 0));
+
   select * into siste from public.note_versions
    where note_id = p_note order by created_at desc, id desc limit 1;
 

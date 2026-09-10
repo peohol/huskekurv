@@ -222,9 +222,21 @@ hele meningen med å merke ett. Taket på antall merker
 (`note_versions_pin_max()`) håndheves i stedet ved MERKINGEN, der brukeren er
 til stede og kan velge hvilket som skal vike.
 
+**Skrivingen er serialisert per notat.** Fingeravtrykket sammenlignes mot det
+FERSKESTE bildet, og «det ferskeste» er ikke en fast størrelse under
+samtidighet: to enheter som ber om et bilde i det samme øyeblikket ser den
+samme forrige raden og legger inn hver sin — med hver sin klientgenererte id,
+så `on conflict (id)` fanger dem ikke. `note_version_save` tar derfor en
+RÅDGIVENDE lås på notatet (`pg_advisory_xact_lock`, som `push_lock`) før den
+leser «det ferskeste», og den varer transaksjonen ut. Den er rådgivende og
+ikke en radlås på `notes`, slik at den ikke kommer i veien for
+innholdsskrivingene.
+
 `supabase/tests/test-note-versions.sql` dekker grantene og policyen,
 fingeravtrykket, en ren leser, en utenforstående, merking og taket, alle fire
-lagene i uttynningen, tilbakekalling, kaskaden og kontosletting.
+lagene i uttynningen, tilbakekalling, kaskaden og kontosletting;
+`supabase/tests/test-note-version-race.sh` kjører kappløpet med to ekte
+tilkoblinger, i begge rekkefølger.
 
 At man har lov til å legge noe i bokhyllen/notatboken er en egen betingelse i
 `note_folders_insert`/`notes_insert` (`can_create_child` / `can_create_note`),

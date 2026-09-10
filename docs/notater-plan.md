@@ -308,6 +308,17 @@ skrives. Det gjelder også et NYTT notat, der raden ennå ligger i synk-køen og
 første henting derfor svarer «finnes ikke» — uten dette ville et ferskt notat
 stått uten angre de første sekundene.
 
+**Rakk noen å skrive før svaret kom, er spørsmålet hva tegnene er en forskjell
+FRA.** Frøet ble sådd av projeksjonen, og den kan ligge etter loggen: en annen
+kan ha skrevet et avsnitt som ennå ikke har nådd oss. Er projeksjonen lik
+serverens dokument, ER forskjellen mellom arket og det dokumentet nøyaktig
+tastetrykkene, og de skrives inn som en vanlig endring. Er den det IKKE, ville
+den samme forskjellen lest den andres avsnitt som en SLETTING — og neste
+skriving ville fjernet det for alle. Da vinner serverens dokument, og det som
+ble skrevet legges i HISTORIKKEN i stedet for å bli borte. Det er den ene
+plassen der de to funksjonene i denne runden henger sammen: historikken er
+sikkerhetsnettet under samskrivingen.
+
 **Offline er bedre enn før, ikke dårligere.** Oppdateringene legges i en kø i
 enhetens lagring, ved siden av en lokal kopi av CRDT-en, og køen tømmes ved
 første synk-runde etter at nettet er tilbake. Enheten som var borte mister
@@ -356,7 +367,9 @@ rad å hente fra.
 **Serveren avviser dubletter.** Et bilde med samme tittel og samme dokument som
 det ferskeste blir ingen ny rad — så et notat som åpnes og lukkes uten en eneste
 endring legger ikke igjen noe, og to enheter som ber om det samme bildet ender
-med ett. Det er dét som gjør at klienten kan be så ofte.
+med ett. Det er dét som gjør at klienten kan be så ofte. Sammenligningen er
+serialisert per notat, ellers ville to samtidige forespørsler begge sett den
+samme forrige raden og lagt inn hver sin.
 
 **En gjenoppretting er en vanlig endring.** Bildet skrives inn ved at
 FORSKJELLEN mellom det og dokumentet legges i CRDT-en, som et hvilket som helst
@@ -935,18 +948,26 @@ autoritative beskrivelsen; her er bare det som er verdt å vite om VALGENE:
   er avledet av innholdet, slik at to ulike frø aldri kan havne i det samme
   (klient, teller)-rommet. Det LOKALE dokumentet venter aldri på svaret — bare
   publiseringen gjør det — for ellers ville et ferskt notat stått uten angre
-  til raden hadde synket. Rettelsen hører hjemme her fordi gjenopprettingen
-  står på nøyaktig det fundamentet.
+  til raden hadde synket. Og rakk noen å skrive i vinduet, avgjør en
+  sammenligning mot grunnlaget om tegnene kan flettes inn eller må legges i
+  historikken; en forskjell mot serverens dokument ville ellers lest den andres
+  avsnitt som en sletting. Rettelsen hører hjemme her fordi gjenopprettingen
+  står på nøyaktig det fundamentet — og fordi historikken er sikkerhetsnettet
+  som gjør det siste valget mulig uten å miste noe.
 
 Dekket av `tests/notes-history.test.js` (ny: bildene ved åpning og lukking,
 dubletthåndteringen, modalen, forhåndsvisningen, gjenoppretting gjennom CRDT-en
 med loggen som vokser, angring fra toasten, gjenoppretting MENS en annen
-skriver, en ren leser, tilbakekalling, uten nett, merking — og en regresjon på
-frøet i BEGGE retninger, som feiler uten rettelsen over; desktop og mobil),
+skriver, en ren leser, tilbakekalling, uten nett, merking — og tre regresjoner
+på frøet, som hver feiler uten sin rettelse: den doblede teksten, det ferske
+notatet uten angre, og den utdaterte projeksjonen som ikke får slette den
+andres avsnitt; desktop og mobil),
 `supabase/tests/test-note-versions.sql` (serverkontrakten: grants, policy,
 fingeravtrykk, ren leser, utenforstående, merking og tak, alle fire lagene i
-uttynningen, tilbakekalling, kaskade og kontosletting) og en ny RPC-vakt i
-`tests/db-contract.test.js`.
+uttynningen, tilbakekalling, kaskade og kontosletting),
+`supabase/tests/test-note-version-race.sh` (to ekte tilkoblinger: to enheter som
+tar bilde av den samme tilstanden samtidig ender med ett bilde) og en ny
+RPC-vakt i `tests/db-contract.test.js`.
 
 ## Prinsipper for gjennomføring
 

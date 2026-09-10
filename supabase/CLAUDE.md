@@ -68,8 +68,11 @@ samme raden ikke kan passere hverandre. `tests/test-push-race.sh` kjører derfor
 en automatisk push-fornyelse og et «slå av» mot hverandre med TO ekte
 tilkoblinger, i begge rekkefølger — og det samme for den native kanalens
 statusrunde mot «slå av varsler på alle andre enheter», som deler den samme
-låsen fordi handlingen spenner over begge tabellene. Legger du en lås (`select … for update`) et
-nytt sted, hører beviset hjemme der — ikke i en `.sql`-fil.
+låsen fordi handlingen spenner over begge tabellene. `tests/test-note-version-race.sh`
+gjør det samme for notathistorikken: to enheter som tar bilde av den samme
+tilstanden samtidig skal ende med ett bilde, ikke to like. Legger du en lås
+(`select … for update`, `pg_advisory_xact_lock`) et nytt sted, hører beviset
+hjemme der — ikke i en `.sql`-fil.
 
 **Funksjoner som rører `auth`-skjemaet** (i praksis `revoke_my_session()`,
 `list_my_devices()` og `native_notif_active()`) er SECURITY DEFINER og kjører

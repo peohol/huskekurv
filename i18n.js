@@ -216,6 +216,11 @@
     'notes.historyKept':   ['Beholdes', 'Kept'],
     'notes.historyKeepFull': ['Du beholder allerede så mange versjoner som det er plass til. Slutt å beholde en av dem først.',
                               'You are already keeping as many versions as there is room for. Stop keeping one of them first.'],
+    /* Det sjeldne tilfellet: du rakk å skrive i notatet i det sekundet enheten
+       hentet det andre hadde skrevet, og de to kunne ikke flettes trygt. Det
+       du skrev er ikke borte — det ligger i historikken. */
+    'notes.historyStranded': ['Noen andre hadde skrevet i notatet. Deres versjon står nå — det du rakk å skrive ligger i Historikk.',
+                              'Someone else had written in the note. Their version is showing — what you managed to write is in History.'],
 
     /* Livssyklus: arkiv og søppelkasse for alle tre nivåene
        (docs/notater-plan.md). «Arkiver» legger til side; «Slett» legger i
