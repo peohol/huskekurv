@@ -171,6 +171,61 @@ komprimerer samtidig koster en rad for mye, ikke et tegn for lite.
 kolonne-grantene, to samtidige skrivere, en ren leser, en utenforstående, det
 hullfrie merket, komprimeringen, tilbakekalling, kontosletting og kaskaden.
 
+### Notathistorikken (`note_versions`)
+
+Komprimeringen over sletter radene den folder inn, og angringen er CRDT-ens egen
+(den tar bare skriverens EGNE endringer). Ingen av dem er derfor et sted å hente
+fra når en medforfatter fjerner et avsnitt. `note_versions` er det stedet: én rad
+per ØYEBLIKKSBILDE av notatet, med `note_id` som `on delete cascade`.
+
+| Kolonne | Betydning |
+|---|---|
+| `id` | klientgenerert `uuid` (`on conflict do nothing`, som loggen) |
+| `note_id` | notatet bildet hører til (`on delete cascade`) |
+| `author_id` | hvem som ba om bildet (`on delete set null`). ALDRI synlig for klienten |
+| `title` | notatets tittel på det tidspunktet — tittelen er et navn, og ligger ikke i CRDT-en |
+| `doc` | hele dokumentet som `jsonb`, i appens egen form (`{v, blocks}`) — ikke Yjs-binæret |
+| `excerpt` | de første lesbare linjene, til raden i historikken |
+| `chars` | antall tegn i dokumentet: raden som er MYE kortere enn den før den er den man leter etter |
+| `fingerprint` | `md5(tittel ‖ dokument)` — gjør skrivingen idempotent mot det ferskeste bildet |
+| `pinned` | brukerens «behold dette»: det ene feltet på raden som kan endres etterpå |
+| `created_at` | tidspunktet raden viser |
+
+**Bildet er dokumentmodellen, ikke CRDT-tilstanden.** To grunner: et bilde skal
+kunne LESES uten å laste Yjs, og en gjenoppretting skal ikke være en
+overskriving. Klienten skriver FORSKJELLEN mellom bildet og dokumentet inn i
+CRDT-en, som en hvilken som helst annen redigering — så den fletter mot en som
+skriver samtidig, den virker offline, og den kan angres.
+
+**Klienten har INGEN grant på tabellen.** Her finnes ikke engang `note_updates`'
+lille kolonne-unntak, for det er ingen realtime på historikken. RLS-policyen
+(`note_versions_select` på `can_read_note`) er det innerste laget, og alt går
+gjennom fire SECURITY DEFINER-RPC-er (seksjon 9e):
+
+| RPC | Krever | Gjør |
+|---|---|---|
+| `note_versions_list(note)` | `can_read_note` | radene uten dokumentene — 60 bilder av et langt notat er megabyte |
+| `note_version_get(note, id)` | `can_read_note` | ett bilde, med dokumentet |
+| `note_version_save(note, id, tittel, doc, utdrag, tegn, merk)` | `can_edit_content('note', …)` | legger inn et bilde, og tynner |
+| `note_version_pin(note, id, merk)` | `can_edit_content('note', …)` | setter eller fjerner merket |
+
+En REN LESER kommer altså gjennom de to første — historikken er notatets eget
+innhold — og får `insufficient_privilege` på de to siste. Ingen av de fire
+returnerer `author_id`: historikken sier HVA notatet inneholdt, aldri hvem som
+skrev det. Samme grense som loggen.
+
+**Uttynningen (`note_versions_prune`) er serverens, ikke klientens**, og går i
+fire lag: alt fra den siste timen står, det siste døgnet tynnes til ett bilde
+per time, eldre til ett per døgn, og til slutt gjelder et hardt tak på antall
+rader (`note_versions_keep()`). MERKEDE bilder står utenfor alle fire — det er
+hele meningen med å merke ett. Taket på antall merker
+(`note_versions_pin_max()`) håndheves i stedet ved MERKINGEN, der brukeren er
+til stede og kan velge hvilket som skal vike.
+
+`supabase/tests/test-note-versions.sql` dekker grantene og policyen,
+fingeravtrykket, en ren leser, en utenforstående, merking og taket, alle fire
+lagene i uttynningen, tilbakekalling, kaskaden og kontosletting.
+
 At man har lov til å legge noe i bokhyllen/notatboken er en egen betingelse i
 `note_folders_insert`/`notes_insert` (`can_create_child` / `can_create_note`),
 ikke bare i eierskapet på raden selv: uten den kunne en bruker hekte sin egen rad

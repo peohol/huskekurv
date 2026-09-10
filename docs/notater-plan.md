@@ -67,7 +67,7 @@ foten listefanen har for sin kasse; begge er beskrevet i
 
 Notatkortet har den SAMME menyknappen som resten av appen (tre prikker,
 `.obj-menu-btn` → `#obj-menu`): der ligger «Endre navn», «Flytt», «Koblinger»,
-«Kopier alt», «Kopier som Markdown», «Arkiver» og «Slett». Ingen egen popover-type ble innført —
+«Kopier alt», «Kopier som Markdown», «Historikk», «Arkiver» og «Slett». Ingen egen popover-type ble innført —
 [`menus.md`](menus.md) er autoritativ for radene. Har notatet koblinger, står
 det en liten chip med antallet i kortkroppen, under utdraget.
 
@@ -287,10 +287,21 @@ kursiv, understrek, hevet, senket, lenke) er attributter med de samme navnene
 som i dokumentmodellen.
 
 **Et notat fra før denne runden har bare `body`.** Første klient som åpner det
-sår CRDT-en fra dokumentet, og frøet er DETERMINISTISK: to klienter som sår fra
-det samme dokumentet lager bit-identiske operasjoner, så de to frøene er den
-samme operasjonen og flettes til én — ikke til to kopier av notatet.
-Migreringen krever derfor ingen backfill og ingen nedetid.
+sår CRDT-en fra dokumentet, og frøet er DETERMINISTISK: klient-id-en er en
+funksjon av innholdet, så to klienter som sår fra det samme dokumentet lager
+bit-identiske operasjoner. De to frøene er da den samme operasjonen og flettes
+til én — ikke til to kopier av notatet. Migreringen krever derfor ingen backfill
+og ingen nedetid.
+
+**ET FRØ SÅS BARE I EN TOM LOGG.** Determinismen dekker to som sår det samme;
+den kan ikke dekke en enhet som sår et notat noen ALT har sådd og skrevet videre
+i, for da er innholdet et annet. Derfor er frøet bare en foreløpig lokal
+antagelse til den første hentingen har svart: har loggen rader, kastes frøet og
+økten bygges av radene (det som ble skrevet i mellomtiden skrives inn som en
+vanlig forskjell); er loggen tom, er frøet det første og køes. Uten svar — altså
+uten nett — skrives frøet verken til loggen eller til enhetens lagring, og
+notatet oppfører seg som før samskrivingen fantes: tegnene lagres i
+projeksjonen, og flettes inn i CRDT-en så snart serveren har svart.
 
 **Offline er bedre enn før, ikke dårligere.** Oppdateringene legges i en kø i
 enhetens lagring, ved siden av en lokal kopi av CRDT-en, og køen tømmes ved
@@ -317,6 +328,70 @@ verktøylinjen — og den leses av samskrivingen selv: kommer det en endring vi
 ikke laget, er noen andre i gang. Det finnes ingen egen tilstedeværelseskanal og
 ingen fjernmarkører. Indikasjonen navngir heller ingen: hvem som skriver er mer
 enn lesetilgangen lover, og `note_updates.author_id` når aldri klienten.
+
+## Historikk
+
+Samskrivingen gjorde ÉN ting umulig som var mulig før den: å ta tilbake noe.
+Angre er CRDT-ens egen og tar per definisjon bare MINE endringer — sletter
+medforfatteren min et avsnitt, er det ikke min angring som skal hente det
+tilbake — og loggen klappes sammen så snart den blir lang. Historikken er
+stedet det finnes igjen.
+
+**Et bilde er dokumentet, ikke CRDT-tilstanden.** Hver rad i `note_versions` er
+tittelen og hele dokumentet i appens egen strukturerte form. To grunner: et
+bilde skal kunne LESES uten å laste CRDT-en, og en gjenoppretting skal ikke
+være en overskriving.
+
+**Bildene tas av tilstander som faktisk fantes** — ved åpning (FØR man rekker å
+endre noe), med jevne mellomrom mens man skriver, ved lukking, når historikken
+åpnes, og rett før en gjenoppretting. Åpningsbildet er det viktigste: uten det
+ville et notat som ble tømt og lukket i løpet av et halvt minutt aldri hatt en
+rad å hente fra.
+
+**Serveren avviser dubletter.** Et bilde med samme tittel og samme dokument som
+det ferskeste blir ingen ny rad — så et notat som åpnes og lukkes uten en eneste
+endring legger ikke igjen noe, og to enheter som ber om det samme bildet ender
+med ett. Det er dét som gjør at klienten kan be så ofte.
+
+**En gjenoppretting er en vanlig endring.** Bildet skrives inn ved at
+FORSKJELLEN mellom det og dokumentet legges i CRDT-en, som et hvilket som helst
+tastetrykk. Derfor fletter den mot en som skriver samtidig, derfor virker den
+offline, og derfor kan den angres — fra toasten der og da, eller senere gjennom
+historikken, siden tilstanden fra FØR gjenopprettingen alltid tas vare på først.
+Står editoren lukket, åpnes den: CRDT-en er dokumentets ene sanne sted, og en
+skriving inn i den krever en levende økt.
+
+**Historikken rydder seg selv, og serveren bestemmer.** Alt fra den siste timen
+står, det siste døgnet tynnes til ett bilde per time, eldre til ett per døgn, og
+til slutt gjelder et hardt tak på antall rader. Et bilde brukeren har MERKET
+(«Behold denne») står utenfor alle fire — det er hele meningen med å merke ett —
+og taket på antall merker håndheves ved merkingen, der brukeren kan velge hvilket
+som skal vike.
+
+**UI-et er én modal og én rad.** «Historikk» i notatets objektmeny åpner
+`#note-history-modal`: radene er et trekkspill der hodet er tidspunktet (appens
+egen datoordbok), tegntallet og et utdrag, og den åpne raden viser hele
+dokumentet skrivebeskyttet — rendret node for node av den samme funksjonen
+editoren bruker, aldri som markup. Tegntallet er der for det ene tilfellet
+historikken finnes for: raden som er MYE kortere enn den før den er den man
+leter etter.
+
+**Historikken er ANONYM**, som loggen: `note_versions.author_id` når aldri
+klienten. Hvem som skrev hva i et delt notat er mer enn lesetilgangen lover.
+
+**Tilgangen håndheves serverside.** Klienten har ikke engang en grant på
+tabellen; alt går gjennom fire SECURITY DEFINER-RPC-er. Å BLA krever
+`can_read_note` — et øyeblikksbilde er notatets eget innhold — og å skrive, merke
+eller gjenopprette krever `can_edit_content`. En ren LESER får derfor listen og
+forhåndsvisningen og ingenting mer. Autoritativt for tabellen, policyen,
+uttynningen og RPC-ene:
+[`arkitektur-brukere-deling.md`](arkitektur-brukere-deling.md).
+
+**Uten nett tas ingen bilder.** Et bilde er en rad på kontoen, og en kø av dem
+ville vært enda en kopi av innholdet i enhetens lagring. Enheten som er borte
+mister bare tettheten i historikken, aldri innhold — dokumentet lever i CRDT-en
+og i projeksjonen som før — og neste bilde tas så snart nettet er tilbake.
+Modalen sier det i klartekst i stedet for å stå tom.
 
 ## Globalt søk
 
@@ -812,6 +887,60 @@ runden — desktop og mobil), `supabase/tests/test-note-collab.sql`
 (serverkontrakten) og en ny vakt i `tests/db-contract.test.js` for at
 samskrivingsloggen faktisk ligger i realtime-publikasjonen.
 
+### PR 6 — Historikk: å ta tilbake noe som ble borte
+
+**Mål:** Et notat skal kunne føres tilbake til en tidligere tilstand — også når
+det var noen andre som fjernet innholdet.
+
+Omfang: en historikk-tabell med serverhåndhevet tilgang og egen uttynning,
+bilder som tas av tilstander som faktisk fantes, en modal med
+forhåndsvisning, gjenoppretting gjennom CRDT-en, merking av bilder man vil
+beholde, og regresjonsvern for samskrivingen selv.
+
+Status: **gjennomført**. Hvordan det virker står i «Historikk», som er den
+autoritative beskrivelsen; her er bare det som er verdt å vite om VALGENE:
+
+- **Historikken er et ANDRE lag, ikke en utvidelse av loggen.** Loggen
+  (`note_updates`) er append-only nettopp for å kunne klappes sammen, og
+  komprimeringen sletter radene den folder inn. Å gjøre den om til et arkiv
+  ville betydd å slutte å komprimere, altså å la den vokse uten grense i det
+  ene notatet folk skriver mest i. Bildene ligger derfor i sin egen tabell, med
+  sin egen opprydning.
+- **Bildet er dokumentmodellen, ikke Yjs-binæret.** Det kan leses uten å laste
+  CRDT-en (forhåndsvisningen er den samme rendringen som editoren bruker), det
+  overlever en framtidig bytting av CRDT-bibliotek, og det gjør en
+  gjenoppretting til en helt vanlig redigering: klienten skriver FORSKJELLEN
+  inn i CRDT-en. Det er dét som gjør at en gjenoppretting fletter mot en som
+  skriver samtidig, virker offline og kan angres.
+- **Serveren eier dubletthåndteringen.** Et fingeravtrykk av tittel + dokument
+  gjør skrivingen idempotent mot det ferskeste bildet. Uten den måtte klienten
+  ha gjettet på når «nok» hadde endret seg — og to enheter ville lagt inn hvert
+  sitt bilde av den samme tilstanden.
+- **Uttynningen er serverens.** Tallene ligger i databasen, ikke i klienten: en
+  klient som ber om noe annet skal ikke kunne flytte grensen. Merkede bilder
+  står utenfor uttynningen, og taket på antall merker håndheves ved merkingen —
+  der brukeren er til stede og kan velge hvilket som skal vike, i stedet for at
+  noe forsvinner stille.
+- **Historikken er anonym**, som loggen. Å vise hvem som skrev hva ville vært et
+  eget produktvalg om hvem som får se hvem, ikke en detalj i denne runden.
+- **En feil i frøet ble rettet i samme runde.** Et frø sådd av `body` inn i en
+  logg som ALT var sådd, la hele notatet inn en gang til — en enhet som åpnet et
+  delt, samskrevet notat for første gang fikk dobbelt innhold. Frøet er nå en
+  foreløpig antagelse til serveren har sagt om loggen er tom, og klient-id-en
+  er avledet av innholdet, slik at to ulike frø aldri kan havne i det samme
+  (klient, teller)-rommet. Rettelsen hører hjemme her fordi gjenopprettingen
+  står på nøyaktig det fundamentet.
+
+Dekket av `tests/notes-history.test.js` (ny: bildene ved åpning og lukking,
+dubletthåndteringen, modalen, forhåndsvisningen, gjenoppretting gjennom CRDT-en
+med loggen som vokser, angring fra toasten, gjenoppretting MENS en annen
+skriver, en ren leser, tilbakekalling, uten nett, merking — og en regresjon på
+frøet som feiler uten rettelsen over; desktop og mobil),
+`supabase/tests/test-note-versions.sql` (serverkontrakten: grants, policy,
+fingeravtrykk, ren leser, utenforstående, merking og tak, alle fire lagene i
+uttynningen, tilbakekalling, kaskade og kontosletting) og en ny RPC-vakt i
+`tests/db-contract.test.js`.
+
 ## Prinsipper for gjennomføring
 
 - Bygg vertikale leveranser som kan testes end-to-end.
@@ -844,21 +973,27 @@ databasekontrakten; døp dem ikke om.
 | PR 3B — Robusthet og polering | **Gjennomført** |
 | PR 4 — Kopiering og innliming | **Gjennomført** |
 | PR 5 — Sanntids samskriving | **Gjennomført** |
+| PR 6 — Historikk | **Gjennomført** |
 
 **Leveranseplanen er gjennomført.** Notatene er en hel del av appen: de kan
 deles på alle tre nivåene med den samme serverhåndhevede modellen som listene,
-flere kan skrive i det samme notatet samtidig, de har arkiv og søppelkasse, de
-finnes i det felles søket, de kan kobles til listesiden, og de oppfører seg som
-resten av appen på telefon — tastatur, fokus, berøringsflater, den sikre sonen
-og systemets tilbakeknapp.
+flere kan skrive i det samme notatet samtidig, det som ble borte kan hentes
+tilbake fra historikken, de har arkiv og søppelkasse, de finnes i det felles
+søket, de kan kobles til listesiden, og de oppfører seg som resten av appen på
+telefon — tastatur, fokus, berøringsflater, den sikre sonen og systemets
+tilbakeknapp.
 
 **Det som gjenstår er egne leveranser, ikke restarbeid:**
 
 - `object_links` kan bære flere typer per side enn de seks som finnes i dag —
   men bare de seks er koblingsbare nå.
-- Samskrivingen viser AT noen andre skriver, ikke HVOR. Fjernmarkører med navn
-  og farge ville krevd en egen tilstedeværelseskanal og en avklaring av hvem som
-  får se hvem — et eget produktvalg, ikke restarbeid.
+- Samskrivingen viser AT noen andre skriver, ikke HVOR, og historikken viser HVA
+  notatet inneholdt, ikke HVEM som skrev det. Begge deler er den samme
+  avgrensningen: å navngi noen krever en avklaring av hvem som får se hvem — et
+  eget produktvalg, ikke restarbeid.
+- Historikken sammenligner ikke to bilder for brukeren. Å VISE forskjellen
+  mellom to versjoner («dette avsnittet forsvant her») er en egen funksjon med
+  sitt eget UI, ikke en detalj som mangler.
 
 **Import/eksport av notater som filer er IKKE et neste steg.** Utklippstavlen
 dekker det brukeren faktisk trenger — notatet ut i et annet program og inn igjen

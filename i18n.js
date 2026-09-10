@@ -50,6 +50,7 @@
     'common.retry':   ['Prøv igjen', 'Try again'],
     'common.remove':  ['Fjern', 'Remove'],
     'common.done':    ['Ferdig', 'Done'],
+    'common.undo':    ['Angre', 'Undo'],
     // Anførselstegn rundt et objektnavn — ulike tegn på de to språkene.
     'common.quoted':  ['«{name}»', '“{name}”'],
     'common.unnamed': ['uten navn', 'unnamed'],
@@ -189,6 +190,32 @@
     'notes.copiedPlain': ['Notatet er kopiert som ren tekst — denne nettleseren kopierer ikke formatering.',
                           'The note was copied as plain text — this browser cannot copy formatting.'],
     'notes.copyFailed': ['Kunne ikke kopiere notatet.', 'Could not copy the note.'],
+
+    /* HISTORIKKEN (docs/notater-plan.md, «Historikk»). Ordene er brukerens, ikke
+       databasens: en «versjon» er et øyeblikksbilde av notatet, og å «beholde»
+       en versjon er å skjerme den mot opprydningen. Ingen av tekstene navngir
+       noen — historikken sier HVA notatet inneholdt, aldri hvem som skrev det. */
+    'notes.history':     ['Historikk', 'History'],
+    'notes.historyHint': ['Se og hent tilbake tidligere versjoner',
+                          'See and bring back earlier versions'],
+    'notes.historyFor':  ['Historikk for {name}', 'History for {name}'],
+    'notes.historyNow':  ['Nå', 'Now'],
+    'notes.historyChars': ['{count} tegn', '{count} characters'],
+    'notes.historyNoText': ['tomt notat', 'empty note'],
+    'notes.historyLoading': ['Henter …', 'Loading …'],
+    'notes.historyEmpty': ['Ingen tidligere versjoner ennå. Huskis tar vare på notatet mens du skriver i det.',
+                           'No earlier versions yet. Huskis keeps track of the note while you write in it.'],
+    'notes.historyOffline': ['Historikken ligger på kontoen din, og kan ikke hentes uten nett.',
+                             'The history lives in your account, and cannot be loaded without a connection.'],
+    'notes.historyRestore': ['Gjenopprett', 'Restore'],
+    'notes.historyRestored': ['Versjonen er hentet tilbake.', 'The version was brought back.'],
+    'notes.historyFailed': ['Fikk ikke tak i versjonen.', 'Could not get hold of that version.'],
+    'notes.historySnapshot': ['Lagre versjon nå', 'Save a version now'],
+    'notes.historyKeep':   ['Behold denne', 'Keep this one'],
+    'notes.historyUnkeep': ['Slutt å beholde', 'Stop keeping it'],
+    'notes.historyKept':   ['Beholdes', 'Kept'],
+    'notes.historyKeepFull': ['Du beholder allerede så mange versjoner som det er plass til. Slutt å beholde en av dem først.',
+                              'You are already keeping as many versions as there is room for. Stop keeping one of them first.'],
 
     /* Livssyklus: arkiv og søppelkasse for alle tre nivåene
        (docs/notater-plan.md). «Arkiver» legger til side; «Slett» legger i
@@ -699,6 +726,8 @@
     'label.card':           ['Listen {name}', 'The list {name}'],
     'label.note':           ['Notatet {name}', 'The note {name}'],
     'label.noteEdited':     ['Sist endret {when}', 'Last edited {when}'],
+    'label.noteVersion':    ['Versjon fra {when}, {chars} tegn',
+                             'Version from {when}, {chars} characters'],
     'label.category':       ['Kategorien {name}', 'The category {name}'],
     'label.groupcat':       ['Mappekategorien {name}', 'The folder category {name}'],
     'label.menuUniverse':   ['Meny for området {name}', 'Menu for the workspace {name}'],

@@ -539,6 +539,66 @@ create index if not exists note_updates_note_idx on public.note_updates (note_id
 
 alter table public.note_updates enable row level security;
 -- ------------------------------------------------------------
+-- 2b-3. NOTATHISTORIKK — public.note_versions
+--
+--    Samskrivingen gjorde ÉN ting umulig som var mulig før den: å ta tilbake
+--    noe. Angre er CRDT-ens egen og tar per definisjon bare MINE endringer, og
+--    loggen (`note_updates`) klappes sammen så snart den blir lang — radene den
+--    inneholder slettes i samme transaksjon. Sletter medforfatteren min et
+--    avsnitt, finnes det derfor ikke noe sted å hente det fra igjen.
+--
+--    DENNE TABELLEN ER DET STEDET. Hver rad er ett ØYEBLIKKSBILDE av notatet
+--    slik det så ut: tittelen og hele dokumentet, i appens egen strukturerte
+--    form (`{v, blocks}`) — ikke Yjs-binæret. Grunnen er at et øyeblikksbilde
+--    skal kunne LESES uten å laste CRDT-en, og at en gjenoppretting ikke er en
+--    overskriving: klienten skriver FORSKJELLEN mellom bildet og dokumentet inn
+--    i CRDT-en, som en hvilken som helst annen redigering. Da fletter en
+--    gjenoppretting like trygt som alt annet, den kan angres, og den kan gjøres
+--    mens noen andre skriver i notatet.
+--
+--    HISTORIKKEN ER ANONYM, som loggen. `author_id` finnes for opprydning og
+--    for at en slettet konto ikke skal rive bildene med seg, men den når aldri
+--    klienten: hvem som skrev hva i et delt notat er mer enn lesetilgangen
+--    lover (se grants i seksjon 12 og RPC-ene i 9e).
+--
+--    `fingerprint` er md5 av tittelen og dokumentet, og den gjør skrivingen
+--    IDEMPOTENT i praksis: to enheter som ber om et bilde av den samme
+--    tilstanden får det samme bildet, og et notat som åpnes og lukkes uten en
+--    eneste endring legger ikke igjen en ny rad. Uten den ville historikken
+--    vokst med én rad per åpning.
+--
+--    `chars` er antall tegn i dokumentet, og er der for det ene tilfellet
+--    historikken finnes for: raden som er MYE kortere enn den før den er den
+--    man leter etter når noe har blitt borte.
+-- ------------------------------------------------------------
+
+create table if not exists public.note_versions (
+  id          uuid primary key,
+  note_id     uuid not null references public.notes (id) on delete cascade,
+  author_id   uuid references public.profiles (id) on delete set null,
+  title       text not null default '',
+  doc         jsonb not null,
+  excerpt     text not null default '',
+  chars       integer not null default 0,
+  fingerprint text not null,
+  -- Et MERKET bilde er brukerens eget «behold dette». Det er unntaket fra
+  -- uttynningen under, og det eneste feltet på raden som kan endres etterpå.
+  pinned      boolean not null default false,
+  created_at  timestamptz not null default now()
+);
+do $$ begin
+  alter table public.note_versions drop constraint if exists note_versions_size_chk;
+  alter table public.note_versions add constraint note_versions_size_chk
+    check (pg_column_size(doc) <= 2000000 and length(excerpt) <= 400
+           and length(title) <= 2000 and chars >= 0);
+exception when others then null; end $$;
+
+create index if not exists note_versions_note_idx
+  on public.note_versions (note_id, created_at desc);
+
+alter table public.note_versions enable row level security;
+
+-- ------------------------------------------------------------
 -- 2c. KOBLINGER MELLOM NOTATER OG LISTER — public.object_links
 --
 --    En kobling er en RELASJON, ikke en plassering: den flytter ingenting og
@@ -1333,6 +1393,7 @@ drop policy if exists notes_insert on public.notes;
 drop policy if exists notes_update on public.notes;
 drop policy if exists notes_delete on public.notes;
 drop policy if exists note_updates_select on public.note_updates;
+drop policy if exists note_versions_select on public.note_versions;
 drop policy if exists object_links_select on public.object_links;
 drop policy if exists object_links_insert on public.object_links;
 drop policy if exists object_links_delete on public.object_links;
@@ -3066,6 +3127,21 @@ create policy notes_delete on public.notes
    `can_edit_content` selv. Loggen er dessuten APPEND-ONLY — en rad endres
    aldri — så en UPDATE-policy ville beskrevet noe som ikke finnes. */
 create policy note_updates_select on public.note_updates
+  for select using (public.can_read_note(note_id, (select auth.uid())));
+
+/* note_versions: notathistorikken (docs/notater-plan.md, «Historikk»).
+
+   Klienten har ingen grant på tabellen i det hele tatt (seksjon 12), så denne
+   policyen er det INNERSTE laget — den som fortsatt sier nei hvis Supabases
+   `alter default privileges` en dag gir en ny tabell ALL på nytt. Svaret er
+   det samme som for notatet selv: `can_read_note`. Et bilde av et notat er
+   notatets innhold, og den som kan lese notatet kan lese hva det sto før.
+
+   Ingen INSERT-, UPDATE- eller DELETE-policy: historikken skrives, merkes og
+   tynnes utelukkende gjennom RPC-ene i seksjon 9e, som sjekker
+   `can_edit_content` selv. En LESER kommer altså gjennom lesingen og ingenting
+   mer — heller ikke gjennom en annen kodevei. */
+create policy note_versions_select on public.note_versions
   for select using (public.can_read_note(note_id, (select auth.uid())));
 
 /* object_links: koblingene mine mellom notatsiden og listesiden.
@@ -6514,6 +6590,218 @@ end;
 $$;
 
 -- ------------------------------------------------------------
+-- 9e. HISTORIKK-RPC-ER — øyeblikksbildene av ett notat
+--     (docs/notater-plan.md, «Historikk»)
+--
+--    Fire innganger, og de er de ENESTE veiene til `note_versions`. Klienten
+--    har ingen grant på tabellen (seksjon 12), så et direkte tabelloppslag
+--    finner ingenting uansett hva den prøver. Alle fire er SECURITY DEFINER og
+--    sjekker myndigheten selv, med nøyaktig de samme funksjonene resten av
+--    notatsiden bruker:
+--
+--      lese   (`_list`, `_get`)   `can_read_note`
+--      skrive (`_save`, `_pin`)   `can_read_note` OG `can_edit_content`
+--
+--    En ren LESER kan altså BLA i historikken til et notat hun får lese — det
+--    er notatets eget innhold — men får `insufficient_privilege` på begge
+--    skrivingene. Mister hun tilgangen helt, svarer alle fire likt: notatet
+--    finnes ikke.
+--
+--    FORFATTEREN FØLGER ALDRI MED UT. `author_id` er med i tabellen for
+--    opprydning, men ingen av de fire returnerer den. Historikken sier HVA
+--    notatet inneholdt, aldri HVEM som skrev det — samme grense som loggen.
+-- ------------------------------------------------------------
+
+-- Hvor mye historikk ett notat får bære. Tallene står her, ikke i klienten:
+-- det er serveren som tynner, og en klient som ber om noe annet skal ikke
+-- kunne flytte grensen.
+create or replace function public.note_versions_keep() returns integer
+  language sql immutable as $$ select 60 $$;
+create or replace function public.note_versions_pin_max() returns integer
+  language sql immutable as $$ select 20 $$;
+
+/* UTTYNNING. Historikken skal være tett der den brukes og tynn der den bare
+   ligger, og den skal ikke kunne vokse i det uendelige.
+
+   Tre lag, i denne rekkefølgen:
+
+     siste time    alt beholdes — det er her «jeg slettet nettopp noe» skjer;
+     siste døgn    ett bilde per time;
+     eldre         ett bilde per døgn;
+     og til slutt  et hardt tak på antall rader.
+
+   MERKEDE BILDER STÅR UTENFOR ALLE FIRE. Det er hele meningen med å merke et
+   bilde: brukeren har sagt «behold dette», og en opprydning som likevel tok
+   det ville gjort merket til en løgn. Taket på antall merker håndheves i
+   stedet ved MERKINGEN (`note_versions_pin_max`), der brukeren er til stede og
+   kan velge hvilket som skal vike. */
+create or replace function public.note_versions_prune(p_note uuid)
+returns integer language plpgsql security definer set search_path = public as $$
+declare n integer := 0; m integer := 0;
+begin
+  delete from public.note_versions v
+   using (
+     select id,
+            row_number() over (
+              partition by case
+                when created_at > now() - interval '24 hours'
+                  then to_char(created_at at time zone 'UTC', 'YYYYMMDDHH24')
+                else to_char(created_at at time zone 'UTC', 'YYYYMMDD') end
+              order by created_at desc, id desc) as rn
+       from public.note_versions
+      where note_id = p_note
+        and not pinned
+        and created_at <= now() - interval '1 hour'
+   ) r
+   where v.id = r.id and r.rn > 1;
+  get diagnostics n = row_count;
+
+  delete from public.note_versions v
+   using (
+     select id, row_number() over (order by created_at desc, id desc) as rn
+       from public.note_versions
+      where note_id = p_note and not pinned
+   ) r
+   where v.id = r.id and r.rn > public.note_versions_keep();
+  get diagnostics m = row_count;
+  return n + m;
+end;
+$$;
+
+/* Listen: alt klienten trenger for å TEGNE historikken, og ikke ett felt mer.
+   Dokumentene blir ikke med — 60 bilder av et langt notat er megabyte, og
+   listen skal kunne åpnes på en telefon. Utdraget og tegntallet er der i
+   stedet, og `note_version_get` henter det ene bildet man faktisk vil se. */
+create or replace function public.note_versions_list(p_note uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); res jsonb;
+begin
+  if uid is null or not public.can_read_note(p_note, uid) then
+    raise exception 'ingen lesetilgang til notatet' using errcode = '42501';
+  end if;
+  select coalesce(jsonb_agg(jsonb_build_object(
+           'id', v.id,
+           'at', (extract(epoch from v.created_at) * 1000)::bigint,
+           'title', v.title,
+           'excerpt', v.excerpt,
+           'chars', v.chars,
+           'pinned', v.pinned) order by v.created_at desc, v.id desc), '[]'::jsonb)
+    into res
+    from public.note_versions v
+   where v.note_id = p_note;
+  return jsonb_build_object('versions', res, 'pinMax', public.note_versions_pin_max());
+end;
+$$;
+
+create or replace function public.note_version_get(p_note uuid, p_id uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); v public.note_versions%rowtype;
+begin
+  if uid is null or not public.can_read_note(p_note, uid) then
+    raise exception 'ingen lesetilgang til notatet' using errcode = '42501';
+  end if;
+  select * into v from public.note_versions where id = p_id and note_id = p_note;
+  if v.id is null then return null; end if;
+  return jsonb_build_object('id', v.id,
+                            'at', (extract(epoch from v.created_at) * 1000)::bigint,
+                            'title', v.title, 'doc', v.doc,
+                            'chars', v.chars, 'pinned', v.pinned);
+end;
+$$;
+
+/* Å LEGGE ET BILDE I HISTORIKKEN.
+
+   `fingerprint` gjør kallet idempotent i praksis: er tilstanden den SAMME som
+   det ferskeste bildet, lages ingen ny rad. Det er dét som gjør at klienten
+   kan be om et bilde ved hver åpning, ved hver lukking og med jevne mellomrom
+   mens man skriver, uten at historikken fylles med kopier av seg selv — og
+   det er dét som gjør at to enheter som ber om det samme bildet i det samme
+   øyeblikket ender med ett.
+
+   Sammenligningen går bare mot det FERSKESTE bildet, ikke mot alle: et
+   dokument som kommer tilbake til en tidligere tilstand er en ny tilstand i
+   tid, og skal ha sin egen rad. */
+create or replace function public.note_version_save(
+  p_note uuid, p_id uuid, p_title text, p_doc jsonb,
+  p_excerpt text, p_chars integer, p_pinned boolean)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare
+  uid   uuid := auth.uid();
+  fp    text;
+  siste public.note_versions%rowtype;
+  merk  boolean := coalesce(p_pinned, false);
+begin
+  if uid is null or not public.can_read_note(p_note, uid) then
+    raise exception 'ingen lesetilgang til notatet' using errcode = '42501';
+  end if;
+  if not public.can_edit_content('note', p_note, uid) then
+    raise exception 'mangler skriverett i notatet' using errcode = '42501';
+  end if;
+  if p_doc is null or jsonb_typeof(p_doc) <> 'object' then
+    raise exception 'et bilde uten dokument' using errcode = '22023';
+  end if;
+  -- Taket sjekkes FØR skrivingen, slik at et avslag aldri etterlater et
+  -- halvferdig bilde. Se `note_version_pin`.
+  if merk and (select count(*) from public.note_versions
+                where note_id = p_note and pinned) >= public.note_versions_pin_max() then
+    raise exception 'for mange merkede bilder' using errcode = '54000';
+  end if;
+
+  select * into siste from public.note_versions
+   where note_id = p_note order by created_at desc, id desc limit 1;
+
+  fp := md5(coalesce(p_title, '') || E'\n' || p_doc::text);
+  if siste.id is not null and siste.fingerprint = fp then
+    -- Uendret tilstand. Et MERKE er likevel en handling brukeren gjorde nå, og
+    -- det legges på raden som allerede beskriver tilstanden.
+    if merk and not siste.pinned then
+      update public.note_versions set pinned = true where id = siste.id;
+    end if;
+    return jsonb_build_object('id', siste.id, 'created', false,
+                              'pinned', merk or siste.pinned);
+  end if;
+
+  insert into public.note_versions (id, note_id, author_id, title, doc,
+                                    excerpt, chars, fingerprint, pinned)
+  values (coalesce(p_id, gen_random_uuid()), p_note, uid,
+          left(coalesce(p_title, ''), 2000), p_doc,
+          left(coalesce(p_excerpt, ''), 400), greatest(coalesce(p_chars, 0), 0), fp, merk)
+  on conflict (id) do nothing;
+
+  perform public.note_versions_prune(p_note);
+  return jsonb_build_object('id', p_id, 'created', true, 'pinned', merk);
+end;
+$$;
+
+/* Å MERKE ET BILDE (eller ta merket av igjen). Det ene feltet på raden som kan
+   endres etterpå — og grunnen er at merket er brukerens, ikke bildets:
+   uttynningen skal la det stå. */
+create or replace function public.note_version_pin(p_note uuid, p_id uuid, p_pinned boolean)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); n integer := 0; merk boolean := coalesce(p_pinned, false);
+begin
+  if uid is null or not public.can_read_note(p_note, uid) then
+    raise exception 'ingen lesetilgang til notatet' using errcode = '42501';
+  end if;
+  if not public.can_edit_content('note', p_note, uid) then
+    raise exception 'mangler skriverett i notatet' using errcode = '42501';
+  end if;
+  if merk and (select count(*) from public.note_versions
+                where note_id = p_note and pinned and id <> p_id)
+             >= public.note_versions_pin_max() then
+    raise exception 'for mange merkede bilder' using errcode = '54000';
+  end if;
+  update public.note_versions set pinned = merk
+   where id = p_id and note_id = p_note;
+  get diagnostics n = row_count;
+  -- Et merke som tas AV gjør raden til en vanlig rad igjen, og da skal den
+  -- kunne tynnes bort som alle andre.
+  if n > 0 and not merk then perform public.note_versions_prune(p_note); end if;
+  return jsonb_build_object('id', p_id, 'pinned', merk, 'changed', n > 0);
+end;
+$$;
+
+-- ------------------------------------------------------------
 -- 10. import_doc(p_doc) — migrering av dagens (lokale) doc inn som
 --     den innloggede brukerens egne data. Klienten normaliserer
 --     doc-et først (samme migreringssteg som i dag) og sender
@@ -6890,7 +7178,7 @@ on conflict do nothing;
 
 revoke all on public.profiles, public.universes, public.groups, public.cards,
               public.items, public.ideas, public.note_projects, public.note_folders,
-              public.notes, public.note_updates,
+              public.notes, public.note_updates, public.note_versions,
               public.object_links, public.memberships, public.share_invites,
               public.tombstones, public.notifications,
               public.notification_prefs, public.push_subscriptions,
@@ -6923,6 +7211,11 @@ revoke update on public.object_links from authenticated;
    er trukket tilbake i sin helhet. */
 revoke all on public.note_updates from authenticated;
 grant select (id, note_id, created_at) on public.note_updates to authenticated;
+/* note_versions: notathistorikken. Her finnes ikke engang note_updates' lille
+   unntak — det er ingen realtime på historikken, så klienten har INGEN grunn
+   til å røre tabellen direkte. Alt går gjennom de fire SECURITY DEFINER-RPC-ene
+   (seksjon 9e), som sjekker `can_read_note`/`can_edit_content` selv. */
+revoke all on public.note_versions from authenticated;
 -- Å UTELATE en grant er ikke nok i Supabase: prosjektet har
 -- `alter default privileges in schema public grant all on tables to anon,
 -- authenticated`, så en ny tabell får ALL — inkludert INSERT — i det den
@@ -6947,6 +7240,9 @@ grant select (id, note_id, created_at) on public.note_updates to authenticated;
 --                  |   |   |   |   |  i dette notatet»; innholdet hentes med
 --                  |   |   |   |   |  note_crdt_load/_since og skrives med
 --                  |   |   |   |   |  note_crdt_push/_compact.
+--   note_versions  | – | – | – | – | INGEN direkte vei. Historikken leses med
+--                  |   |   |   |   |  note_versions_list/note_version_get og
+--                  |   |   |   |   |  skrives med note_version_save/_pin.
 --   object_links   | ✓ | ✓ | – | ✓ | en kobling finnes eller finnes ikke;
 --                  |   |   |   |   |  den har ingen felter å oppdatere
 --   profiles       | ✓ | – | ✓*| – | *kun display_name/avatar; e-post speiles
@@ -7042,6 +7338,10 @@ begin
     'public.note_crdt_since(uuid, text)',
     'public.note_crdt_push(uuid, jsonb)',
     'public.note_crdt_compact(uuid, uuid, text, uuid[])',
+    'public.note_versions_list(uuid)',
+    'public.note_version_get(uuid, uuid)',
+    'public.note_version_save(uuid, uuid, text, jsonb, text, integer, boolean)',
+    'public.note_version_pin(uuid, uuid, boolean)',
     'public.move_group(uuid, uuid, uuid, double precision)',
     'public.import_doc(jsonb)',
     'public.delete_account()',
@@ -7072,6 +7372,12 @@ revoke all on function public.purge_note_project_access(uuid, uuid) from public,
 revoke all on function public.purge_note_folder_access(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.purge_note_access(uuid, uuid) from public, anon, authenticated;
 revoke all on function public.purge_access(text, uuid, uuid) from public, anon, authenticated;
+-- Uttynningen av historikken er en OPPRYDNING kallerne bestiller etter å ha
+-- kontrollert myndigheten selv; den har ingen egen sjekk og er derfor ikke en
+-- RPC. De to konstantene er heller ikke det.
+revoke all on function public.note_versions_prune(uuid) from public, anon, authenticated;
+revoke all on function public.note_versions_keep() from public, anon, authenticated;
+revoke all on function public.note_versions_pin_max() from public, anon, authenticated;
 revoke all on function public.notify_prefs_row(uuid) from public, anon, authenticated;
 revoke all on function public.notify_max_age_ms() from public, anon, authenticated;
 revoke all on function public.push_enqueue(uuid) from public, anon, authenticated;
