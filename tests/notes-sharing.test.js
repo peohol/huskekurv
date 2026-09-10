@@ -252,6 +252,37 @@ async function run(label, viewport, mobile) {
     skilt.length > 4 && uskilt.length === 0,
     JSON.stringify(uskilt.length ? uskilt : skilt.map((r) => r.navn)));
 
+  /* HINTET ER FORBEHOLDT RADER SOM TRENGER EN SETNING. Det legger en linje til
+     under etiketten og gjør raden halvannen gang så høy som naboene, så et
+     tall («Koblinger» viste antallet der) eller en gjentakelse av etiketten
+     («Arkiver» sa «Legges til side, ikke slettet») hører ikke hjemme i det.
+     I notatmenyen er låseraden den ENESTE som har noe å forklare. */
+  await p.locator(noteSel + ' .obj-menu-btn').first().click();
+  await p.waitForTimeout(250);
+  const hint = await p.evaluate(() => {
+    const rad = (navn) => [...document.querySelectorAll('#obj-menu-panel .obj-menu-row')]
+      .find((r) => new RegExp(navn, 'i').test((r.querySelector('.obj-menu-label') || {}).textContent || ''));
+    const les = (navn) => {
+      const r = rad(navn);
+      if (!r) return null;
+      return { hint: !!r.querySelector('.obj-menu-hint'),
+        teller: (r.querySelector('.obj-menu-count') || {}).textContent || null,
+        h: Math.round(r.getBoundingClientRect().height) };
+    };
+    return { arkiver: les('^Arkiver'), koblinger: les('^Koblinger'),
+      lås: les('^Lås'), medHint: [...document.querySelectorAll('#obj-menu-panel .obj-menu-hint')].length };
+  });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(200);
+  log(label + ' 1: «Arkiver» har ingen forklaringslinje, og er like høy som en vanlig rad',
+    !!hint.arkiver && hint.arkiver.hint === false && hint.arkiver.h === 40,
+    JSON.stringify(hint));
+  log(label + ' 1: «Koblinger» er også en vanlig rad — antallet er ingen hintlinje',
+    !!hint.koblinger && hint.koblinger.hint === false && hint.koblinger.h === 40,
+    JSON.stringify(hint.koblinger));
+  log(label + ' 1: … og låseraden er den eneste som forklarer seg',
+    hint.medHint === 1 && !!hint.lås && hint.lås.hint === true, JSON.stringify(hint));
+
   /* ---------- 2) Delemodalen er den SAMME som for områder og mapper ---------- */
   await menuPick(p, noteSel, 'Deling');
   const modal = await p.evaluate(() => {
@@ -309,6 +340,54 @@ async function run(label, viewport, mobile) {
     JSON.stringify(seksjoner));
   log(label + ' 2: … og luften inne i en seksjon er mindre enn den mellom dem',
     s.every((x) => x.inni < seksjoner.luft), JSON.stringify(s.map((x) => x.inni)));
+
+  /* … OG SEKSJONENS POLSTRING ER HELE LUFTEN, på begge sider av linja.
+     Boksavstanden var symmetrisk hele tiden (18/18); det som ikke var det, var
+     luften slik den SES — bolk-overskriftens halve linjeavstand og siste
+     medlemsrads bunnpolstring la seg oppå seksjonsgapet, så det ble 25 px
+     under linja mot 18 over, og 28 over mot 19 under (MÅLT på skjermbilde).
+
+     Glyfenes egne kanter kan ikke måles fra DOM-en — et Range over en tekst
+     gir linjeboksen, ikke bokstavene — så sjekken går på det som GARANTERER
+     lik luft i stedet: ingen boks helt ytterst i en seksjon legger til egen
+     høyde utover seksjonens polstring. Overskriften har `line-height: 1` og
+     klemmer derfor rundt teksten, og siste medlemsrad har ingen bunnpolstring
+     å legge oppå gapet. */
+  const kanter = await p.evaluate(() => {
+    const kropp = document.getElementById('share-body');
+    const synlige = (el) => [...el.children].filter((c) => !c.hidden
+      && getComputedStyle(c).display !== 'none');
+    const gjennomsiktig = (cs) => /^rgba\(0, 0, 0, 0\)$|^transparent$/.test(cs.backgroundColor)
+      && cs.backgroundImage === 'none';
+    /* Usynlig luft i en boks: polstringen og den halve linjeavstanden over og
+       under teksten. Har boksen en EGEN flate (låsraden, sletteknappen), er
+       kanten dens ikke luft men blekk — da teller ingenting av det. */
+    const luft = (el, side) => {
+      const cs = getComputedStyle(el);
+      if (!gjennomsiktig(cs)) return 0;
+      const pad = parseFloat(side === 'top' ? cs.paddingTop : cs.paddingBottom) || 0;
+      const lh = parseFloat(cs.lineHeight);
+      const fs = parseFloat(cs.fontSize);
+      // `normal` gir NaN og er nettopp tilfellet med udefinert luft — regn den
+      // som nettleserens vanlige ~1.2 i stedet for å la den slippe unna.
+      const linje = Number.isFinite(lh) ? lh : fs * 1.2;
+      const bærerTekst = el.children.length === 0 && (el.textContent || '').trim();
+      return Math.round(pad + (bærerTekst ? Math.max(0, linje - fs) / 2 : 0));
+    };
+    return synlige(kropp).map((el) => {
+      const cs = getComputedStyle(el);
+      const barn = synlige(el);
+      if (!barn.length) return { kl: el.className, tom: true };
+      return { kl: el.className,
+        pad: [Math.round(parseFloat(cs.paddingTop)), Math.round(parseFloat(cs.paddingBottom))],
+        ekstraTopp: luft(barn[0], 'top'),
+        ekstraBunn: luft(barn[barn.length - 1], 'bottom') };
+    });
+  });
+  log(label + ' 2: … og seksjonens polstring er hele luften — ingen kantboks legger til egen',
+    kanter.length === 4 && kanter.every((x) => x.tom
+      || (x.ekstraTopp <= 1 && x.ekstraBunn <= 1)),
+    JSON.stringify(kanter));
   await p.keyboard.press('Escape');
   await p.waitForTimeout(300);
 

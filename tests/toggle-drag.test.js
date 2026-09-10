@@ -24,6 +24,9 @@
     8. TIDSHORISONTEN i «Kommende hendelser» er den SAMME bryteren: `.seg` med
        den grønne, glidende flaten og den samme gesten — men fortsatt med
        radiogruppens `aria-checked`, ikke fane-rekkens `aria-selected`.
+    8b. Etiketten på det AKTIVE segmentet er hvit med svart kontur og skygge —
+       appens egen oppskrift for hvit skrift på en farget flate. Mørkt blekk på
+       den lyse grønne var matt akkurat der valget skal være tydeligst.
     9. SEGMENTENE ER LIKE BREDE HELT NED I BREDDEN (320, 280 og 200 px), og
        bryteren renner ikke ut av sin egen boks — både den glidende flaten og
        dragets geometri regner `100% / n`, så ulike spor gjør begge feil. Og
@@ -219,6 +222,28 @@ async function run(label, viewport, mobile) {
     JSON.stringify(form));
   log(label + ' 8: … og melder fortsatt radiogruppens `aria-checked`', form.aria,
     JSON.stringify(form));
+
+  /* ETIKETTEN PÅ DET AKTIVE SEGMENTET ER HVIT MED KONTUR. Mørkt blekk på den
+     lyse grønne ga en matt etikett akkurat der valget skal være tydeligst, og
+     appen har allerede ett svar på hvit skrift mot en vilkårlig farget flate:
+     skygge pluss full svart kontur, det samme korttitlene bruker. Måles på
+     BEGGE bryterne — de deler `.seg-btn`, og en av dem kan ikke ha sin egen
+     variant. */
+  const aktivBlekk = await p.evaluate(() => {
+    const les = (sel) => {
+      const b = document.querySelector(sel + ' .seg-btn.is-active');
+      if (!b) return null;
+      const cs = getComputedStyle(b);
+      return { farge: cs.color, strek: cs.webkitTextStrokeColor,
+        bredde: cs.webkitTextStrokeWidth, skygge: cs.textShadow };
+    };
+    return { horisont: les('#events-horizon'), faner: les('#main-tabs') };
+  });
+  const hvitMedKontur = (x) => !!x && x.farge === 'rgb(255, 255, 255)'
+    && parseFloat(x.bredde) > 0 && /^rgb\(0, 0, 0\)/.test(x.strek) && /rgb/.test(x.skygge || '');
+  log(label + ' 8: det aktive segmentet har hvitt blekk med svart kontur og skygge',
+    hvitMedKontur(aktivBlekk.horisont) && hvitMedKontur(aktivBlekk.faner),
+    JSON.stringify(aktivBlekk));
   const midtH = await dragToggle(p, '#events-horizon', 0.85, 0.16, { midtveisVar: '--seg-drag' });
   const horisontEtter = await p.evaluate(() => ({
     valgt: window.__huskis.eventsHorizon(),

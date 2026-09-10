@@ -1529,20 +1529,26 @@ er bare hvilken farge som slipper gjennom, som skifter.
 `--card-head` som INLINE-stil på kortet, og en inline-stil slår enhver vanlig
 regel på det samme elementet.
 
-Blekket pinnes i samme slengen. `.card-title` er hvit-med-skygge PÅ
-kortfargen, en kontrakt valgt for paletten — hvit på arkivets gule ga 2,5:1
-(MÅLT). Tittelen bruker derfor det semantiske blekket, uten skygge og strek.
+**Navnet bæres av KONTUREN, ikke av flaten under det.** Målfargen er den samme
+i begge drakter, så teksten oppå skal også stå stille — og da er svaret det
+appen allerede bruker for hvit skrift på en vilkårlig kortfarge: hvitt blekk
+med skygge og full svart kontur, nøyaktig `.card-title`s oppskrift. Hvit rett
+på arkivets gule er 2,5:1, og det er nettopp det konturen kompenserer for —
+samme regnestykke som lys drakt gjør for hele palettens korttitler
+([`tilgjengelighet.md`](tilgjengelighet.md)). Listepunktets tekst har konturen
+bare i mørk drakt til vanlig (`--item-text-stroke`); her får den den i begge,
+av den samme grunnen.
 
-**Og HELE ikontrioen, ikke bare streken.** Ikonene er fargelagte: papiret i et
-notat-, liste- eller kalenderikon males av `--icon-paper`, og den snur med
-drakten (hvit i lys, nesten svart i mørk — [`mork-drakt.md`](mork-drakt.md)).
-Sto den igjen mens flaten skiftet til målfargen, ble et notat som ble dratt over
-arkivet et SORT HULL på det lyse tanet (MÅLT: `#262c36` på `#e6c896`), og over
-søppelkassen i lys drakt et hvitt felt med hvit strek — altså en klatt uten
-motiv. Flaten er KJENT her, akkurat som for tittelen, så ikonet tegnes som ren
-strek på den: `--icon-paper` får flatens egen farge og forsvinner inn i den,
-mens `--icon-ink` bærer motivet i det semantiske blekket. `--icon-grey` er den
-samme regningen, bare dempet, så en grå masse fortsatt leses som en masse.
+**Og HELE ikontrioen, ikke bare streken — pinnet til den LYSE verdien i BEGGE
+drakter**, som `.btn-solid` og `.icon-pin-light` gjør. Ikonene er fargelagte:
+papiret i et notat-, liste- eller kalenderikon males av `--icon-paper`, og den
+snur ellers med drakten (hvit i lys, nesten svart i mørk —
+[`mork-drakt.md`](mork-drakt.md)). Sto den igjen mens flaten skiftet til
+målfargen, ble et notat som ble dratt over arkivet et SORT HULL på det lyse
+tanet (MÅLT: `#262c36` på `#e6c896`). Men målfargen er den SAMME i begge
+drakter, akkurat som gradienten på en massiv knapp — så ikonet oppå den skal
+også stå stille: svart strek på hvitt papir, lyst som mørkt. Motivet er da det
+samme her som overalt ellers i appen, bare på en rød eller gul flate.
 
 Målt i `dnd-drop-colour` (den FAKTISK malte fargen, lest av et skjermbilde
 piksel for piksel — `getComputedStyle` ville bare gjentatt tokenet vi selv

@@ -14279,6 +14279,17 @@
     tx.className = 'obj-menu-label';
     tx.textContent = label;
     b.append(ic, tx);
+    // Telleren står INNE i raden, etter etiketten — den endrer ikke radhøyden.
+    if (opts.count) {
+      const c = document.createElement('span');
+      c.className = 'obj-menu-count';
+      c.textContent = String(opts.count);
+      b.appendChild(c);
+    }
+    /* Hintet er en FORKLARING på en egen linje under etiketten, og gjør raden
+       to linjer høy. Det er forbeholdt rader der handlingen trenger en setning
+       for å forstås (låsen); et tall eller en gjentakelse av etiketten hører
+       ikke hjemme her. */
     if (opts.hint) {
       const h = document.createElement('span');
       h.className = 'obj-menu-hint';
@@ -14530,7 +14541,7 @@
       list.appendChild(objMenuRow(r.icon, r.label, () => {
         if (r.keepOpen) { r.fn(); repaintObjMenu(); return; }
         closeObjMenuThen(r.fn);
-      }, { hint: r.hint }));
+      }, { hint: r.hint, count: r.count }));
     });
 
     /* 8) Sletting sist, bak en skillelinje og i rødt: den er den eneste raden
@@ -16795,7 +16806,6 @@
         canEdit ? {
           icon: ICONS.archive,
           label: tr(obj && obj.archived ? 'notes.unarchive' : 'notes.archive'),
-          hint: tr('notes.archiveHint'),
           fn: () => setNoteArchived(kind, id, !(cfg.find(id) || {}).archived),
         } : null,
       ],
@@ -17208,7 +17218,12 @@
     return {
       icon: ICONS.link,
       label: tr('links.menuRow'),
-      hint: n ? String(n) : '',
+      /* Antallet er en TELLER, ikke en forklaring, og står derfor INNE i raden
+         ved siden av etiketten. Som hint la det seg på en egen linje under, og
+         da ble «Koblinger» halvannen gang så høy som naboradene sine — én rad i
+         menyen med en helt annen polstring enn resten, for et ettsifret tall
+         (docs/menus.md, «Radene»). */
+      count: n || 0,
       fn: () => openLinksModal(kind, id),
     };
   }

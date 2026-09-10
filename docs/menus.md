@@ -81,6 +81,26 @@ endene. Alle skillelinjene i menyen skal være flate. Radene INNE i en skuff
 («Flytt opp/ned», ansvarlig-radene) har den ikke — de er ett trinn ned og hører
 sammen.
 
+**Alle radene har den SAMME polstringen, og den kommer fra ETT sted.**
+`--menu-row-pad-y`/`-x` i `styles.css` gjelder hele popover-familien —
+objektmenyens rader, menyhodet og ansvarlig-velgerens rader, som står i det
+samme `.switcher-panel`-skallet. Verdiene var tidligere skrevet om igjen i hver
+meny (8/9 her, 7/9 der): små nok forskjeller til at ingen enkeltmeny så gal ut,
+store nok til at to menyer ved siden av hverandre ikke leste likt. Skuffenes
+innrykk og hintets venstrekant regnes ut FRA tokenet, så de ikke kan komme i
+utakt med raden de skal flukte med.
+
+To ting hører derfor ikke hjemme som HINT, for hintet legger en linje til under
+etiketten og gjør raden halvannen gang så høy som naboene sine:
+
+- **et tall** — «Koblinger» viser antallet som en dempet teller
+  (`.obj-menu-count`) i ENDEN av raden, på samme linje som etiketten;
+- **en gjentakelse av etiketten** — «Arkiver» sa «Legges til side, ikke
+  slettet», som er det ordet allerede betyr.
+
+Hintet er forbeholdt rader der handlingen trenger en setning for å forstås. I
+praksis er det låseraden, som må si hva låsen gjør med de andres tilgang.
+
 **Sletting står SIST**, bak en skillelinje og i rødt (`.obj-menu-row.is-danger`).
 Den er den eneste raden som fjerner noe, og den skal ikke ligge der fingeren
 treffer først når menyen åpner seg. Den linjen er `.obj-menu-sep` — en egen,
@@ -441,7 +461,7 @@ appen (`.obj-menu-btn` → `#obj-menu`), med de radene notatsiden faktisk har:
 | 3 | **Deling og medlemmer** | alle tre — åpner den SAMME `#share-modal` som områder og mapper |
 | 4 | **Lås for redigering** / **Gjør unntak** | alle tre, når objektet er delt og man kan styre låsen |
 | 5 | **Forlat …** | alle tre, når man kan forlate ([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14) |
-| 6 | **Koblinger** | alle tre — åpner koblingsmodalen, med antallet som hint |
+| 6 | **Koblinger** | alle tre — åpner koblingsmodalen, med antallet som teller i raden |
 | 7 | **Arkiver** / **Hent ut av arkivet** | alle tre, ved redigeringsrett |
 | 8 | **Slett …** | alle tre, ved sletterett (til søppelkassen, i rødt og sist) |
 

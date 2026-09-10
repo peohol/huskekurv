@@ -615,6 +615,34 @@ async function run(navn, viewport, touch) {
     koblet.fraBok === 1 && koblet.fraOmråde === 1 && koblet.fraHylle === 1,
     JSON.stringify(koblet));
 
+  /* ANTALLET STÅR I RADEN, ikke under den. «Koblinger» viste tallet som HINT,
+     og et hint legger en linje til under etiketten: raden ble halvannen gang
+     så høy som naboene sine, for ett siffer (docs/menus.md, «Radene»).
+     Telleren er derfor en dempet pille i enden av raden, og radhøyden er
+     nøyaktig den samme som en rad uten teller. */
+  await p.evaluate(() => window.__huskis.setMainTab('lists'));
+  await p.waitForTimeout(250);
+  await p.locator('#board .card[data-id="' + LA + '"] .obj-menu-btn').first().click();
+  await p.waitForTimeout(300);
+  const teller = await p.evaluate(() => {
+    const rader = [...document.querySelectorAll('#obj-menu-panel .obj-menu-row')];
+    const kobling = rader.find((r) => /^Koblinger/.test(
+      (r.querySelector('.obj-menu-label') || {}).textContent || ''));
+    const uten = rader.filter((r) => r !== kobling && !r.querySelector('.obj-menu-hint'));
+    return {
+      tall: kobling ? (kobling.querySelector('.obj-menu-count') || {}).textContent : null,
+      hint: kobling ? !!kobling.querySelector('.obj-menu-hint') : null,
+      h: kobling ? Math.round(kobling.getBoundingClientRect().height) : null,
+      naboer: [...new Set(uten.map((r) => Math.round(r.getBoundingClientRect().height)))],
+    };
+  });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(200);
+  log(M('12b antallet koblinger står som teller i raden, ikke som en hintlinje'),
+    teller.tall === '1' && teller.hint === false &&
+    teller.naboer.length === 1 && teller.h === teller.naboer[0],
+    JSON.stringify(teller));
+
   // Navigering via koblingen, begge veier.
   await p.evaluate((ids2) => { window.__huskis.setMainTab('notes'); window.__huskis.openLinksModal('note', ids2.fri1); }, ids2);
   await p.waitForFunction(() => !document.getElementById('links-modal').hidden, null, { timeout: 5000, polling: 50 });

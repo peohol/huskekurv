@@ -405,6 +405,13 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   tidshorisonten — som står i en modal med plass nedover — lar den BREKKE
   (se [`kommende-hendelser.md`](kommende-hendelser.md)).
 
+  **Det aktive segmentet bærer HVITT blekk med kontur**, ikke mørkt: skygge
+  pluss full svart kontur, den samme oppskriften korttitlene bruker for hvit
+  skrift på en vilkårlig farget flate. Mørkt blekk på den lyse grønne ga en
+  matt, lavkontrasts etikett akkurat der valget skal være tydeligst. Ikonene
+  pinnes fortsatt som på `.btn-solid` — gradienten er den samme i begge
+  drakter, så streken oppå skal stå stille.
+
   Hvilket attributt det er, avgjøres av ROLLEN bruksstedet satte: en fane-rekke
   (`role="tablist"`) melder `aria-selected`, en innstilling med n stillinger
   (`role="radiogroup"`, tidshorisonten) melder `aria-checked`. Formen,
@@ -777,6 +784,15 @@ er det eneste som holder dem fra hverandre. Samme sted brekker invitasjonsraden:
 e-postfeltet tar hele linjen, og rollevelgeren deler den neste med
 «Inviter»-knappen (tre felt på 390 px ga «E-post å» og «Som m»).
 
+**Seksjonens polstring er HELE luften.** Boksavstanden var symmetrisk fra
+starten, men luften slik den SES var det ikke: bolk-overskriftens halve
+linjeavstand og siste medlemsrads bunnpolstring la seg oppå seksjonsgapet, så
+det ble 25 px under linja mot 18 over. En boks helt ytterst i en seksjon skal
+derfor ikke legge til egen høyde — overskriften har `line-height: 1` og klemmer
+rundt teksten, og siste medlemsrad har ingen bunnpolstring. Har boksen en EGEN
+flate (låsraden, sletteknappen), er kanten dens blekk og ikke luft, og da
+gjelder regelen ikke.
+
 Den første SYNLIGE seksjonen har ingen linje over seg — hodets egen ligger der
 allerede. Invitasjonsseksjonen er den eneste som kan skjules i sin helhet (den
 som ikke kan invitere, har ingenting der), og den står alltid først;
@@ -839,6 +855,24 @@ den er notatets NAVN, ikke dokumentets første overskrift. Verktøylinjen står 
   `--note-indent` inn (litt mindre på telefon). Nivået er en AVLEDET VISNING —
   `noteApplyIndent()` regner det ut av blokkrekkefølgen og skriver `data-lvl`;
   dokumentmodellen lagrer det ikke.
+
+## Radenes polstring: to familier, to tokens
+
+Appen har to slag klikkbare rader, og hver har ETT tall som gjelder hele
+familien — ikke ett per meny:
+
+| Token | Familie | Bruk |
+|---|---|---|
+| `--menu-row-pad-y` / `-x` | MENYRAD i en popover | objektmenyens rader og hode, ansvarlig-velgeren |
+| `--list-row-pad-y` / `-x` | LISTERAD i en rullende modalkropp | hendelser, varsler, søketreff |
+
+Menyraden er trangere fordi panelet selv er smalt og har sin egen 8 px kant;
+listeraden er romsligere fordi den står på hele modalens bredde og skal kunne
+bære to linjer. Verdiene var tidligere skrevet om igjen på hvert bruksted, med
+små avvik (8/9 mot 7/9) som ingen enkeltmeny led av, men som gjorde at to
+menyer ved siden av hverandre ikke leste likt. Alt som regnes ut FRA en rad —
+skuffenes innrykk, hintets venstrekant — leser tokenet i stedet for å gjenta
+tallet.
 
 ## Flate-mønsteret
 
