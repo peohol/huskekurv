@@ -6730,6 +6730,8 @@ declare
   fp    text;
   siste public.note_versions%rowtype;
   merk  boolean := coalesce(p_pinned, false);
+  ny_id uuid;
+  n     integer := 0;
 begin
   if uid is null or not public.can_read_note(p_note, uid) then
     raise exception 'ingen lesetilgang til notatet' using errcode = '42501';
@@ -6761,15 +6763,17 @@ begin
                               'pinned', merk or siste.pinned);
   end if;
 
+  ny_id := coalesce(p_id, gen_random_uuid());
   insert into public.note_versions (id, note_id, author_id, title, doc,
                                     excerpt, chars, fingerprint, pinned)
-  values (coalesce(p_id, gen_random_uuid()), p_note, uid,
+  values (ny_id, p_note, uid,
           left(coalesce(p_title, ''), 2000), p_doc,
           left(coalesce(p_excerpt, ''), 400), greatest(coalesce(p_chars, 0), 0), fp, merk)
   on conflict (id) do nothing;
+  get diagnostics n = row_count;
 
   perform public.note_versions_prune(p_note);
-  return jsonb_build_object('id', p_id, 'created', true, 'pinned', merk);
+  return jsonb_build_object('id', ny_id, 'created', n > 0, 'pinned', merk);
 end;
 $$;
 

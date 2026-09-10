@@ -2446,8 +2446,14 @@
       if (merk && !siste.pinned) siste.pinned = true;
       return { id: siste.id, created: false, pinned: merk || !!siste.pinned };
     }
+    var nyId = p.p_id;
+    // `on conflict (id) do nothing`, som serveren: den samme id-en to ganger
+    // legger ikke inn en dublett.
+    if (db.note_versions.some(function (v) { return v.id === nyId; })) {
+      return { id: nyId, created: false, pinned: merk };
+    }
     db.note_versions.push({
-      id: p.p_id, note_id: id, author_id: uid,
+      id: nyId, note_id: id, author_id: uid,
       title: String(p.p_title == null ? '' : p.p_title).slice(0, 2000),
       doc: p.p_doc,
       excerpt: String(p.p_excerpt == null ? '' : p.p_excerpt).slice(0, 400),
@@ -2455,7 +2461,7 @@
       fingerprint: fp, pinned: merk, created_at: Date.now(),
     });
     noteVersionsPrune(db, id);
-    return { id: p.p_id, created: true, pinned: merk };
+    return { id: nyId, created: true, pinned: merk };
   }
   function noteVersionPin(db, id, uid, vid, pinned) {
     noteVersionDenied(db, id, uid, true);
