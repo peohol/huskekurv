@@ -725,6 +725,36 @@
     </div>
   </div>
 
+  <!-- NOTATHISTORIKKEN (docs/notater-plan.md, «Historikk»): øyeblikksbildene
+       av ETT notat. Ingen ny modaltype — det er `.modal-overlay` > `.modal`
+       som resten, med `.modal-head`, en rullende `.modal-body` og en fot som
+       står stille. Radene er et trekkspill: hodet er tidspunktet, tegntallet
+       og et utdrag, og den åpne raden viser hele dokumentet skrivebeskyttet.
+       Modalen ligger UTENFOR <main>, som de andre, slik at den kan stå over
+       fullskjermseditoren (som setter `inert` på <main>). -->
+  <div class="modal-overlay" id="note-history-modal" hidden>
+    <div class="modal note-history-modal" role="dialog" aria-modal="true" aria-labelledby="note-history-title">
+      <header class="modal-head">
+        <h2 id="note-history-title">
+          <span id="note-history-head-icon" aria-hidden="true"></span>
+          <span id="note-history-title-text"></span>
+        </h2>
+        <button class="icon-btn" id="note-history-close" type="button" data-i18n-title="common.close" data-i18n-aria-label="common.close"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 6.5 17.5 17.5"></path><path d="M17.5 6.5 6.5 17.5"></path></svg></button>
+      </header>
+      <div class="modal-body note-history-body-wrap">
+        <div class="note-history-list" id="note-history-list"></div>
+        <p class="search-note" id="note-history-note" hidden></p>
+      </div>
+      <!-- Knappen står i foten, utenfor det feltet som ruller: en historikk
+           kan bli lang, og «Lagre versjon nå» skal ikke måtte rulles etter
+           (samme grunn som idémodalens kontrollfelt). -->
+      <footer class="modal-foot note-history-foot">
+        <button class="btn btn-ghost btn-small" id="note-history-snapshot" type="button"
+                data-i18n="notes.historySnapshot" hidden>Lagre versjon nå</button>
+      </footer>
+    </div>
+  </div>
+
   <!-- IDÉMODALEN: kontoens egne idéer og idékategorier (docs/ideer.md).
        Innholdet er ikke knyttet til et område eller en mappe — den samme
        listen vises uansett hvor man står. Kroppen er ETT kort uten hode, så

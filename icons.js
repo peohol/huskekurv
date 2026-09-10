@@ -476,6 +476,23 @@ window.ICONS = {
   /* «Kopier alt» og «Kopier som Markdown» i notatets objektmeny: to ark over
      hverandre, og det samme arket med Markdown-merket (M + pil ned). Begge er
      ren strek — ingen fyll, som resten av settet (docs/design-system.md). */
+  /* HISTORIKK: klokka med en pil MOT klokka rundt seg — nøyaktig `snooze`
+     speilvendt, fordi retningen ER betydningen: «utsett» går framover i tid,
+     «historikk» bakover. Streken er ikonsettets svarte (#111), som resten av
+     objektmenyens rader; ingen fyll, som `copy`. */
+  history: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M4 12a8 8 0 1 0 2.4-5.7"></path>' +
+    '<path d="M4 4v3.4h3.4"></path>' +
+    '<path d="M12 7.6V12l3 2.2"></path>' +
+    '</svg>',
+
+  /* «Behold denne versjonen»: et bokmerke. Hvitt ark med svart kant, som
+     arkivkassens front — merket skiller seg ut på knappen sin, ikke på en egen
+     farge (docs/mork-drakt.md: hvitt males om med drakten, en motivfarge ikke). */
+  keep: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M7 4.5h10a1 1 0 0 1 1 1v14.2l-6-4.1-6 4.1V5.5a1 1 0 0 1 1-1Z" fill="#ffffff"></path>' +
+    '</svg>',
+
   copy: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="#111" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<rect x="9" y="8.5" width="11" height="12" rx="2"></rect>' +
     '<path d="M15.5 8.5V5.5a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h3"></path>' +

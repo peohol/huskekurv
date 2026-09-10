@@ -410,13 +410,40 @@ Klientsiden ligger i tre deler, alle i notat-seksjonen i `app.js`:
   deterministisk frø fra `body`), med et realtime-abonnement på notatets egen
   kanal og et poll på 2,5 s som sikkerhetsnett. Serverens logg kommer etterpå og
   går den vanlige fjern-veien, så den kan ikke komme i veien for det brukeren
-  skriver mens den er underveis.
+  skriver mens den er underveis. Et frø UTEN en lokal kopi er bare en foreløpig
+  antagelse til den første hentingen har sagt om loggen er tom
+  (`noteLiveSettleSeed`): har loggen rader, kastes frøet og økten bygges av
+  radene i stedet. LOKALT er økten helt vanlig hele tiden — angre, formatering
+  og lagring virker fra første tastetrykk — det er PUBLISERINGEN som venter:
+  ingenting køes til loggen, og ingen lokal kopi skrives, før svaret har kommet.
+  Det gjelder også et NYTT notat, der raden ennå ligger i synk-køen og første
+  henting derfor svarer «finnes ikke». Rakk noen å skrive i vinduet, flettes
+  tegnene bare inn når projeksjonen vi sådde fra var lik serverens dokument;
+  ellers vinner serverens dokument og utkastet legges i historikken
+  ([`notater-plan.md`](notater-plan.md) → «Sanntids samskriving»).
 - **Køen** (`noteOps`, `pushNoteOps`) — radene som ennå ikke har nådd kontoen,
   lagret i enhetens lagring (`hk-note-ops:<uid>`) ved siden av en lokal kopi av
   CRDT-en (`hk-note-crdt:<uid>`). Køen rir på den SAMME synk-runden som resten
   (`cloudCycle` kaller `pushNoteOps` først), så den får pollets kadens og
   reconnect-en gratis. Begge nøklene tømmes ved utlogging, og for ett enkelt
   notat når tilgangen til det forsvinner.
+- **Historikken** (`note_versions`) lagres IKKE på enheten. Den hentes ved behov
+  og skrives bare når enheten har nett — et øyeblikksbilde er en rad på kontoen,
+  og en kø av dem ville vært enda en kopi av innholdet i enhetens lagring.
+  Autoritativt: [`notater-plan.md`](notater-plan.md) → «Historikk».
+- **Ett unntak: strandede utkast** (`hk-note-draft:<uid>`). Måtte et foreløpig
+  frø kastes mens brukeren hadde rukket å skrive, er det utkastet den ENESTE
+  kopien — CRDT-en er byttet ut og projeksjonen skrives over. Det legges derfor
+  i en holdbar kø FØR noe kastes, tømmes på den vanlige synk-runden, og fjernes
+  først når serveren har bekreftet bildet. Køen har **ikke noe tak**: hver rad
+  er den eneste kopien av noe brukeren har skrevet, og et tak måtte kastet den
+  eldste. Forsøket på nytt bruker køradens egen id, så serveren kjenner igjen et
+  bilde den alt har lagret. Sier lagringen nei, ryddes lokale CRDT-kopier bort
+  først — men bare for notater uten rader i køen, for de andre kopiene er ikke
+  en hurtigbuffer, men grunnlaget de ventende radene er laget mot. Går
+  skrivingen fortsatt ikke, kastes ingenting, og teksten blir stående i
+  editoren. Nøkkelen tømmes ved utlogging, og for ett enkelt notat når tilgangen
+  til det forsvinner — som de to andre.
 
 **Lagringsstatusen i editoren** er avledet av nettopp dette: står det rader i
 køen, sier den «Lagrer …»; kommer de ikke fram, «Lagret på denne enheten»; og

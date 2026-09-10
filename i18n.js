@@ -50,6 +50,7 @@
     'common.retry':   ['Prøv igjen', 'Try again'],
     'common.remove':  ['Fjern', 'Remove'],
     'common.done':    ['Ferdig', 'Done'],
+    'common.undo':    ['Angre', 'Undo'],
     // Anførselstegn rundt et objektnavn — ulike tegn på de to språkene.
     'common.quoted':  ['«{name}»', '“{name}”'],
     'common.unnamed': ['uten navn', 'unnamed'],
@@ -189,6 +190,58 @@
     'notes.copiedPlain': ['Notatet er kopiert som ren tekst — denne nettleseren kopierer ikke formatering.',
                           'The note was copied as plain text — this browser cannot copy formatting.'],
     'notes.copyFailed': ['Kunne ikke kopiere notatet.', 'Could not copy the note.'],
+
+    /* HISTORIKKEN (docs/notater-plan.md, «Historikk»). Ordene er brukerens, ikke
+       databasens: en «versjon» er et øyeblikksbilde av notatet, og å «beholde»
+       en versjon er å skjerme den mot opprydningen. Ingen av tekstene navngir
+       noen — historikken sier HVA notatet inneholdt, aldri hvem som skrev det. */
+    'notes.history':     ['Historikk', 'History'],
+    'notes.historyHint': ['Se og hent tilbake tidligere versjoner',
+                          'See and bring back earlier versions'],
+    'notes.historyFor':  ['Historikk for {name}', 'History for {name}'],
+    'notes.historyNow':  ['Nå', 'Now'],
+    'notes.historyChars': ['{count} tegn', '{count} characters'],
+    'notes.historyNoText': ['tomt notat', 'empty note'],
+    'notes.historyLoading': ['Henter …', 'Loading …'],
+    'notes.historyEmpty': ['Ingen tidligere versjoner ennå. Huskis tar vare på notatet mens du skriver i det.',
+                           'No earlier versions yet. Huskis keeps track of the note while you write in it.'],
+    'notes.historyOffline': ['Historikken ligger på kontoen din, og kan ikke hentes uten nett.',
+                             'The history lives in your account, and cannot be loaded without a connection.'],
+    'notes.historyRestore': ['Gjenopprett', 'Restore'],
+    'notes.historyRestored': ['Versjonen er hentet tilbake.', 'The version was brought back.'],
+    'notes.historyFailed': ['Fikk ikke tak i versjonen.', 'Could not get hold of that version.'],
+    'notes.historySnapshot': ['Lagre versjon nå', 'Save a version now'],
+    'notes.historyKeep':   ['Behold denne', 'Keep this one'],
+    'notes.historyUnkeep': ['Slutt å beholde', 'Stop keeping it'],
+    'notes.historyKept':   ['Beholdes', 'Kept'],
+    'notes.historyKeepFull': ['Du beholder allerede så mange versjoner som det er plass til. Slutt å beholde en av dem først.',
+                              'You are already keeping as many versions as there is room for. Stop keeping one of them first.'],
+    /* Det sjeldne tilfellet: du rakk å skrive i notatet i det sekundet enheten
+       hentet det andre hadde skrevet, og de to kunne ikke flettes trygt. Det
+       du skrev er ikke borte — det ligger i historikken. */
+    'notes.historyStranded': ['Noen andre hadde skrevet i notatet. Deres versjon står nå — det du rakk å skrive er tatt vare på, og legges i Historikk.',
+                              'Someone else had written in the note. Their version is showing — what you managed to write has been kept, and goes into History.'],
+    /* … og går DET ikke — verken enhetens lagring eller kontoen tar imot —
+       kastes ingenting. Teksten blir stående i editoren, og toasten sier det
+       som er sant: den er ikke lagret ennå, så la notatet stå åpent. */
+    'notes.historyStrandedWait': ['Det du skriver er ikke lagret ennå. La notatet stå åpent til det er lagret.',
+                              'What you are writing is not saved yet. Leave the note open until it is.'],
+    /* … og lukkes notatet mens det står slik, forsvinner arket. Teksten blir
+       liggende i appen og sendes så snart noe tar imot, men den tåler ikke at
+       appen lukkes. Det skal brukeren få vite. */
+    'notes.historyStrandedRam': ['Det du skrev er ikke lagret ennå. Ikke lukk appen før det er det.',
+                              'What you wrote is not saved yet. Do not close the app until it is.'],
+    /* Og lot det seg ikke lagre noe holdbart sted i det hele tatt, lukker vi
+       ikke: å lukke ville vært å kaste den siste kopien selv. Brukeren får
+       velge — og velger hen å lukke, er det et valg, ikke et tap i det stille. */
+    'notes.historyStrandedHold': ['Det du skrev er ikke lagret ennå. Lukker du nå, kan det gå tapt.',
+                              'What you wrote is not saved yet. If you close now, it may be lost.'],
+    'notes.closeAnyway': ['Lukk likevel', 'Close anyway'],
+    /* En gjenoppretting skal alltid ha en vei tilbake: tilstanden slik den er
+       NÅ må ligge i historikken først. Går ikke det bildet gjennom, gjøres
+       ingenting — og da skal beskjeden si hvorfor, ikke bare at det feilet. */
+    'notes.historyNoBefore': ['Fikk ikke lagret notatet slik det er nå, så ingenting ble gjenopprettet. Prøv igjen.',
+                              'Could not save the note as it is now, so nothing was restored. Try again.'],
 
     /* Livssyklus: arkiv og søppelkasse for alle tre nivåene
        (docs/notater-plan.md). «Arkiver» legger til side; «Slett» legger i
@@ -699,6 +752,8 @@
     'label.card':           ['Listen {name}', 'The list {name}'],
     'label.note':           ['Notatet {name}', 'The note {name}'],
     'label.noteEdited':     ['Sist endret {when}', 'Last edited {when}'],
+    'label.noteVersion':    ['Versjon fra {when}, {chars} tegn',
+                             'Version from {when}, {chars} characters'],
     'label.category':       ['Kategorien {name}', 'The category {name}'],
     'label.groupcat':       ['Mappekategorien {name}', 'The folder category {name}'],
     'label.menuUniverse':   ['Meny for området {name}', 'Menu for the workspace {name}'],

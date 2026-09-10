@@ -466,12 +466,16 @@ appen (`.obj-menu-btn` → `#obj-menu`), med de radene notatsiden faktisk har:
 | 6 | **Koblinger** | alle tre — åpner koblingsmodalen, med antallet som teller i raden |
 | 7 | **Kopier alt** | bare notatet — hele notatet til utklippstavlen, med formatering |
 | 8 | **Kopier som Markdown** | bare notatet — hele notatet som Markdown |
-| 9 | **Arkiver** / **Hent ut av arkivet** | alle tre, ved redigeringsrett |
-| 10 | **Slett …** | alle tre, ved sletterett (til søppelkassen, i rødt og sist) |
+| 9 | **Historikk** | bare notatet — åpner historikk-modalen med de tidligere versjonene |
+| 10 | **Arkiver** / **Hent ut av arkivet** | alle tre, ved redigeringsrett |
+| 11 | **Slett …** | alle tre, ved sletterett (til søppelkassen, i rødt og sist) |
 
 De to kopieringsradene krever ingen skriverett: kopiering er lesing, så de står
 også i et skrivebeskyttet notat, der verktøylinjen er borte
-([`notater-plan.md`](notater-plan.md), «Utklippstavlen»).
+([`notater-plan.md`](notater-plan.md), «Utklippstavlen»). **Historikk** er
+lesing av samme grunn og står derfor også der — men å GJENOPPRETTE en versjon
+krever skriverett, og den knappen finnes bare inne i modalen
+([`notater-plan.md`](notater-plan.md), «Historikk»).
 
 Notatet har menyen både på kortet og i editorens verktøylinje (`#note-menu-btn`),
 så et åpent notat ikke er en blindvei. **Deling ligger i den vanlige menyen på

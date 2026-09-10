@@ -66,9 +66,9 @@
       try {
         var r = run();
         return (r && typeof r.then === 'function')
-          ? r.catch(function (e) { return { data: null, error: { message: e.message } }; })
+          ? r.catch(function (e) { return { data: null, error: { message: e.message, code: e.code } }; })
           : r;
-      } catch (e) { return { data: null, error: { message: e.message } }; }
+      } catch (e) { return { data: null, error: { message: e.message, code: e.code } }; }
     }
     if (!LAG) return Promise.resolve(attempt());
     return new Promise(function (resolve) {
@@ -99,6 +99,9 @@
         // Samskrivingsloggen for ett notat (docs/notater-plan.md): append-only,
         // én rad per Yjs-oppdatering. `mark` speiler serverens xid-teller.
         note_updates: [], note_mark: 1,
+        // Notathistorikken (docs/notater-plan.md, «Historikk»): ett
+        // øyeblikksbilde av tittelen og dokumentet per rad.
+        note_versions: [],
         memberships: [], share_invites: [], tombstones: [],
         notifications: [], notification_prefs: [],
         push_subscriptions: [], push_deliveries: [],
@@ -120,6 +123,7 @@
     if (!Array.isArray(db.object_links)) db.object_links = [];
     if (!Array.isArray(db.notes)) db.notes = [];
     if (!Array.isArray(db.note_updates)) db.note_updates = [];
+    if (!Array.isArray(db.note_versions)) db.note_versions = [];
     if (typeof db.note_mark !== 'number') db.note_mark = 1;
     return migrateRoles(db);
   }
@@ -2241,6 +2245,9 @@
       var levende = {};
       db.notes.forEach(function (n) { levende[n.id] = 1; });
       db.note_updates = db.note_updates.filter(function (u) { return levende[u.note_id]; });
+      // Historikken hører til notatet på nøyaktig samme måte
+      // (`note_versions.note_id` er `on delete cascade`).
+      db.note_versions = (db.note_versions || []).filter(function (v) { return levende[v.note_id]; });
       return;
     }
     var type = table === 'universes' ? 'universe' : table === 'groups' ? 'group' : table === 'cards' ? 'card' : 'item';
@@ -2342,6 +2349,132 @@
     return { removed: f - db.note_updates.length, mark: String(db.note_mark) };
   }
 
+
+  /* ---------------- Notathistorikken (docs/notater-plan.md) ----------------
+     Speiler `note_versions_list/_get/_save/_pin`: lesing krever
+     `can_read_note`, skriving `can_edit_content('note', ...)`. Forfatteren
+     følger aldri med ut — i produksjon returnerer ingen av de fire
+     `author_id`.
+
+     `fingerprint` gjør skrivingen idempotent mot det FERSKESTE bildet, og
+     uttynningen er den samme tre-lags regelen som i SQL-en: alt den siste
+     timen, ett per time det siste døgnet, ett per døgn eldre enn det — og et
+     hardt tak. Merkede bilder står utenfor alle fire. */
+  var NOTE_VERSIONS_KEEP = 60;
+  var NOTE_VERSIONS_PIN_MAX = 20;
+
+  function noteVersionDenied(db, id, uid, write) {
+    if (!canReadNote(db, id, uid)) throw kode(new Error('ingen lesetilgang til notatet'), '42501');
+    if (write && !canEditContent(db, 'note', id, uid)) {
+      throw kode(new Error('mangler skriverett i notatet'), '42501');
+    }
+  }
+  function kode(err, c) { err.code = c; return err; }
+  function noteVersionRows(db, id) {
+    return db.note_versions.filter(function (v) { return v.note_id === id; })
+      .sort(function (a, b) { return b.created_at - a.created_at || (a.id < b.id ? 1 : -1); });
+  }
+  function noteVersionFingerprint(title, doc) {
+    var s = (title || '') + '\n' + JSON.stringify(doc);
+    var h1 = 2166136261, h2 = 5381;
+    for (var i = 0; i < s.length; i++) {
+      h1 = (h1 ^ s.charCodeAt(i)) >>> 0;
+      h1 = (h1 + ((h1 << 1) + (h1 << 4) + (h1 << 7) + (h1 << 8) + (h1 << 24))) >>> 0;
+      h2 = (((h2 << 5) + h2) + s.charCodeAt(i)) >>> 0;
+    }
+    return s.length + ':' + h1.toString(36) + h2.toString(36);
+  }
+  function noteVersionBucket(at, naa) {
+    var d = new Date(at);
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    var dag = d.getUTCFullYear() + pad(d.getUTCMonth() + 1) + pad(d.getUTCDate());
+    return at > naa - 24 * 3600 * 1000 ? dag + pad(d.getUTCHours()) : dag;
+  }
+  function noteVersionsPrune(db, id) {
+    var naa = Date.now();
+    var rader = noteVersionRows(db, id);
+    var vekk = {};
+    var sett = {};
+    rader.forEach(function (v) {
+      if (v.pinned) return;
+      if (v.created_at > naa - 3600 * 1000) return;      // den siste timen står urørt
+      var b = noteVersionBucket(v.created_at, naa);
+      if (sett[b]) vekk[v.id] = 1; else sett[b] = 1;     // radene er nyeste først
+    });
+    var igjen = 0;
+    rader.forEach(function (v) {
+      if (v.pinned || vekk[v.id]) return;
+      igjen++;
+      if (igjen > NOTE_VERSIONS_KEEP) vekk[v.id] = 1;
+    });
+    db.note_versions = db.note_versions.filter(function (v) { return !vekk[v.id]; });
+  }
+  function noteVersionsList(db, id, uid) {
+    noteVersionDenied(db, id, uid, false);
+    return {
+      versions: noteVersionRows(db, id).map(function (v) {
+        return { id: v.id, at: v.created_at, title: v.title,
+                 excerpt: v.excerpt, chars: v.chars, pinned: !!v.pinned };
+      }),
+      pinMax: NOTE_VERSIONS_PIN_MAX,
+    };
+  }
+  function noteVersionGet(db, id, uid, vid) {
+    noteVersionDenied(db, id, uid, false);
+    var v = db.note_versions.filter(function (r) { return r.id === vid && r.note_id === id; })[0];
+    if (!v) return null;
+    return { id: v.id, at: v.created_at, title: v.title, doc: v.doc,
+             chars: v.chars, pinned: !!v.pinned };
+  }
+  function noteVersionPinnedCount(db, id, unntatt) {
+    return db.note_versions.filter(function (v) {
+      return v.note_id === id && v.pinned && v.id !== unntatt;
+    }).length;
+  }
+  function noteVersionSave(db, id, uid, p) {
+    noteVersionDenied(db, id, uid, true);
+    if (!p.p_doc || typeof p.p_doc !== 'object') {
+      throw kode(new Error('et bilde uten dokument'), '22023');
+    }
+    var merk = !!p.p_pinned;
+    if (merk && noteVersionPinnedCount(db, id, null) >= NOTE_VERSIONS_PIN_MAX) {
+      throw kode(new Error('for mange merkede bilder'), '54000');
+    }
+    var fp = noteVersionFingerprint(p.p_title, p.p_doc);
+    var siste = noteVersionRows(db, id)[0];
+    if (siste && siste.fingerprint === fp) {
+      if (merk && !siste.pinned) siste.pinned = true;
+      return { id: siste.id, created: false, pinned: merk || !!siste.pinned };
+    }
+    var nyId = p.p_id;
+    // `on conflict (id) do nothing`, som serveren: den samme id-en to ganger
+    // legger ikke inn en dublett.
+    if (db.note_versions.some(function (v) { return v.id === nyId; })) {
+      return { id: nyId, created: false, pinned: merk };
+    }
+    db.note_versions.push({
+      id: nyId, note_id: id, author_id: uid,
+      title: String(p.p_title == null ? '' : p.p_title).slice(0, 2000),
+      doc: p.p_doc,
+      excerpt: String(p.p_excerpt == null ? '' : p.p_excerpt).slice(0, 400),
+      chars: Math.max(0, p.p_chars || 0),
+      fingerprint: fp, pinned: merk, created_at: Date.now(),
+    });
+    noteVersionsPrune(db, id);
+    return { id: nyId, created: true, pinned: merk };
+  }
+  function noteVersionPin(db, id, uid, vid, pinned) {
+    noteVersionDenied(db, id, uid, true);
+    var merk = !!pinned;
+    if (merk && noteVersionPinnedCount(db, id, vid) >= NOTE_VERSIONS_PIN_MAX) {
+      throw kode(new Error('for mange merkede bilder'), '54000');
+    }
+    var v = db.note_versions.filter(function (r) { return r.id === vid && r.note_id === id; })[0];
+    if (v) v.pinned = merk;
+    if (v && !merk) noteVersionsPrune(db, id);
+    return { id: vid, pinned: merk, changed: !!v };
+  }
+
   /* ---------------- RPC-er ---------------- */
   function nextPersonalPos(db, uid) {
     return db.memberships.filter(function (m) { return m.user_id === uid; })
@@ -2356,6 +2489,12 @@
       note_crdt_push: function (p) { return noteCrdtPush(db, p.p_note, uid, p.p_updates); },
       note_crdt_compact: function (p) {
         return noteCrdtCompact(db, p.p_note, uid, p.p_id, p.p_snapshot, p.p_ids);
+      },
+      note_versions_list: function (p) { return noteVersionsList(db, p.p_note, uid); },
+      note_version_get: function (p) { return noteVersionGet(db, p.p_note, uid, p.p_id); },
+      note_version_save: function (p) { return noteVersionSave(db, p.p_note, uid, p); },
+      note_version_pin: function (p) {
+        return noteVersionPin(db, p.p_note, uid, p.p_id, p.p_pinned);
       },
       notify_record: function (p) { return notifRecord(db, uid, p.p_rows || [], p.p_cursor || 0); },
       push_subscribe: function (p) { return pushSubscribe(db, uid, p); },

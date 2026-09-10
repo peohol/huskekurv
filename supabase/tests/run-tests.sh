@@ -31,6 +31,7 @@ $PSQL --no-psqlrc --echo-errors -f tests/test-notes.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-note-sharing.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-note-links.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-note-collab.sql
+$PSQL --no-psqlrc --echo-errors -f tests/test-note-versions.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-account-deletion.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-notifications.sql
 $PSQL --no-psqlrc --echo-errors -f tests/test-push.sql
@@ -41,6 +42,11 @@ $PSQL --no-psqlrc --echo-errors -f tests/test-native-notif.sql
 # to samtidige. Denne kjører fornyelse og «slå av» mot hverandre i begge
 # rekkefølger, med to ekte tilkoblinger.
 tests/test-push-race.sh
+
+# Det samme slaget kappløp i historikken: to enheter som tar bilde av det SAMME
+# notatet samtidig skal ende med ett bilde, ikke to like. Kan heller ikke
+# bevises fra én økt.
+tests/test-note-version-race.sh
 
 # Smoke-testen som produksjonsdeployen henger på (release.yml) må bevises her:
 # den skal være GRØNN mot et ferdig migrert skjema. Er den det ikke lokalt,
@@ -70,7 +76,8 @@ $PSQL --no-psqlrc --echo-errors -f tests/test-list-share-migration.sql
 $PSQL --no-psqlrc --echo-errors -f smoke-test.sql
 
 echo "✅ Alle SQL-tester grønne (roller, capabilities, mappeflytting, e-postvarsel,"
-echo "   gravsteiner, idéer, notater, arkiv, koblinger, notatdeling og samskriving, kontosletting, varsler,"
+echo "   gravsteiner, idéer, notater, arkiv, koblinger, notatdeling, samskriving og
+   notathistorikk (òg samtidighet), kontosletting, varsler,"
 echo "   web push (òg samtidighet), økter,"
 echo "   native varselenheter,"
 echo "   migrering av gamle listedelinger og deploy-smoke-testen — alle tre løp)."

@@ -54,7 +54,8 @@ declare
 begin
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes', 'note_updates', 'object_links',
+    'note_projects', 'note_folders', 'notes', 'note_updates',
+    'note_versions', 'object_links',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs',
     'push_subscriptions', 'push_deliveries', 'device_sessions',
@@ -137,6 +138,14 @@ begin
     -- — men kolonnene må finnes, ellers feiler de fire RPC-ene i stedet.
     'note_updates:id', 'note_updates:note_id', 'note_updates:author_id',
     'note_updates:payload', 'note_updates:xid', 'note_updates:created_at',
+
+    -- Notathistorikken (docs/notater-plan.md, «Historikk»). Klienten rører
+    -- heller ikke denne direkte — alt går gjennom note_version*-RPC-ene — men
+    -- kolonnene må finnes, ellers feiler de fire RPC-ene i stedet.
+    'note_versions:id', 'note_versions:note_id', 'note_versions:author_id',
+    'note_versions:title', 'note_versions:doc', 'note_versions:excerpt',
+    'note_versions:chars', 'note_versions:fingerprint', 'note_versions:pinned',
+    'note_versions:created_at',
 
     -- Koblinger Lister <-> Notater: én fremmednøkkel per koblingsbar type,
     -- nøyaktig én satt per side (docs/notater-plan.md).
@@ -275,7 +284,8 @@ declare
 begin
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes', 'note_updates', 'object_links',
+    'note_projects', 'note_folders', 'notes', 'note_updates',
+    'note_versions', 'object_links',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs',
     'push_subscriptions', 'push_deliveries', 'device_sessions',
@@ -321,6 +331,7 @@ begin
     'notes:notes_select', 'notes:notes_insert',
     'notes:notes_update', 'notes:notes_delete',
     'note_updates:note_updates_select',
+    'note_versions:note_versions_select',
     'object_links:object_links_select', 'object_links:object_links_insert',
     'object_links:object_links_delete',
     'memberships:memberships_select', 'memberships:memberships_update',
@@ -365,6 +376,11 @@ begin
     'public.note_crdt_since(uuid, text)',
     'public.note_crdt_push(uuid, jsonb)',
     'public.note_crdt_compact(uuid, uuid, text, uuid[])',
+    -- Notathistorikken (docs/notater-plan.md, «Historikk»).
+    'public.note_versions_list(uuid)',
+    'public.note_version_get(uuid, uuid)',
+    'public.note_version_save(uuid, uuid, text, jsonb, text, integer, boolean)',
+    'public.note_version_pin(uuid, uuid, boolean)',
     'public.create_share_invite(text, uuid, text, text)',
     'public.accept_share_invite(uuid, uuid, double precision)',
     'public.decline_share_invite(uuid)',
@@ -687,7 +703,8 @@ begin
   -- anon skal ikke se noe som helst.
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes', 'note_updates', 'object_links',
+    'note_projects', 'note_folders', 'notes', 'note_updates',
+    'note_versions', 'object_links',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs', 'push_subscriptions', 'push_deliveries',
     'device_sessions', 'native_notif_devices'

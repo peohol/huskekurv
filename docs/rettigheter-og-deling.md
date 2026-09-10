@@ -764,6 +764,8 @@ notat kan stå uten eksplisitt eier, for bokhylleeierne dekker dem.
 | **redigere innhold** | lesetilgang + (eier ELLER ikke effektivt låst) | ⟶ | ⟶ |
 | **skrive i notatet samtidig med andre** | – | – | redigeringsrett (`note_crdt_push`/`_compact`) |
 | **motta andres tegn mens de skrives** | – | – | lesetilgang (`note_crdt_load`/`_since` + realtime) |
+| **bla i historikken** | – | – | lesetilgang (`note_versions_list`/`note_version_get`) |
+| **legge et bilde i historikken, merke det, gjenopprette** | – | – | redigeringsrett (`note_version_save`/`note_version_pin`) |
 | **opprette under** | redigeringsrett på bokhyllen | redigeringsrett på notatboken | – |
 | **omrokkere** | alltid (PERSONLIG rekkefølge) | redigeringsrett på bokhyllen | redigeringsrett på forelderen |
 | **arkivere / hente ut av arkivet** | redigeringsrett | ⟶ | ⟶ |
@@ -800,6 +802,17 @@ skriving rett mot serveren avvises. Trekkes tilgangen tilbake mens editoren stå
 åpen, slutter leveringen i samme øyeblikk, bildet lukkes, og verken køen eller
 den lokale kopien av innholdet blir liggende igjen på enheten. Autoritativt for
 mekanikken: [`notater-plan.md`](notater-plan.md) → «Sanntids samskriving».
+
+**Historikken har heller ingen egne rettigheter.** Å BLA i den er lesetilgang —
+et øyeblikksbilde er notatets eget innhold, og den som får lese notatet får se
+hva det sto før. Å legge et bilde i den, å merke et, og å GJENOPPRETTE er
+`can_edit_content`: en gjenoppretting er en helt vanlig redigering av
+dokumentet, ikke en egen myndighet. En ren LESER får derfor listen og
+forhåndsvisningen, men verken «Gjenopprett», «Behold denne» eller «Lagre versjon
+nå» — og en skriving rett mot serveren avvises. Historikken navngir dessuten
+ingen: `note_versions.author_id` når aldri klienten, av samme grunn som
+loggens. Autoritativt for mekanikken:
+[`notater-plan.md`](notater-plan.md) → «Historikk».
 
 ### Flytting mellom foreldre med ulike delingsforhold
 

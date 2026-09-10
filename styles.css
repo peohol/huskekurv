@@ -6138,7 +6138,7 @@ body.note-editing .corner-controls { display: none; }
   display: flex;
   align-items: center;
   gap: 6px;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   background: var(--plate);
 }
 .link-open {
@@ -6151,13 +6151,13 @@ body.note-editing .corner-controls { display: none; }
   gap: 10px;
   padding: 9px 10px;
   border: none;
-  border-radius: var(--r-sm);
+  border-radius: var(--radius-sm);
   background: transparent;
   color: inherit;
   font-family: inherit;
   text-align: left;
 }
-.link-open:hover { background: var(--hover); }
+.link-open:hover { background: var(--primary-soft); }
 .link-open:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: -2px; }
 .link-open[disabled] { cursor: default; opacity: 0.6; }
 .link-icon { flex: none; display: inline-flex; }
@@ -6170,6 +6170,118 @@ body.note-editing .corner-controls { display: none; }
 .link-meta { font-size: var(--fs-xs); color: var(--ink-soft); overflow-wrap: break-word; }
 .link-row.is-gone .link-name { font-style: italic; color: var(--ink-soft); }
 .link-remove { flex: none; margin-right: 4px; }
+
+/* ------------------------------------------------------------
+   NOTATHISTORIKKEN (docs/notater-plan.md, «Historikk»)
+
+   Ingen nye former: modalen er `.modal`, radene er `.plate`-flater som
+   koblingsraden, og den åpne raden er et trekkspill som objektmenyens
+   undergrupper. Det ENESTE som er nytt her er forhåndsvisningen — et
+   skrivebeskyttet ark som gjenbruker `.note-doc` fra editoren, med editorens
+   minstehøyde slått av (et bilde skal ta plassen innholdet trenger, ikke en
+   halv skjerm).
+   ------------------------------------------------------------ */
+.note-history-body-wrap { display: flex; flex-direction: column; gap: 8px; }
+.note-history-list { display: flex; flex-direction: column; gap: 6px; }
+.note-history-row {
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+/* En BEHOLDT versjon er skjermet mot opprydningen, og skal kunne kjennes igjen
+   i lista uten å åpnes. Markeringen er en kantstripe i aksentfargen — samme
+   virkemiddel som andre «denne er spesiell»-rader, ikke en ny farge. */
+.note-history-row.is-kept { box-shadow: inset 3px 0 0 0 var(--accent); }
+.note-history-head {
+  appearance: none;
+  cursor: pointer;
+  width: 100%;
+  /* 44 px berøringsflate, som overalt ellers (docs/tilgjengelighet.md). */
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  align-items: start;
+  gap: 4px 8px;
+  padding: 9px 10px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--fs-base);
+  text-align: left;
+}
+.note-history-head:hover { background: var(--wash); }
+.note-history-head:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: -2px; }
+.note-history-chev {
+  grid-row: 1 / span 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  transition: transform 0.15s;
+}
+.note-history-chev > .icon { width: 16px; height: 16px; }
+.note-history-row.is-open .note-history-chev { transform: rotate(90deg); }
+.note-history-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.note-history-when { font-weight: 700; }
+/* «Nå» er den ferskeste raden — den man kommer tilbake til hvis en
+   gjenoppretting var feil. */
+.note-history-now {
+  font-size: var(--fs-xs);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+.note-history-kept { display: inline-flex; }
+.note-history-kept > .icon { width: 15px; height: 15px; }
+/* Tegntallet er der historikken faktisk brukes: raden som er MYE kortere enn
+   den over er den man leter etter når noe har blitt borte. */
+.note-history-size { font-size: var(--fs-xs); color: var(--ink-soft); margin-left: auto; }
+.note-history-text {
+  grid-column: 2;
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+  font-style: italic;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.note-history-body {
+  padding: 0 10px 10px 36px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.note-history-doc-title { margin: 0; font-weight: 800; overflow-wrap: break-word; }
+.note-history-doc {
+  min-height: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  font-size: var(--fs-sm);
+}
+.note-history-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Knappene har appens vanlige flate; utvidelsen til 44 px ligger i luften
+   rundt dem, ikke i tegningen (samme regel som editorens verktøy). */
+.note-history-actions > .btn { min-height: 38px; }
+.note-history-keep.is-on { font-weight: 800; color: var(--accent); }
+.note-history-foot { justify-content: flex-end; }
+/* På telefon er innrykket under raden dyrt: teksten skal ha bredden. */
+@media (max-width: 560px) {
+  .note-history-body { padding-left: 10px; }
+  .note-history-doc { max-height: 34vh; }
+}
 
 /* Koblingsraden i notatkortets kropp — chipen under utdraget. */
 .note-card-links { display: flex; margin-top: 6px; }
