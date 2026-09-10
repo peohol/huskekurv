@@ -10,7 +10,8 @@
        rollevelger og «Forlat»/«Slett» etter serverens capabilities — og
        kroppen er fire seksjoner skilt av luft og en linje, ikke én ramse
     3. Eier / redaktør / REN LESER: låsen er det som lager leseren, og en leser
-       får verken omdøping, sletting, ＋-knapper eller en skrivbar editor
+       får verken omdøping, sletting, ＋-knapper eller en skrivbar editor —
+       men beholder «Kopier alt»/«Kopier som Markdown», som er lesing
     4. Deling DIREKTE på notatbok og notat: mottakeren ser objektet i den
        virtuelle «Delt med meg»-bokhyllen, og aldri navnet på bokhyllen over
     5. Tilbakekalling: objektet forsvinner ved neste synk, editoren lukkes, og
@@ -270,7 +271,15 @@ async function run(label, viewport, mobile) {
         h: Math.round(r.getBoundingClientRect().height) };
     };
     return { arkiver: les('^Arkiver'), koblinger: les('^Koblinger'),
-      lås: les('^Lås'), medHint: [...document.querySelectorAll('#obj-menu-panel .obj-menu-hint')].length };
+      lås: les('^Lås'),
+      // Hver hint-tekst i menyen, så POLICYEN kan prøves og ikke bare antallet:
+      // et hint skal si noe etiketten ikke alt sier.
+      hint: [...document.querySelectorAll('#obj-menu-panel .obj-menu-row')]
+        .map((r) => {
+          const h = r.querySelector('.obj-menu-hint');
+          return h ? { rad: (r.querySelector('.obj-menu-label') || {}).textContent,
+            tekst: h.textContent } : null;
+        }).filter(Boolean) };
   });
   await p.keyboard.press('Escape');
   await p.waitForTimeout(200);
@@ -280,8 +289,15 @@ async function run(label, viewport, mobile) {
   log(label + ' 1: «Koblinger» er også en vanlig rad — antallet er ingen hintlinje',
     !!hint.koblinger && hint.koblinger.hint === false && hint.koblinger.h === 40,
     JSON.stringify(hint.koblinger));
-  log(label + ' 1: … og låseraden er den eneste som forklarer seg',
-    hint.medHint === 1 && !!hint.lås && hint.lås.hint === true, JSON.stringify(hint));
+  /* Hintet er FORBEHOLDT rader som trenger en setning: låsen, og de to
+     kopieringsradene som skiller to utfall med nesten samme navn. Prøven er
+     ikke ANTALLET — det vokser med nye rader — men om teksten sier noe
+     etiketten ikke alt sier: aldri et blott tall, aldri ett ord. */
+  const dårligeHint = hint.hint.filter((h) => /^\s*\d+\s*$/.test(h.tekst)
+    || h.tekst.trim().split(/\s+/).length < 3);
+  log(label + ' 1: … og hvert hint er en setning som forklarer, ikke et tall eller et ord',
+    !!hint.lås && hint.lås.hint === true && hint.hint.length > 0 && dårligeHint.length === 0,
+    JSON.stringify(dårligeHint.length ? dårligeHint : hint.hint));
 
   /* ---------- 2) Delemodalen er den SAMME som for områder og mapper ---------- */
   await menuPick(p, noteSel, 'Deling');
@@ -452,6 +468,17 @@ async function run(label, viewport, mobile) {
     return !!(b && b.hidden);
   }, projSel);
   log(label + ' 4: … og ＋-knappen er borte', bLåstAdd === true, String(bLåstAdd));
+  /* KOPIERING ER LESING. En ren leser mister verktøylinjen og skriveretten,
+     men skal fortsatt få hele notatet ut av Huskis: «Kopier alt» og «Kopier
+     som Markdown» krever ingen skriverett (docs/notater-plan.md,
+     «Utklippstavlen»). */
+  await p.evaluate(() => window.__huskis.closeNotesNav());
+  await p.waitForTimeout(300);
+  await gotoFolder(p, ids.P, ids.F);
+  const bLåstKopi = await menuRows(p, noteSel);
+  log(label + ' 4: … men «Kopier alt» og «Kopier som Markdown» står igjen — det som kan leses, kan kopieres',
+    bLåstKopi.some((r) => /^Kopier alt$/.test(r)) && bLåstKopi.some((r) => /^Kopier som Markdown$/.test(r)),
+    bLåstKopi.join(' | '));
   // Serveren er autoritativ: et rått skriveforsøk endrer ingenting.
   const bSkriv = await p.evaluate(async (id) => {
     const r = await window.__huskis.client.from('notes')
