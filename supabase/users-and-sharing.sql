@@ -6623,7 +6623,7 @@ create or replace function public.note_versions_pin_max() returns integer
 /* UTTYNNING. Historikken skal være tett der den brukes og tynn der den bare
    ligger, og den skal ikke kunne vokse i det uendelige.
 
-   Tre lag, i denne rekkefølgen:
+   Fire lag, i denne rekkefølgen:
 
      siste time    alt beholdes — det er her «jeg slettet nettopp noe» skjer;
      siste døgn    ett bilde per time;
