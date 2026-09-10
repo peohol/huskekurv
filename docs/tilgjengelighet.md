@@ -335,6 +335,13 @@ gulvet.
 - **Notat-editoren** er ingen modal, men den følger den samme regelen: den
   lukkes tilbake til NOTATKORTET man åpnet, ikke til breadcrumben. Er kortet
   borte (arkivert, slettet, en annen mappe), er breadcrumben fallbacken.
+- **Historikk-modalens liste males om** hver gang en rad åpnes eller visningen
+  byttes, og fokus går tilbake til den SAMME kontrollen i raden (`data-fkey`) —
+  ikke bare til radhodet. Uten det ville et bytte mellom «Hele versjonen» og
+  «Endringer» kastet tastaturet ut av bryteren man nettopp brukte. Piltastene i
+  bryteren flytter fokus til det VALGTE segmentet, som i appens andre
+  segmenterte brytere ([`notater-plan.md`](notater-plan.md),
+  «Versjonssammenligning»).
 
 ## Bevegelse
 

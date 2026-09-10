@@ -243,6 +243,50 @@
     'notes.historyNoBefore': ['Fikk ikke lagret notatet slik det er nå, så ingenting ble gjenopprettet. Prøv igjen.',
                               'Could not save the note as it is now, so nothing was restored. Try again.'],
 
+    /* VERSJONSSAMMENLIGNING (docs/notater-plan.md, «Versjonssammenligning»).
+       Retningen er fast: den valgte versjonen er FØR, notatet slik det er nå er
+       ETTER. «Lagt til» betyr derfor «kom til etter denne versjonen». Ordene er
+       brukerens — ingenting her navngir noen, som resten av historikken. */
+    'notes.fullView':    ['Hele versjonen', 'Whole version'],
+    'notes.diffView':    ['Endringer', 'Changes'],
+    'notes.diffViewLabel': ['Vis versjonen eller endringene', 'Show the version or the changes'],
+    'notes.diffSummary': ['Endret siden denne versjonen: {parts}.', 'Changed since this version: {parts}.'],
+    'notes.diffNone':    ['Ingen forskjeller — notatet er akkurat slik det var i denne versjonen.',
+                          'No differences — the note is exactly as it was in this version.'],
+    'notes.diffUnavailable': ['Får ikke tak i notatet slik det er nå, så det er ingenting å sammenligne med ennå.',
+                              'Cannot get hold of the note as it is now, so there is nothing to compare with yet.'],
+    'notes.diffAdded':   ['Lagt til', 'Added'],
+    'notes.diffRemoved': ['Fjernet', 'Removed'],
+    'notes.diffChanged': ['Endret', 'Changed'],
+    'notes.diffMoved':   ['Flyttet', 'Moved'],
+    'notes.diffFormatted': ['Ny formatering', 'New formatting'],
+    'notes.diffFormatOn': ['Ny formatering: {marks}', 'New formatting: {marks}'],
+    'notes.diffCountAdded':   ['{count} lagt til', '{count} added'],
+    'notes.diffCountRemoved': ['{count} fjernet', '{count} removed'],
+    'notes.diffCountChanged': ['{count} skrevet om', '{count} rewritten'],
+    'notes.diffCountMoved':   ['{count} flyttet', '{count} moved'],
+    'notes.diffCountFormatted': ['{count} med ny formatering', '{count} with new formatting'],
+    'notes.diffTitleChanged': ['tittelen', 'the title'],
+    'notes.diffTitleLabel': ['Tittel', 'Title'],
+    /* Markeringenes egne navn, uten tastatursnarveien: de leses her som en
+       forklaring på hva som ble annerledes, ikke som en knapp man kan trykke. */
+    'notes.markBold':      ['fet', 'bold'],
+    'notes.markItalic':    ['kursiv', 'italic'],
+    'notes.markUnderline': ['understrek', 'underline'],
+    'notes.markSuper':     ['hevet skrift', 'superscript'],
+    'notes.markSub':       ['senket skrift', 'subscript'],
+    'notes.markLink':      ['lenke', 'link'],
+    /* Blokktypene med ord, for den ene endringen en diff ellers ikke kan
+       vise: teksten står, men den ble en overskrift. */
+    'notes.diffBlockChanged': ['{from} → {to}', '{from} → {to}'],
+    'notes.blockP':  ['avsnitt', 'paragraph'],
+    'notes.blockH1': ['overskrift 1', 'heading 1'],
+    'notes.blockH2': ['overskrift 2', 'heading 2'],
+    'notes.blockH3': ['overskrift 3', 'heading 3'],
+    'notes.blockUl': ['punktliste', 'bulleted list'],
+    'notes.blockOl': ['nummerert liste', 'numbered list'],
+    'notes.blockHr': ['skillelinje', 'divider'],
+
     /* Livssyklus: arkiv og søppelkasse for alle tre nivåene
        (docs/notater-plan.md). «Arkiver» legger til side; «Slett» legger i
        søppelkassen, som fortsatt kan hentes fra. */

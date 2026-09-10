@@ -25,8 +25,9 @@ fullskjermseditor med autosave. Flere med skriverett kan skrive i det SAMME
 notatet samtidig: dokumentet er en CRDT (Yjs, `vendor/`) med en append-only
 logg i databasen, mens `notes.body` er projeksjonen av den — søk, utdrag,
 utklippstavle og offline-kopi. Ved siden av loggen ligger HISTORIKKEN
-(`note_versions`): øyeblikksbilder av dokumentet som kan leses og gjenopprettes,
-fordi loggen klappes sammen og angre bare tar skriverens egne endringer.
+(`note_versions`): øyeblikksbilder av dokumentet som kan leses, sammenlignes med
+notatet slik det er nå, og gjenopprettes — fordi loggen klappes sammen og angre
+bare tar skriverens egne endringer.
 
 `dist/` er generert output fra `node build.js` og skal aldri redigeres direkte.
 Mobilskallet (Capacitor + `android/`) pakker den samme `dist/`-en inn i native
