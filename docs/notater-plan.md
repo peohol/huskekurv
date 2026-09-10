@@ -347,11 +347,16 @@ igjen. Toasten sier da at teksten ikke er lagret ennå, ikke at den er tatt vare
 på. Det er den samme regelen som ellers, tatt helt ut: den eneste kopien slippes
 aldri før noe holdbart har tatt imot den.
 
-**Lukkes notatet mens overgangen står, forsvinner arket — og da blir raden
-stående i MINNET.** En lukking skjer én gang, så køen kan ikke vokse av den, og
-minnet er bedre enn ingenting. Toasten sier da at teksten ikke tåler at appen
-lukkes. Så snart lagringen virker igjen, skriver neste synk-runde køen ned av
-seg selv.
+**Lukkes notatet mens overgangen står, LUKKER APPEN IKKE.** Arket er den eneste
+kopien, og å lukke ville vært å kaste den selv. Utkastet legges i køen først;
+lot det seg ikke gjøre holdbart, blir editoren stående, og brukeren får velge
+«Lukk likevel». Da er tapet et valg, ikke noe som skjer i det stille. Et nytt
+forsøk på å lukke legger ikke inn utkastet en gang til. Så snart lagringen
+virker igjen, skriver neste synk-runde køen ned av seg selv.
+
+Veiene der notatet er borte for oss uansett — slettet, arkivert, tilgang trukket
+— lukker uten å spørre: der kan utkastet aldri leveres, og å nekte ville bare
+låst brukeren inne.
 
 At overgangen kan bli stående, er grunnen til at «er loggen tom?» avgjøres av
 ALLE radene økten har sett, ikke av hva den siste hentingen hadde med seg.
@@ -408,11 +413,18 @@ rad å hente fra.
 **Og bare av en AVKLART tilstand.** Projeksjonen alene kan ikke svare på hva som
 gjelder nå: den kan ligge etter loggen, og et bilde derfra ville lagt gammelt
 innhold inn med NÅ-tidspunkt og stått øverst i historikken som «Nå».
-Åpningsbildet tas derfor når frøet er avgjort, ikke idet editoren åpnes. Er
-notatet lukket — historikken åpnes rett fra kortet — bygges dokumentet av
-loggens rader, akkurat som en økt ville gjort; har loggen ingen rader, ER
-projeksjonen notatet, for det er aldri sådd. Ved lukking leses tilstanden mens
-økten ennå lever, siden kjeden kjører etter at den er borte.
+Åpningsbildet tas derfor når frøet er avgjort, ikke idet editoren åpnes — og er
+loggen TOM, beholdes det foreløpige dokumentet, som da alt inneholder det
+brukeren rakk å skrive. Bildet tas i det tilfellet av grunnlaget frøet ble sådd
+FRA, ellers ville tilstanden før redigeringen manglet helt.
+
+Er notatet lukket — historikken åpnes rett fra kortet — bygges dokumentet av
+loggens rader OG av enhetens egne: den lokale kopien og radene som ennå ikke er
+levert. Uten dem ville serverens eldre dokument blitt lagret som en fersk «Nå».
+CRDT-oppdateringer er kommutative, så alt legges i det samme dokumentet uten at
+rekkefølgen betyr noe. Finnes ingen av delene, er projeksjonen notatet, for det
+er aldri sådd. Ved lukking tas bildet av projeksjonen, som nettopp er skrevet:
+å lese økten ville betydd en flush, og en flush er en skriving.
 
 **Serveren avviser dubletter.** Et bilde med samme tittel og samme dokument som
 det ferskeste blir ingen ny rad — så et notat som åpnes og lukkes uten en eneste
@@ -1026,11 +1038,13 @@ ferske notatet uten angre, den utdaterte projeksjonen som ikke får slette den
 andres avsnitt (også med lagringen av utkastet tvunget til å feile, så køen på
 enheten er bevist), de 25 ubekreftede utkastene der ingen kastes, forsøket på
 nytt som gir én historikkrad og ikke to, overgangen som blir stående når BÅDE
-enhetens lagring og serveren sier nei — også når notatet lukkes mens den står —
-den lokale kopien til et notat med usendte endringer som aldri ryddes, den
-utdaterte projeksjonen som ikke får bli et falskt «Nå», gjenopprettingen fra et
-lukket kort som faktisk blir gjeldende, og gjenopprettingen som ikke skjer når
-bildet av tilstanden før feiler; desktop og mobil),
+enhetens lagring og serveren sier nei — også når notatet forsøkes lukket mens
+den står — den lokale kopien til et notat med usendte endringer som aldri
+ryddes, den utdaterte projeksjonen som ikke får bli et falskt «Nå»,
+gjenopprettingen fra et lukket kort som faktisk blir gjeldende,
+gjenopprettingen som ikke skjer når bildet av tilstanden før feiler,
+åpningsbildet som er tilstanden FØR redigeringen når loggen er tom, og «Nå» som
+teller enhetens egen kø; desktop og mobil),
 `supabase/tests/test-note-versions.sql` (serverkontrakten: grants, policy,
 fingeravtrykk, ren leser, utenforstående, merking og tak, alle fire lagene i
 uttynningen, tilbakekalling, kaskade og kontosletting),

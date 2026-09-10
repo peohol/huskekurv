@@ -43,7 +43,7 @@
   "tests/no-legacy-domain.test.js": 0,
   "tests/note-link-open.test.js": 22,
   "tests/notes-clipboard.test.js": 7,
-  "tests/notes-history.test.js": 40,
+  "tests/notes-history.test.js": 50,
   "tests/notes-lifecycle-links.test.js": 14,
   "tests/notes-sharing.test.js": 30,
   "tests/notes-tab.test.js": 30,

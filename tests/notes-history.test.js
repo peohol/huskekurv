@@ -45,7 +45,12 @@
    18. REGRESJON (datatap): nekter BÅDE enhetens lagring og serveren, finnes
        det ingen holdbar destinasjon — og da kastes ingenting. Økten blir
        stående foreløpig, teksten står i editoren, loggen får ingen nye rader,
-       og overgangen fullfører seg selv når lagringen er tilbake
+       appen nekter å lukke notatet, og overgangen fullfører seg selv når
+       lagringen er tilbake
+   22. Er serverloggen tom, beholdes det foreløpige dokumentet — og da må
+       åpningsbildet tas av grunnlaget frøet ble sådd fra, ikke av det
+       brukeren rakk å skrive
+   23. «Nå» for et lukket notat teller enhetens egne, usendte endringer
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -758,18 +763,44 @@ async function runUtenLagring() {
   check(navn + ' 18e: … og appen sier ikke at teksten er lagret',
     sagt.indexOf('tatt vare på') === -1 && sagt.indexOf('ikke lagret ennå') > -1, sagt);
 
-  /* LUKKES NOTATET MENS DET STÅR SLIK, forsvinner arket — og da er minnet
-     bedre enn ingenting. Raden blir stående i køen, og toasten sier at teksten
-     ikke tåler at appen lukkes. */
-  await lukkEditor(a);
-  const etterLukking = await a.evaluate(() => ({
-    kø: window.__huskis.noteDraftsInfo.texts,
+  /* LUKKES NOTATET MENS DET STÅR SLIK, ville arket — den eneste kopien —
+     forsvunnet. Da lukker appen ikke: editoren blir stående, og brukeren får
+     velge selv. */
+  await a.evaluate(() => window.__huskis.closeNoteEditor());
+  await a.waitForTimeout(400);
+  const etterForsøk = await a.evaluate(() => ({
+    åpen: !document.getElementById('note-editor').hidden,
+    ark: document.getElementById('note-doc').innerText.trim(),
     toast: (document.getElementById('toast') || {}).textContent || '',
+    kø: window.__huskis.noteDraftsInfo.texts,
   }));
-  check(navn + ' 18f: lukkes notatet, blir teksten liggende i køen — den kastes ikke',
-    etterLukking.kø.some((t) => /MITT UTKAST/.test(t)), etterLukking.kø);
-  check(navn + ' 18g: … og toasten sier at den ikke tåler at appen lukkes',
-    etterLukking.toast.indexOf('Ikke lukk appen') > -1, etterLukking.toast);
+  check(navn + ' 18f: appen lukker IKKE notatet når teksten ikke kan lagres noe sted',
+    etterForsøk.åpen === true && etterForsøk.ark.indexOf('MITT UTKAST') > -1,
+    { åpen: etterForsøk.åpen, ark: etterForsøk.ark });
+  check(navn + ' 18g: … og brukeren får valget i stedet for et tap i det stille',
+    etterForsøk.toast.indexOf('kan det gå tapt') > -1
+    && etterForsøk.toast.indexOf('Lukk likevel') > -1, etterForsøk.toast);
+
+  // Et nytt forsøk skal ikke legge inn utkastet en gang til.
+  await a.evaluate(() => window.__huskis.closeNoteEditor());
+  await a.waitForTimeout(300);
+  const toGanger = await a.evaluate(() => window.__huskis.noteDraftsInfo.texts);
+  check(navn + ' 18g2: … og et nytt forsøk legger ikke inn utkastet på nytt',
+    toGanger.filter((t) => /MITT UTKAST/.test(t)).length === 1, toGanger);
+
+  // Velger brukeren å lukke likevel, blir teksten liggende i køen.
+  await a.evaluate(() => {
+    const b = document.querySelector('#toast .toast-action');
+    if (b) b.click();
+  });
+  await a.waitForTimeout(400);
+  const etterLukking = await a.evaluate(() => ({
+    åpen: !document.getElementById('note-editor').hidden,
+    kø: window.__huskis.noteDraftsInfo.texts,
+  }));
+  check(navn + ' 18g3: «Lukk likevel» lukker, og teksten blir liggende i køen',
+    etterLukking.åpen === false && etterLukking.kø.some((t) => /MITT UTKAST/.test(t)),
+    etterLukking);
 
   /* Går lagringen igjen, blir raden holdbar av seg selv ved neste synk-runde —
      uten at brukeren gjør noe. Serveren tar fortsatt ikke imot bildet. */
@@ -988,6 +1019,109 @@ async function runAvklart() {
 }
 
 /* ============================================================
+   Løp 1e — åpningsbildet, og hva «Nå» betyr med en kø som venter
+
+   22. Er serverloggen TOM, beholdes det foreløpige dokumentet — og det
+       inneholder alt brukeren rakk å skrive mens hentingen sto på.
+       Åpningsbildet må derfor tas av grunnlaget frøet ble sådd fra.
+   23. «Nå» for et LUKKET notat må ta med enhetens egne, usendte endringer.
+       Ellers lagres serverens eldre dokument som en fersk «Nå»-versjon.
+   ============================================================ */
+async function runÅpningsbilde() {
+  const navn = 'åpningsbilde';
+  const { ids, db } = buildDB();
+  const br = await chromium.launch();
+  const ctx = await br.newContext({ viewport: { width: 1200, height: 900 } });
+  const feil = [];
+  const a = await ctx.newPage();
+  a.on('pageerror', (e) => feil.push('A: ' + e.message));
+  await loadAs(a, db, 'uA', 'a@x.no', true);
+
+  /* ---- 22. Loggen er tom, og brukeren rekker å skrive ----
+     `&lag=800` holder hentingen åpen. Notatet er aldri sådd, så loggen er tom
+     og det foreløpige dokumentet beholdes — men teksten som sto der FØR skal
+     likevel finnes i historikken. */
+  await a.goto(BASE + '/?mock=1&lag=800');
+  await a.waitForFunction(() => {
+    const H = window.__huskis;
+    return !!(H && H.authUser && H.lastMy);
+  }, null, { timeout: 20000, polling: 200 });
+  await a.evaluate(() => window.__huskis.setMainTab('notes'));
+  await a.evaluate((x) => window.__huskis.openNoteEditor(x), ids.N);
+  await a.waitForFunction(() => !document.getElementById('note-editor').hidden,
+    null, { timeout: 5000, polling: 50 });
+  const iVinduet = await a.evaluate(() => window.__huskis.noteLiveInfo.seedPending);
+  check(navn + ' 22a: frøet er foreløpig når vi begynner å skrive (forutsetningen)',
+    iVinduet === true, { seedPending: iVinduet });
+
+  // ERSTATT teksten helt, så den opprinnelige bare finnes i historikken.
+  await a.evaluate(() => {
+    const d = document.getElementById('note-doc');
+    d.focus();
+    const r = document.createRange();
+    r.selectNodeContents(d);
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  });
+  await a.keyboard.type('HELT NY TEKST', { delay: 8 });
+  await a.waitForTimeout(200);
+  await a.waitForFunction(() => !window.__huskis.noteLiveInfo.seedPending,
+    null, { timeout: 20000, polling: 50 });
+  await a.waitForTimeout(500);
+  /* Beviset på at loggen var tom: det FORELØPIGE dokumentet ble beholdt, med
+     alt brukeren rakk å skrive. Hadde loggen hatt rader, ville økten blitt
+     bygget av dem og teksten vært en annen. */
+  const beholdt = await crdtTekst(a);
+  check(navn + ' 22b: det foreløpige dokumentet ble beholdt — loggen var tom (forutsetningen)',
+    beholdt.indexOf('HELT NY TEKST') > -1, beholdt);
+
+  await åpneHistorikk(a, ids.N);
+  const rader22 = await historikkRader(a);
+  check(navn + ' 22: tilstanden FØR redigeringen finnes i historikken',
+    rader22.some((r) => /OPPRINNELIG/.test(r.text) && !/HELT NY TEKST/.test(r.text)),
+    rader22.map((r) => r.text));
+  await a.evaluate(() => window.__huskis.closeNoteHistory());
+  await lukkEditor(a);
+  await a.waitForTimeout(250);
+
+  /* ---- 23. «Nå» for et lukket notat teller enhetens egen kø ---- */
+  await a.evaluate(() => window.HK_MOCK.setOffline(true));
+  await åpneEditor(a, ids.N);
+  await skrivSlutt(a, ' BARE PÅ ENHETEN');
+  await a.evaluate(async () => { window.__huskis.noteLiveFlush(); await window.__huskis.pushNoteOps(); });
+  await lukkEditor(a);
+  await a.waitForTimeout(250);
+
+  /* Nettet er tilbake, men køen kommer ikke fram: bare selve leveringen av
+     rader nektes, så historikken kan hentes mens køen fortsatt venter. */
+  await a.evaluate(() => {
+    window.HK_MOCK.setOffline(false);
+    const c = window.__huskis.client;
+    const ekte = c.rpc.bind(c);
+    c.rpc = function (n2, params) {
+      if (n2 === 'note_crdt_push') {
+        return Promise.resolve({ data: null, error: { message: 'Failed to fetch' } });
+      }
+      return ekte(n2, params);
+    };
+  });
+  const iKøen = await a.evaluate((x) => {
+    const k = Object.keys(localStorage).find((n2) => n2.indexOf('hk-note-ops:') === 0);
+    return JSON.parse(localStorage.getItem(k) || '[]').filter((o) => o.note === x).length;
+  }, ids.N);
+  check(navn + ' 23a: raden ligger fortsatt i køen (forutsetningen)', iKøen > 0, { rader: iKøen });
+
+  await åpneHistorikk(a, ids.N);
+  const rader23 = await historikkRader(a);
+  const nå23 = rader23.find((r) => r.nå) || rader23[0] || {};
+  check(navn + ' 23: «Nå» er enhetens egen tilstand, ikke serverens eldre dokument',
+    /BARE PÅ ENHETEN/.test(nå23.text), nå23.text);
+  await a.evaluate(() => window.__huskis.closeNoteHistory());
+
+  check(navn + ': ingen JS-feil', feil.length === 0, feil.join(' | '));
+  await br.close();
+}
+
+/* ============================================================
    Løp 2 — flere brukere og flere faner
    ============================================================ */
 async function runFlere() {
@@ -1140,6 +1274,7 @@ async function runFlere() {
   await runUtdatert();
   await runUtenLagring();
   await runAvklart();
+  await runÅpningsbilde();
   await runFlere();
   console.log('\n==== ' + pass + '/' + (pass + fail) + ' PASS ====');
   process.exit(fail ? 1 : 0);

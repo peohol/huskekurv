@@ -18847,26 +18847,45 @@
     refreshNoteTools();
   }
 
-  function closeNoteEditor() {
+  /* `opts.tvang`: lukk selv om det du skrev ikke er lagret noe holdbart sted.
+     Brukes av brukerens eget «Lukk likevel», og av veiene der notatet er borte
+     for oss uansett (slettet, arkivert, tilgang trukket) — der kan utkastet
+     aldri leveres, og å nekte å lukke ville bare låst brukeren inne. */
+  function closeNoteEditor(opts) {
     if (!noteEditorOpen()) return;
+    const tvang = !!(opts && opts.tvang === true);
     flushNoteSave();
-    /* SLUTTBILDET, av det man faktisk forlot. Tilstanden leses HER, mens økten
-       ennå lever: kjeden kjører etter denne runden, og da er økten borte.
+    /* STÅR OVERGANGEN, er det ikke et bilde som skal tas. Da er dokumentet
+       fortsatt et foreløpig frø, og arket — den eneste kopien — forsvinner om
+       vi lukker. Utkastet legges derfor i køen først.
 
-       STÅR OVERGANGEN, er det ikke et bilde som skal tas. Da er dokumentet
-       fortsatt et foreløpig frø, og arket — den eneste kopien — forsvinner nå.
-       Utkastet legges derfor i køen, og der blir det stående også når lagringen
-       sier nei: en lukking skjer én gang, så køen kan ikke vokse av den. */
-    stopNoteVersionClock();
+       LOT DET SEG IKKE GJØRE HOLDBART, lukker vi ikke. Å lukke ville vært å
+       kaste den siste kopien selv, og en advarsel er ikke nok: editoren blir
+       stående, og brukeren får velge «Lukk likevel» hvis hen vil. Neste
+       synk-runde prøver lagringen på nytt, så tilstanden løser seg som regel
+       av seg selv. */
     const s = noteLive && noteLive.id === noteOpenId ? noteLive : null;
     if (s && s.seedPending && s.dirty) {
-      const utkast = noteVersionState(noteOpenId);
+      const id = noteOpenId;
+      const utkast = noteVersionState(id);
       if (utkast) {
-        const holdbar = queueNoteDraft(noteOpenId, utkast, true);
+        // Et nytt forsøk på å lukke skal ikke legge inn utkastet en gang til.
+        const sig = JSON.stringify(utkast.doc);
+        const finnes = noteDraftsFor(id).some((d) => JSON.stringify(d.doc) === sig);
+        const holdbar = finnes ? !noteDraftsUnsaved : queueNoteDraft(id, utkast, true);
         pushNoteDrafts();
+        if (!holdbar && !tvang) {
+          showToast(tr('notes.historyStrandedHold'), {
+            label: tr('notes.closeAnyway'),
+            fn: () => { hideToast(); closeNoteEditor({ tvang: true }); },
+          }, { sticky: true });
+          return;
+        }
         showToast(tr(holdbar ? 'notes.historyStranded' : 'notes.historyStrandedRam'));
       }
+      stopNoteVersionClock();
     } else {
+      stopNoteVersionClock();
       /* Ellers tas bildet av PROJEKSJONEN, som `flushNoteSave()` nettopp har
          skrevet: den ER det man forlot. Å lese økten her ville betydd en flush
          til, og en flush er en SKRIVING — lukkingen skal ikke gjøre en. Uten
@@ -18989,7 +19008,7 @@
     // innholdet bli liggende igjen i enhetens lagring.
     if (noteOpenId) forgetNoteCollab(noteOpenId);
     noteOpenId = null;
-    closeNoteEditor();
+    closeNoteEditor({ tvang: true });   // notatet er borte: ingenting å holde på
   }
   function writeNoteNow() {
     noteSaveTimer = null;
@@ -19559,7 +19578,11 @@
       const n = findNoteById(s.id);
       if (noteEditable(n)) queueNoteOp(s.id, Y.encodeStateAsUpdate(s.ydoc));
       refreshNoteSaveStatus();
-      noteSeedShot(s);
+      /* Her BEHOLDES det foreløpige dokumentet — og det inneholder alt brukeren
+         rakk å skrive mens hentingen sto på. Åpningsbildet må derfor tas av
+         grunnlaget frøet ble sådd FRA, ikke av økten: ellers ville tilstanden
+         som faktisk sto der før redigeringen manglet i historikken. */
+      noteSeedShot(s, base);
       return;
     }
     const gammel = s.ydoc;
@@ -19607,11 +19630,13 @@
      økten som er poenget. Serveren avviser den som dublett hvis ingenting har
      endret seg siden sist, så en åpning som ikke fører til noe legger heller
      ikke igjen noe. */
-  function noteSeedShot(s) {
+  function noteSeedShot(s, grunnlag) {
     const n = findNoteById(s.id);
     if (!n || !noteEditable(n)) return;
     let doc = null;
-    try { doc = sanitizeNoteDoc(noteYDoc(s.ydoc)); } catch (e) { return; }
+    try {
+      doc = grunnlag ? sanitizeNoteDoc(JSON.parse(grunnlag)) : sanitizeNoteDoc(noteYDoc(s.ydoc));
+    } catch (e) { return; }
     if (!doc) return;
     captureNoteVersion(s.id, { st: { title: String(n.title || ''), doc } });
   }
@@ -20091,13 +20116,25 @@
     let res = null;
     try { res = await client.rpc('note_crdt_load', { p_note: id }); } catch (e) { return null; }
     if (!res || res.error || !res.data) return null;
-    const rader = res.data.updates || [];
-    if (!rader.length) return noteVersionState(id);
+    /* Serverens rader er ikke hele sannheten: enheten kan ha en lokal kopi og
+       rader som ennå ikke er levert. Alt tre legges inn i det samme dokumentet
+       — CRDT-oppdateringer er kommutative, så rekkefølgen spiller ingen rolle —
+       og resultatet er det brukeren faktisk ville sett om notatet ble åpnet. */
     const ydoc = noteYEmpty();
-    rader.forEach((r) => {
-      if (!r || typeof r.u !== 'string') return;
-      try { Y.applyUpdate(ydoc, b64urlBytes(r.u), 'remote'); } catch (e) { /* ignore */ }
+    let noe = false;
+    const legg = (bytes) => {
+      if (!bytes) return;
+      try { Y.applyUpdate(ydoc, bytes, 'remote'); noe = true; } catch (e) { /* ignore */ }
+    };
+    (res.data.updates || []).forEach((r) => {
+      if (r && typeof r.u === 'string') { try { legg(b64urlBytes(r.u)); } catch (e) { /* ignore */ } }
     });
+    legg(readNoteSnap(id));
+    noteOps.forEach((o) => {
+      if (o.note !== id || typeof o.u !== 'string') return;
+      try { legg(b64urlBytes(o.u)); } catch (e) { /* ignore */ }
+    });
+    if (!noe) { try { ydoc.destroy(); } catch (e) { /* ignore */ } return noteVersionState(id); }
     const doc = sanitizeNoteDoc(noteYDoc(ydoc));
     try { ydoc.destroy(); } catch (e) { /* ignore */ }
     return { title: String(n.title || ''), doc };
@@ -21042,7 +21079,7 @@
 
   function wireNoteEditor() {
     if (!noteEditorEl) return;
-    noteBackBtn.addEventListener('click', closeNoteEditor);
+    noteBackBtn.addEventListener('click', () => closeNoteEditor());
     if (noteMenuBtn) {
       noteMenuBtn.dataset.dndIgnore = '';
       noteMenuBtn.innerHTML = ICONS.menuDots;
@@ -21055,7 +21092,8 @@
            bortlagt notat er et blindspor. */
         const id = noteOpenId;
         const spec = noteObjMenuSpec('note', id, () => { try { noteTitleInput.focus(); noteTitleInput.select(); } catch (e) { /* ignorer */ } });
-        const wrap = (fn) => () => { closeNoteEditor(); fn(); };
+        // Slett/arkiver legger notatet bort: da skal lukkingen ikke kunne nekte.
+        const wrap = (fn) => () => { closeNoteEditor({ tvang: true }); fn(); };
         spec.extraRows = spec.extraRows.map((r) =>
           (r && r.icon === ICONS.archive) ? Object.assign({}, r, { fn: wrap(r.fn) }) : r);
         spec.remove = wrap(() => deleteNoteObject('note', id));

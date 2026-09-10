@@ -231,6 +231,12 @@
        appen lukkes. Det skal brukeren få vite. */
     'notes.historyStrandedRam': ['Det du skrev er ikke lagret ennå. Ikke lukk appen før det er det.',
                               'What you wrote is not saved yet. Do not close the app until it is.'],
+    /* Og lot det seg ikke lagre noe holdbart sted i det hele tatt, lukker vi
+       ikke: å lukke ville vært å kaste den siste kopien selv. Brukeren får
+       velge — og velger hen å lukke, er det et valg, ikke et tap i det stille. */
+    'notes.historyStrandedHold': ['Det du skrev er ikke lagret ennå. Lukker du nå, kan det gå tapt.',
+                              'What you wrote is not saved yet. If you close now, it may be lost.'],
+    'notes.closeAnyway': ['Lukk likevel', 'Close anyway'],
     /* En gjenoppretting skal alltid ha en vei tilbake: tilstanden slik den er
        NÅ må ligge i historikken først. Går ikke det bildet gjennom, gjøres
        ingenting — og da skal beskjeden si hvorfor, ikke bare at det feilet. */
