@@ -20503,8 +20503,12 @@
     }
     return deler;
   }
-  // Markeringene som skiller to signaturer, med appens egne ord.
-  function noteDiffMarkNames(fra, til) {
+  /* Markeringene som skiller to signaturer, med appens egne ord OG MED RETNING.
+     Uten retningen ville en fjernet utheving stått som «fet» under en overskrift
+     som sier «ny formatering» — altså det motsatte av det som skjedde. Den som
+     ser skjermen kan lese seg til det av at teksten ikke lenger ER fet; den som
+     ikke ser den har bare denne setningen. */
+  function noteDiffMarkChange(fra, til) {
     const les = (sig) => {
       const flagg = String(sig || '').split('|')[0] || '';
       const ut = {};
@@ -20513,15 +20517,21 @@
       return ut;
     };
     const a = les(fra), b = les(til);
-    const navn = [];
+    const lagtTil = [], fjernet = [];
     Object.keys(NOTE_DIFF_MARK_KEYS).forEach((m) => {
-      if (!!a[m] !== !!b[m]) navn.push(tr(NOTE_DIFF_MARK_KEYS[m]));
+      if (!!a[m] === !!b[m]) return;
+      (b[m] ? lagtTil : fjernet).push(tr(NOTE_DIFF_MARK_KEYS[m]));
     });
-    // Samme markeringer, men en annen adresse: lenken er byttet, ikke fjernet.
-    if (!navn.length && noteDiffAttrUrl(fra) !== noteDiffAttrUrl(til)) {
-      navn.push(tr(NOTE_DIFF_MARK_KEYS.url));
-    }
-    return navn;
+    // Samme markeringer, men en annen adresse: lenken ble BYTTET — verken lagt
+    // til eller fjernet.
+    const byttet = (!lagtTil.length && !fjernet.length
+      && noteDiffAttrUrl(fra) !== noteDiffAttrUrl(til)) ? [tr(NOTE_DIFF_MARK_KEYS.url)] : [];
+    const deler = [];
+    if (lagtTil.length) deler.push(tr('notes.diffFormatAdded', { marks: lagtTil.join(', ') }));
+    if (fjernet.length) deler.push(tr('notes.diffFormatRemoved', { marks: fjernet.join(', ') }));
+    if (byttet.length) deler.push(tr('notes.diffFormatSwapped', { marks: byttet.join(', ') }));
+    return deler.length ? tr('notes.diffFormatOn', { marks: deler.join(', ') })
+      : tr('notes.diffFormatted');
   }
 
   /* ---- Blokkene ----
@@ -20682,6 +20692,13 @@
     s.textContent = tekst + ': ';
     return s;
   }
+  // Den samme merkelappen, men som en parentes ETTER biten den gjelder.
+  function noteDiffNote(tekst) {
+    const s = document.createElement('span');
+    s.className = 'visually-hidden note-diff-note';
+    s.textContent = ' (' + tekst + ')';
+    return s;
+  }
   // Én inline-bit: teksten med sine egne markeringer, pakket i det den ER.
   function noteDiffPartNode(part) {
     const run = { s: part.s };
@@ -20692,13 +20709,15 @@
     const inner = noteRunNode(run);
     if (part.k === '=') return inner;
     if (part.k === '~') {
-      const navn = noteDiffMarkNames(part.fra, part.a);
+      const tekst = noteDiffMarkChange(part.fra, part.a);
       const span = document.createElement('span');
       span.className = 'note-diff-fmt';
-      span.title = navn.length
-        ? tr('notes.diffFormatOn', { marks: navn.join(', ') })
-        : tr('notes.diffFormatted');
+      span.title = tekst;                 // for den som peker
       span.appendChild(inner);
+      /* … og for den som IKKE ser: den stiplede streken bærer ingenting for en
+         skjermleser, og hvilken markering som kom eller gikk finnes ikke i
+         teksten. Merknaden står ETTER biten, som en parentes. */
+      span.appendChild(noteDiffNote(tekst));
       return span;
     }
     const el = document.createElement(part.k === '+' ? 'ins' : 'del');
@@ -20788,7 +20807,7 @@
   /* Mens modalen står åpen:
        id, versions, pinMax, status, painted — listen og hva den er malt for;
        openId, doc                          — raden som er åpen, og bildet i den;
-       view, now, nowBusy, diff             — visningen, «nå»-siden og diffen. */
+       view, now, nowSig, nowBusy, diff     — visningen, «nå»-siden og diffen. */
   let noteHistoryCtx = null;
 
   const noteHistoryOpen = () => !!noteHistoryModal && !noteHistoryModal.hidden;
@@ -20803,7 +20822,7 @@
        `diff` er den utregnede diffen for den åpne raden. */
     noteHistoryCtx = { id, versions: null, pinMax: 0, openId: null, doc: null,
                        status: 'loading', painted: null,
-                       view: 'full', now: null, nowBusy: false, diff: null };
+                       view: 'full', now: null, nowSig: '', nowBusy: false, diff: null };
     if (noteHistoryHeadIcon) noteHistoryHeadIcon.innerHTML = ICONS.history;
     noteHistoryTitleEl.textContent = tr('notes.historyFor',
       { name: quoted(noteDisplayTitle(n)) });
@@ -20855,6 +20874,7 @@
     const nå = await noteAuthoritativeState(ctx.id);
     if (noteHistoryCtx !== ctx) return;
     ctx.now = nå;
+    ctx.nowSig = nå ? noteVersionSig(nå.title, nå.doc) : '';
     ctx.diff = null;
     await captureNoteVersion(ctx.id, {});
     if (noteHistoryCtx !== ctx) return;
@@ -20935,20 +20955,31 @@
     if (!ctx || NOTE_HISTORY_VIEWS.indexOf(view) === -1 || ctx.view === view) return;
     ctx.view = view;
     paintNoteHistory();
-    if (view === 'diff') ensureNoteDiffNow(ctx);
+    if (view === 'diff') ensureNoteDiffNow(ctx, true);
   }
-  /* «Nå»-siden leses normalt av `loadNoteHistory`. Var økten fortsatt uavklart
-     da — frøet ikke ferdig, eller nettet borte et øyeblikk — prøves den én gang
-     til her, når brukeren faktisk ber om sammenligningen. */
-  async function ensureNoteDiffNow(ctx) {
-    if (ctx.now || ctx.nowBusy) return;
+  /* «NÅ» MÅ VÆRE NÅ, OGSÅ ETTER AT MODALEN ÅPNET. `loadNoteHistory` leser
+     tilstanden når listen hentes, men en medforfatter kan skrive mens
+     historikken står oppe: da oppdaterer live-hentingen editoren uten at noe
+     rører denne modalen, og sammenligningen ville fortsatt målt mot et bilde
+     fra i sted. Listen hentes bare på nytt av en SKRIVING (gjenoppretting,
+     merking) — og en ren leser har ingen av delene.
+
+     Tilstanden leses derfor på nytt hver gang brukeren ber om sammenligningen:
+     når «Endringer» velges, og når en rad åpnes mens den visningen står. Er
+     den uendret, skjer ingenting — en ommaling for ingenting ville flyttet
+     fokus ut av kontrollen man nettopp brukte. */
+  async function ensureNoteDiffNow(ctx, påNytt) {
+    if (ctx.nowBusy || (ctx.now && !påNytt)) return;
     ctx.nowBusy = true;
     let st = null;
     try { st = await noteAuthoritativeState(ctx.id); } catch (e) { /* under */ }
     if (noteHistoryCtx !== ctx) return;
     ctx.nowBusy = false;
     if (!st) return;
+    const sig = noteVersionSig(st.title, st.doc);
+    if (ctx.nowSig === sig) return;
     ctx.now = st;
+    ctx.nowSig = sig;
     ctx.diff = null;
     paintNoteHistory();
   }
@@ -21159,7 +21190,7 @@
     ctx.doc = null;
     ctx.diff = null;
     paintNoteHistory();
-    if (ctx.view === 'diff') ensureNoteDiffNow(ctx);
+    if (ctx.view === 'diff') ensureNoteDiffNow(ctx, true);
     const client = acli();
     if (!client) return;
     try {
@@ -28654,7 +28685,8 @@
        funksjon av to dokumenter, og eksponeres for seg: da kan randtilfellene
        — tomt dokument, ren innsetting, flytting, formatering — stilles direkte
        som spørsmål, uten å gå veien om modalen for hvert av dem. */
-    noteDocDiff, noteTitleDiff, setNoteHistoryView, noteAuthoritativeState,
+    noteDocDiff, noteTitleDiff, noteDiffIntoEl, setNoteHistoryView,
+    noteAuthoritativeState,
     // Køen av strandede utkast: den ENESTE kopien mellom at frøet kastes og
     // at serveren har bekreftet bildet (se noteKeepStrandedDraft).
     get noteDraftsInfo() {

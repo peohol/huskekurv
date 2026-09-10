@@ -259,13 +259,19 @@
     'notes.diffRemoved': ['Fjernet', 'Removed'],
     'notes.diffChanged': ['Endret', 'Changed'],
     'notes.diffMoved':   ['Flyttet', 'Moved'],
-    'notes.diffFormatted': ['Ny formatering', 'New formatting'],
-    'notes.diffFormatOn': ['Ny formatering: {marks}', 'New formatting: {marks}'],
+    /* «Endret», ikke «ny»: formatering kan like gjerne være FJERNET, og en
+       overskrift som sier «ny» ville sagt det motsatte av det som skjedde.
+       Retningen står i {marks}, satt sammen av de tre neste. */
+    'notes.diffFormatted': ['Endret formatering', 'Changed formatting'],
+    'notes.diffFormatOn': ['Formatering: {marks}', 'Formatting: {marks}'],
+    'notes.diffFormatAdded':   ['{marks} lagt til', '{marks} added'],
+    'notes.diffFormatRemoved': ['{marks} fjernet', '{marks} removed'],
+    'notes.diffFormatSwapped': ['{marks} endret', '{marks} changed'],
     'notes.diffCountAdded':   ['{count} lagt til', '{count} added'],
     'notes.diffCountRemoved': ['{count} fjernet', '{count} removed'],
     'notes.diffCountChanged': ['{count} skrevet om', '{count} rewritten'],
     'notes.diffCountMoved':   ['{count} flyttet', '{count} moved'],
-    'notes.diffCountFormatted': ['{count} med ny formatering', '{count} with new formatting'],
+    'notes.diffCountFormatted': ['{count} med endret formatering', '{count} with changed formatting'],
     'notes.diffTitleChanged': ['tittelen', 'the title'],
     'notes.diffTitleLabel': ['Tittel', 'Title'],
     /* Markeringenes egne navn, uten tastatursnarveien: de leses her som en

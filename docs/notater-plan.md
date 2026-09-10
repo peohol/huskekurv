@@ -528,6 +528,13 @@ strek-gjennom skiller de to også uten farge. Bryteren er en `tablist` med
 piltaster og 44 px berøringsflate, og fokus blir stående på den kontrollen man
 trykket når listen males om — ikke på radhodet.
 
+**En formateringsendring sier hvilken VEI den gikk** — «fet lagt til», «lenke
+fjernet», «lenke endret» — og den står som en usynlig merknad rett etter biten
+den gjelder, ikke bare i hjelpeteksten. Den som ser skjermen kan lese seg til
+retningen av at teksten ikke lenger ER fet; den som ikke ser den har bare denne
+setningen, og «ny formatering: fet» ville da sagt det motsatte av det som
+skjedde.
+
 ### Hvordan diffen regnes ut
 
 **Sammenligningen går på DOKUMENTMODELLEN** (`{v, blocks}`), aldri på editorens
@@ -584,9 +591,18 @@ inne i sin egen serialiserte kjede, slik at raden som legges inn alltid er den
 ferskeste; den regelen røres ikke. Og en ren LESER tar ikke noe bilde i det hele
 tatt, men skal likevel kunne sammenligne.
 
-Var økten uavklart da listen ble hentet, prøves lesingen én gang til når
-brukeren faktisk ber om sammenligningen; går det fortsatt ikke, sier visningen
-det i klartekst i stedet for å vise en diff mot noe utdatert.
+**Og «nå» må være nå, også en stund etter at modalen åpnet.** En medforfatter
+kan skrive mens historikken står oppe: da oppdaterer live-hentingen editoren
+uten at noe rører modalen, og listen hentes bare på nytt av en SKRIVING
+(gjenoppretting, merking) — som en ren leser ikke har. Tilstanden leses derfor
+på nytt hver gang brukeren BER om sammenligningen: når «Endringer» velges, og
+når en rad åpnes mens den visningen står. Er den uendret, males ingenting om;
+en ommaling for ingenting ville flyttet fokus ut av kontrollen man nettopp
+brukte.
+
+Var økten uavklart da listen ble hentet, dekkes det av den samme lesingen; går
+det fortsatt ikke, sier visningen det i klartekst i stedet for å vise en diff
+mot noe utdatert.
 
 **Diffen SKRIVER INGENTING.** Den leser to dokumenter og bygger noder — den
 rører verken CRDT-en, projeksjonen, loggen, historikken eller synk-køen, og den
@@ -624,7 +640,8 @@ på 40 linjer lar de 40 stå urørt.
 
 **UI-et kjøres i ekte nettleser, desktop OG mobil:** bryteren og at raden
 starter på hele versjonen, endringene tegnet node for node, oppsummeringen,
-merkelappen skjermleseren leser først, 44 px berøringsflate, piltastene,
+merkelappen skjermleseren leser først, RETNINGEN på en formateringsendring
+(lagt til, fjernet, byttet), 44 px berøringsflate, piltastene,
 `tablist`-semantikken, at fokus blir stående på kontrollen man trykket og følger
 VALGET ved piltast, at det ikke skrives verken i loggen, i historikken eller i
 notatet av å sammenligne, at en gjenoppretting fortsatt gir nøyaktig den valgte
@@ -632,9 +649,11 @@ versjonen, og at markeringene henter fargen fra drakten i både lys og mørk.
 
 **Og de fire tilfellene der «Nå» er det vanskelige:** historikk åpnet fra et
 LUKKET notat, «Nå» med enhetens usendte kø (leveringen nektes, så køen blir
-stående mens historikken kan hentes), samskriving mens historikken står åpen, og
-en ren leser som ser diffen uten å få skriverettigheter og uten å legge igjen et
-bilde. Tilbakekalt tilgang midt i en sammenligning lukker historikken.
+stående mens historikken kan hentes), en medforfatter som skriver MENS
+sammenligningen står åpen (testen rører aldri listen — den bytter visning, som
+en bruker gjør), og en ren leser som ser diffen uten å få skriverettigheter,
+uten å legge igjen et bilde, og som likevel ser det som kom til etter at
+modalen åpnet. Tilbakekalt tilgang midt i en sammenligning lukker historikken.
 
 Regresjonene fra historikk-runden står uendret i `tests/notes-history.test.js`,
 `tests/notes-collab.test.js` og `tests/notes-sharing.test.js`.

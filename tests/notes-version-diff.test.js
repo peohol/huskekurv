@@ -15,7 +15,8 @@
     4. Tekstendring inne i samme blokk
     5. Tittelendring
     6. Formateringsendring — også når markeringen deler en kjøring i tre uten
-       å endre ett eneste tegn — og en lenke som ble byttet
+       å endre ett eneste tegn — og en lenke som ble byttet. Merknaden sier
+       hvilken VEI: lagt til, fjernet eller byttet
     7. Listeendringer — punktliste og nummerert
     8. Flere endringer samtidig, og en blokk som ble FLYTTET
     9. Tomt dokument på én eller begge sider
@@ -29,8 +30,10 @@
    16. Lys og mørk drakt: markeringene henter fargen fra drakten
    17. Historikk åpnet fra et LUKKET notat
    18. … og «Nå» teller enhetens egne, usendte endringer
-   19. Samskriving mens historikken er åpen: den andres avsnitt er med i «Nå»
-   20. En REN LESER ser diffen, men får ingen skriverettigheter
+   19. Samskriving mens historikken er åpen: «Nå» leses på nytt når brukeren ber
+       om sammenligningen, uten at listen hentes
+   20. En REN LESER ser diffen, men får ingen skriverettigheter — og ser også
+       det som kom til etter at modalen åpnet
    21. Tilbakekalt tilgang lukker historikken — også midt i en sammenligning
    22. De to endringene man ikke kan SE i teksten — en blokk som byttet type og
        en som bare byttet plass — bærer det med ord
@@ -435,6 +438,43 @@ async function run(navn, viewport, mobil) {
   check(navn + ' 12g: … og visningsvalget følger med til neste rad',
     (await p.evaluate(() => window.__huskis.noteHistoryInfo.view)) === 'diff');
 
+  /* ---- 12h. RETNINGEN på en formateringsendring ----
+     Den stiplede streken sier AT noe ble annerledes, ikke HVA eller hvilken
+     vei. Den som ikke ser skjermen har bare merknaden — og «fet» under en
+     overskrift som sier «ny formatering» ville sagt det motsatte når
+     uthevingen faktisk ble FJERNET. */
+  const fmtRetning = await p.evaluate(() => {
+    const H = window.__huskis;
+    const p2 = (c) => ({ v: 1, blocks: [{ t: 'p', c }] });
+    const ren = p2([{ s: 'et ord her' }]);
+    const fet = p2([{ s: 'et ' }, { s: 'ord', b: 1 }, { s: ' her' }]);
+    const lenke = p2([{ s: 'et ' }, { s: 'ord', url: 'https://en.no/' }, { s: ' her' }]);
+    const lenke2 = p2([{ s: 'et ' }, { s: 'ord', url: 'https://to.no/' }, { s: ' her' }]);
+    const les = (a, b) => {
+      // Rendret gjennom den EKTE funksjonen modalen bruker, ikke en gjenskrivning.
+      const el = document.createElement('div');
+      H.noteDiffIntoEl(el, H.noteDocDiff(a, b));
+      const merke = el.querySelector('.note-diff-note');
+      return {
+        merke: merke ? merke.textContent : null,
+        title: (el.querySelector('.note-diff-fmt') || {}).title || null,
+      };
+    };
+    return { lagtTil: les(ren, fet), fjernet: les(fet, ren), byttet: les(lenke, lenke2) };
+  });
+  check(navn + ' 12h: en markering som ble LAGT TIL sier det',
+    /lagt til/.test(fmtRetning.lagtTil.merke || '') && /fet/.test(fmtRetning.lagtTil.merke || ''),
+    fmtRetning.lagtTil);
+  check(navn + ' 12i: … og en som ble FJERNET sier det motsatte, ikke det samme',
+    /fjernet/.test(fmtRetning.fjernet.merke || '') && /fet/.test(fmtRetning.fjernet.merke || '')
+    && !/lagt til/.test(fmtRetning.fjernet.merke || ''), fmtRetning.fjernet);
+  check(navn + ' 12j: … og en lenke som peker et nytt sted er byttet, ikke lagt til eller fjernet',
+    /endret/.test(fmtRetning.byttet.merke || '') && /lenke/.test(fmtRetning.byttet.merke || '')
+    && !/lagt til/.test(fmtRetning.byttet.merke || '')
+    && !/fjernet/.test(fmtRetning.byttet.merke || ''), fmtRetning.byttet);
+  check(navn + ' 12k: … og den samme teksten står i hjelpeteksten for den som peker',
+    (fmtRetning.fjernet.title || '').indexOf('fjernet') > -1, fmtRetning.fjernet.title);
+
   /* ---- 13. Berøringsflate, piltaster og fokus ---- */
   const flater = await p.evaluate(() => [...document.querySelectorAll('.note-history-views .seg-btn')]
     .map((e) => ({
@@ -741,29 +781,39 @@ async function runFlere() {
   await b.evaluate((x) => window.__huskis.captureNoteVersion(x, {}), ids.N);
   await b.waitForTimeout(200);
 
-  /* ---- 19. A skriver videre MENS B har historikken oppe ----
-     B laster historikken på nytt (som en gjenoppretting eller en merking
-     gjør), og «Nå» skal da inneholde det A nettopp skrev. */
+  /* ---- 19. A skriver videre MENS B står i sammenligningen ----
+     REGRESJON: listen hentes bare på nytt av en SKRIVING (gjenoppretting,
+     merking), og en ren leser har ingen av delene. Uten at «Nå» leses på nytt
+     når brukeren ber om sammenligningen, ville B fortsatt målt mot bildet fra
+     da modalen åpnet — og aldri sett det A nettopp skrev.
+
+     Testen rører derfor ALDRI `loadNoteHistory`: den bytter visning, som en
+     bruker gjør. */
+  await åpneHistorikk(b, ids.N);
+  const radB = await b.evaluate(() => document.querySelectorAll('.note-history-row').length);
+  await åpneRad(b, radB - 1);          // den eldste raden, fra før A skrev noe
+  await velgVisning(b, 'diff');
+  const førA = await diffLinjer(b);
+  check(navn + ' 19a: B sammenligner mot tilstanden da modalen åpnet (forutsetningen)',
+    førA.some((l) => /FELLES GRUNN/.test(l.ins)) && !førA.some((l) => /ENDA MER/.test(l.ins)),
+    førA.map((l) => l.kind + ':' + l.ins));
+
   await skrivSlutt(a, ' OG ENDA MER');
   await a.evaluate(async () => { window.__huskis.noteLiveFlush(); await window.__huskis.pushNoteOps(); });
-  await åpneHistorikk(b, ids.N);
   await b.evaluate(async () => { await window.__huskis.noteLivePull(); });
-  await b.waitForTimeout(250);
-  await b.evaluate(() => window.__huskis.loadNoteHistory());
-  await b.waitForFunction(() => /ENDA MER/.test(window.__huskis.noteHistoryInfo.nowText || ''),
+  await b.waitForFunction(() => /ENDA MER/.test(window.__huskis.noteLiveInfo.text || ''),
     null, { timeout: 8000, polling: 100 });
-  await b.waitForTimeout(150);
-  const radB = await b.evaluate(() => {
-    const rows = [...document.querySelectorAll('.note-history-row')];
-    // Den eldste raden — den fra før A skrev noe som helst.
-    return rows.length;
-  });
-  await åpneRad(b, radB - 1);
+
+  await velgVisning(b, 'full');
   await velgVisning(b, 'diff');
+  await b.waitForTimeout(200);
   const diffB = await diffLinjer(b);
-  check(navn + ' 19: samskrivingen er med i «Nå» mens historikken står åpen',
+  check(navn + ' 19: samskrivingen er med i «Nå» — uten at listen hentes på nytt',
     diffB.some((l) => /ENDA MER/.test(l.ins)) && diffB.some((l) => /FELLES GRUNN/.test(l.ins)),
     diffB.map((l) => l.kind + ':' + l.ins));
+  check(navn + ' 19b: … og «Nå»-siden er lest på nytt, ikke bare tegnet om',
+    /ENDA MER/.test(await b.evaluate(() => window.__huskis.noteHistoryInfo.nowText || '')),
+    await b.evaluate(() => window.__huskis.noteHistoryInfo.nowText));
   await b.evaluate(() => window.__huskis.closeNoteHistory());
   await lukkEditor(a);
   await lukkEditor(b);
@@ -812,6 +862,23 @@ async function runFlere() {
   }, ids.NR);
   check(navn + ' 20c: … og å sammenligne legger ikke igjen et bilde på kontoen',
     leserBilder === eierBilder, { sett: leserBilder, faktisk: eierBilder });
+
+  /* ---- 20d. … og en ren leser ser en endring som kom ETTER at modalen åpnet.
+     Leserens editor er lukket, så «Nå» bygges av loggens rader — og leseren har
+     ingen skrivehandling som kunne hentet listen på nytt. Bytter hun visning,
+     skal sammenligningen likevel være mot notatet slik det er NÅ. */
+  await åpneEditor(a, ids.NR);
+  await skrivSlutt(a, ' ENDA SENERE');
+  await a.evaluate(async () => { window.__huskis.noteLiveFlush(); await window.__huskis.pushNoteOps(); });
+  await a.waitForTimeout(200);
+  await velgVisning(c, 'full');
+  await velgVisning(c, 'diff');
+  await c.waitForTimeout(250);
+  const leserSenere = await diffLinjer(c);
+  check(navn + ' 20d: en ren leser ser også det som kom til etter at modalen åpnet',
+    leserSenere.some((l) => /ENDA SENERE/.test(l.ins)),
+    leserSenere.map((l) => l.kind + ':' + l.ins));
+  await lukkEditor(a);
 
   /* ---- 21. Tilbakekalt tilgang MIDT I en sammenligning ---- */
   await a.evaluate(async (x) => {
