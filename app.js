@@ -19195,6 +19195,7 @@
       poll: null,
       pulling: false,
       loaded: false,      // første henting fra serveren er unnagjort
+      pending: [],        // fjern-endringer som venter på at en komposisjon tar slutt
       mark: null,
       log: new Map(),      // radene i databasen vi har brukt: id → bytes
       othersAt: 0,         // sist en fjern endring kom inn
@@ -19252,7 +19253,13 @@
     clearInterval(s.poll);
     if (s.chan) { const c = acli(); if (c) { try { c.removeChannel(s.chan); } catch (e) { /* ignore */ } } }
     const Y = noteYLib();
-    if (Y) { try { writeNoteSnap(s.id, Y.encodeStateAsUpdate(s.ydoc)); } catch (e) { /* ignore */ } }
+    if (Y) {
+      // En komposisjon som aldri ble avsluttet skal ikke ta de ventende
+      // fjern-endringene med seg i fallet: de flettes inn før bildet lagres.
+      s.pending.forEach((u) => { try { Y.applyUpdate(s.ydoc, u, 'remote'); } catch (e) { /* ignore */ } });
+      s.pending = [];
+      try { writeNoteSnap(s.id, Y.encodeStateAsUpdate(s.ydoc)); } catch (e) { /* ignore */ }
+    }
     if (s.undo) { try { s.undo.destroy(); } catch (e) { /* ignore */ } }
     try { s.ydoc.destroy(); } catch (e) { /* ignore */ }
   }
@@ -19333,10 +19340,18 @@
     const Y = noteYLib();
     if (!Y) return;
     const mine = noteEditorOpen() && noteOpenId === s.id;
-    /* En fjern endring som kommer MIDT I EN KOMPOSISJON må vente: å male om nå
-       ville revet det halvferdige IME-ordet ut av editoren. Den flettes inn,
-       men uten ommaling — `compositionend` bestiller den. */
-    if (mine && !noteComposing && noteFlushPending()) noteLiveFlush();
+    /* EN FJERN ENDRING SOM KOMMER MIDT I EN KOMPOSISJON VENTER — den flettes
+       ikke inn ennå. Å male om nå ville revet det halvferdige IME-ordet ut av
+       editoren; men å FLETTE INN uten å male ville vært verre: da sto DOM-et
+       igjen uten den andres tegn, og neste flush ville lest fraværet som en
+       SLETTING og fjernet dem for alle. CRDT-en får derfor ikke lov til å gå
+       foran DOM-et. `compositionend` flusher først, og kjører så disse
+       oppdateringene den vanlige veien. */
+    if (mine && noteComposing) {
+      updates.forEach((u) => s.pending.push(u));
+      return;
+    }
+    if (mine && noteFlushPending()) noteLiveFlush();
     let anchor = null;
     if (mine && noteDocEl) {
       const sel = window.getSelection();
@@ -19362,7 +19377,7 @@
        den siste ville et notat man åpner igjen sagt at andre skriver — den
        første hentingen gir jo tilbake alt man selv skrev sist. */
     if (updates.length && endret && s.loaded) { s.othersAt = Date.now(); refreshNoteLiveChip(); }
-    if (!mine || noteComposing) { noteLivePendingPaint = noteLivePendingPaint || mine; return; }
+    if (!mine) return;
     if (!endret) return;   // ingen synlig endring
     noteApplyingDoc = true;
     noteDocIntoEl(noteDocEl, after);
@@ -19486,6 +19501,28 @@
     dropNoteOpsFor(id);
     dropNoteSnap(id);
   }
+  /* …og det gjelder de LUKKEDE notatene like mye. Et notat man leste i går, og
+     som eieren siden har trukket tilbake eller slettet, forsvinner fra
+     `get_my_doc` uten at noen editor er åpen — og uten dette ble innholdet
+     stående igjen i enhetens lagring til utlogging. Etter hver runde som
+     faktisk har fått svar fra serveren avstemmes derfor både køen og de lokale
+     kopiene mot notatene som fortsatt er lesbare.
+
+     Vilkåret `lastMy` er nødvendig: uten et serversvar vet vi ingenting om hva
+     som finnes, og en tom `state.notes` offline ville ryddet bort alt. */
+  function pruneNoteCollabStore() {
+    if (!authUser || !lastMy) return;
+    const finnes = new Set((state.notes || []).map((n) => n.id));
+    if (noteOps.some((o) => !finnes.has(o.note))) {
+      noteOps = noteOps.filter((o) => finnes.has(o.note));
+      saveNoteOps();
+    }
+    const alle = readJsonStore(noteSnapKey(), {}) || {};
+    const døde = Object.keys(alle).filter((id) => !finnes.has(id));
+    if (!døde.length) return;
+    døde.forEach((id) => { delete alle[id]; });
+    writeJsonStore(noteSnapKey(), alle);
+  }
 
   /* ---- Å ERSTATTE HELE DOKUMENTET I ET NOTAT ----
      Editoren skriver dokumentet tegn for tegn gjennom CRDT-en. Skal noe annet
@@ -19537,7 +19574,6 @@
      ingen identitet — hvem som skriver er mer enn lesetilgangen lover, og
      `note_updates.author_id` når derfor aldri klienten. */
   let noteComposing = false;
-  let noteLivePendingPaint = false;
   let noteLiveChipTimer = null;
   function refreshNoteLiveChip() {
     if (!noteLiveEl) return;
@@ -20138,10 +20174,14 @@
     noteDocEl.addEventListener('compositionstart', () => { noteComposing = true; });
     noteDocEl.addEventListener('compositionend', () => {
       noteComposing = false;
+      /* REKKEFØLGEN ER HELE POENGET, som ellers: det komponerte ordet leses inn
+         i CRDT-en FØRST, og deretter flettes det som kom mens man skrev. Motsatt
+         vei ville den ene av de to blitt lest som en sletting. */
       noteLiveFlush();
-      if (noteLivePendingPaint && noteLive) {
-        noteLivePendingPaint = false;
-        noteLiveApply(noteLive, []);   // ingen nye rader — bare mal om og flytt markøren
+      if (noteLive && noteLive.pending.length) {
+        const venter = noteLive.pending;
+        noteLive.pending = [];
+        noteLiveApply(noteLive, venter);
       }
       scheduleNoteSave();
     });
@@ -22389,6 +22429,9 @@
       // Editoren holder ETT notat åpent i fullskjerm: er det borte, eller er
       // låsen endret under føttene, må bildet følge etter.
       closeNoteEditorIfGone();
+      // …og de LUKKEDE notatene ryddes med: en lokal kopi av et notat vi ikke
+      // lenger kan lese skal ikke bli stående på enheten.
+      pruneNoteCollabStore();
       render();
     } finally {
       applyingRemote = false;

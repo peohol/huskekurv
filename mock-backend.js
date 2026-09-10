@@ -58,8 +58,17 @@
         setTimeout(function () { reject(new TypeError('Failed to fetch')); }, LAG || 0);
       });
     }
+    /* Handleren kan svare med et LØFTE (låsen i `transact` er asynkron). En
+       avvisning derfra skal bli det samme `{ error }` som et synkront kast —
+       ellers ville en autorisasjonsfeil plutselig kastet hos kalleren, mens
+       den samme feilen uten lås ga et pent svar. */
     function attempt() {
-      try { return run(); } catch (e) { return { data: null, error: { message: e.message } }; }
+      try {
+        var r = run();
+        return (r && typeof r.then === 'function')
+          ? r.catch(function (e) { return { data: null, error: { message: e.message } }; })
+          : r;
+      } catch (e) { return { data: null, error: { message: e.message } }; }
     }
     if (!LAG) return Promise.resolve(attempt());
     return new Promise(function (resolve) {
@@ -212,23 +221,40 @@
      les–endre–skriv uten vern kan derfor miste en skriving: begge leser den
      samme teksten, begge skriver, og den siste vinner. Ekte Postgres gjør ikke
      det, og en mock som gjør det ville latt et flerbrukerscenario feile av
-     harnisket i stedet for av koden.
+     harnisket i stedet for av koden — og feile flakete, som er verre.
 
-     Vernet er optimistisk: teksten leses FØR handleren kjører og sjekkes igjen
-     rett før skrivingen. Har noen andre skrevet i mellomtiden, kjøres handleren
-     på nytt mot den ferske databasen. Vinduet som står igjen — mellom sjekken
-     og `setItem` — er mikrosekunder, mot millisekundene handleren selv bruker.
+     Vernet er en EKTE LÅS på tvers av faner (`navigator.locks`): hver
+     les–endre–skriv holder låsen fra første lesing til siste skriving, så to
+     faner aldri står i den samme runden. Det er nødvendig, ikke pynt —
+     nettleseren speiler `localStorage` i hver fane og oppdaterer speilet
+     asynkront, så en optimistisk sjekk kan lese en fersk verdi som fortsatt
+     ser gammel ut. En måling av to faner som gjorde 200 les–endre–skriv hver:
+     264 av 400 uten lås, 400 av 400 med.
+
+     I tillegg sjekkes teksten en gang til rett før skrivingen — uten en eneste
+     `await` imellom — for å fange den som skriver UTENOM låsen: en test som
+     redigerer databasen direkte med `_loadDB`/`_saveDB` mens en runde er i
+     lufta.
 
      Kaster handleren (en autorisasjonsfeil), skrives ingenting og feilen går
      videre uendret. */
-  function transact(run) {
+  function transactNow(run) {
     for (var i = 0; i < 12; i++) {
       var før = localStorage.getItem(DB_KEY);
       var db = loadDB();
       var ut = run(db);
+      // Ingen `await` mellom sjekken og skrivingen: den optimistiske sjekken
+      // fanger den som skrev UTENOM låsen — en test som redigerer databasen
+      // direkte med `_loadDB`/`_saveDB` mens en runde er i lufta.
       if (localStorage.getItem(DB_KEY) === før) { saveDB(db); return ut; }
     }
     throw new Error('for mange samtidige skrivinger mot mock-databasen');
+  }
+  function transact(run) {
+    if (navigator.locks && navigator.locks.request) {
+      return navigator.locks.request(DB_KEY, function () { return transactNow(run); });
+    }
+    return transactNow(run);
   }
 
   function clone(v) { return v == null ? v : JSON.parse(JSON.stringify(v)); }
@@ -3040,6 +3066,10 @@
 
   window.HK_MOCK = {
     createClient: createClient, _loadDB: loadDB, _saveDB: saveDB,
+    /* Les–endre–skriv fra en TEST, med den samme låsen appen bruker. Står det
+       mer enn én fane åpen, er dette veien inn: `_loadDB` + `_saveDB` er to
+       skritt, og en runde fra den andre fanen imellom overskriver endringen. */
+    _edit: function (fn) { return transact(function (db) { return fn(db); }); },
     // Nettbrudd på bestilling — se serverCall(). Brukes av
     // tests/notes-collab.test.js til å måle reconnect etter et kort brudd.
     setOffline: setOffline, isOffline: function () { return OFFLINE; },

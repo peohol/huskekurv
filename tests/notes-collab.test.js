@@ -30,6 +30,9 @@
         deterministisk, så teksten blir stående ÉN gang
     13. Loggen klappes sammen uten å miste et tegn
     14. «Andre redigerer nå» vises når det faktisk skjer
+    15. En fjern endring som kommer MIDT I EN IME-KOMPOSISJON tar verken det
+        halvferdige ordet eller den andres tegn med seg
+    16. Et LUKKET notat man mister tilgangen til ryddes også bort fra enheten
 
   Kjøres på BÅDE desktop- og mobil-viewport: editoren er pekeravhengig, og
   verktøylinjen bryter annerledes på en telefon.
@@ -344,6 +347,45 @@ async function run(label, viewport, touch) {
   log(label + ' 10: «Andre redigerer nå» vises når det faktisk skjer, uten å navngi noen',
     chip.finnes && chip.synlig && !/Bo|Medlem|b@x/.test(chip.navn), JSON.stringify(chip));
 
+  /* ---------- 6b. En fjern endring MIDT I EN IME-KOMPOSISJON ----------
+     Et halvferdig IME-ord (kinesisk, japansk — eller bare et aksenttegn på
+     macOS) står i editorens DOM til `compositionend`. Kommer den andres tegn
+     inn i det vinduet, må de VENTE: males det om nå, ryker ordet; flettes det
+     inn uten å male, står DOM-et igjen uten de nye tegnene, og neste flush
+     leser fraværet som en sletting. */
+  const førIme = await crdtTekst(A);
+  await A.evaluate(() => {
+    const doc = document.getElementById('note-doc');
+    doc.focus();
+    doc.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    // Slik et IME gjør det: tegnene settes rett i tekstnoden, med `input`.
+    const n = document.createTreeWalker(doc.children[0], NodeFilter.SHOW_TEXT).nextNode();
+    n.nodeValue = 'IME' + n.nodeValue;
+    doc.dispatchEvent(new InputEvent('input', { bubbles: true }));
+  });
+  await skrivVed(B, 0, (await crdtTekst(B)).length, ' FRAB');
+  await slipp(B);
+  await hent(A);                    // fjern-endringen kommer MENS ordet komponeres
+  const iKomposisjonen = await A.evaluate(() => ({
+    ark: document.getElementById('note-doc').innerText.trim(),
+    crdt: window.__huskis.noteLiveInfo.text,
+  }));
+  log(label + ' 11: en fjern endring venter mens IME-ordet står halvferdig',
+    /^IME/.test(iKomposisjonen.ark) && !/FRAB/.test(iKomposisjonen.crdt),
+    JSON.stringify(iKomposisjonen));
+  await A.evaluate(() => {
+    document.getElementById('note-doc')
+      .dispatchEvent(new CompositionEvent('compositionend', { bubbles: true }));
+  });
+  await A.waitForTimeout(150);
+  await runde(A, B);
+  const etterIme = { a: await crdtTekst(A), b: await crdtTekst(B), ark: await arkTekst(A) };
+  log(label + ' 12: både det komponerte ordet og den andres tegn overlever',
+    etterIme.a === etterIme.b && /^IME/.test(etterIme.a) && / FRAB/.test(etterIme.a)
+    && /^IME/.test(etterIme.ark.trim()) && /FRAB/.test(etterIme.ark)
+    && etterIme.a.indexOf(førIme) > -1,
+    JSON.stringify(etterIme));
+
   /* ---------- 7. Angre tar MINE endringer, ikke den andres ---------- */
   const førAngre = await crdtTekst(A);
   await skrivVed(A, 0, førAngre.length, ' MIN');
@@ -355,7 +397,7 @@ async function run(label, viewport, touch) {
   await runde(A, B);
   await runde(A, B);
   const angret = { a: await crdtTekst(A), b: await crdtTekst(B) };
-  log(label + ' 11: angre tar MIN endring tilbake og lar den andres stå',
+  log(label + ' 13: angre tar MIN endring tilbake og lar den andres stå',
     !/ MIN/.test(angret.a) && /^DIN /.test(angret.a) && angret.a === angret.b,
     JSON.stringify(angret));
 
@@ -367,7 +409,7 @@ async function run(label, viewport, touch) {
   await A.waitForTimeout(200);
   await runde(A, B);
   const etterKomp = { rader: await loggRader(A, ids.N), a: await crdtTekst(A), b: await crdtTekst(B) };
-  log(label + ' 12: komprimering korter ned loggen uten å miste et tegn',
+  log(label + ' 14: komprimering korter ned loggen uten å miste et tegn',
     etterKomp.rader < raderFør && etterKomp.a === førKomp && etterKomp.b === førKomp,
     JSON.stringify({ raderFør, etterKomp }));
 
@@ -379,7 +421,7 @@ async function run(label, viewport, touch) {
   await hent(nyKlient);
   await nyKlient.waitForTimeout(200);
   const frisk = await crdtTekst(nyKlient);
-  log(label + ' 13: en klient som åpner notatet etter komprimeringen får hele teksten',
+  log(label + ' 15: en klient som åpner notatet etter komprimeringen får hele teksten',
     frisk === førKomp, JSON.stringify({ frisk, førKomp }));
   await nyKlient.close();
 
@@ -396,14 +438,14 @@ async function run(label, viewport, touch) {
     verktøy: !document.getElementById('note-tools').hidden,
     tekst: document.getElementById('note-doc').innerText.trim(),
   }));
-  log(label + ' 14: en ren leser får notatet skrivebeskyttet, uten verktøylinje',
+  log(label + ' 16: en ren leser får notatet skrivebeskyttet, uten verktøylinje',
     !leserFør.skrivbar && !leserFør.verktøy && leserFør.tekst === 'Leses',
     JSON.stringify(leserFør));
 
   await skrivVed(A, 0, 5, ' videre');
   await runde(A, C);
   const leserEtter = await C.evaluate(() => document.getElementById('note-doc').innerText.trim());
-  log(label + ' 15: leseren får live-oppdateringene uten reload',
+  log(label + ' 17: leseren får live-oppdateringene uten reload',
     leserEtter === 'Leses videre', JSON.stringify(leserEtter));
 
   const leserSkriv = await C.evaluate(async (id) => {
@@ -412,12 +454,24 @@ async function run(label, viewport, touch) {
     return { feil: res && res.error ? String(res.error.message || '') : '' };
   }, ids.NR);
   const raderNR = await loggRader(C, ids.NR);
-  log(label + ' 16: leseren kommer ikke forbi editoren heller — serveren sier nei',
+  log(label + ' 18: leseren kommer ikke forbi editoren heller — serveren sier nei',
     /skriverett/i.test(leserSkriv.feil), JSON.stringify(leserSkriv));
   await C.close();
 
   /* ---------- 10. Tilgangen trekkes tilbake mens editoren står åpen ---------- */
   await lukk(A);
+  /* B åpner og LUKKER først et annet notat i den samme bokhyllen, så det ligger
+     igjen en lokal kopi av det på enheten. Den skal ryddes bort av den samme
+     tilbakekallingen — et notat man ikke lenger kan lese, skal ikke bli stående
+     i lagringen bare fordi editoren var lukket da tilgangen forsvant. */
+  await åpne(B, ids.NG);
+  await lukk(B);
+  const kopiFørst = await B.evaluate((id) => {
+    const uid = window.__huskis.authUser.id;
+    return !!(JSON.parse(localStorage.getItem('hk-note-crdt:' + uid) || '{}')[id]);
+  }, ids.NG);
+  log(label + ' 19: et lukket notat etterlater en lokal kopi (forutsetningen)',
+    kopiFørst === true, JSON.stringify({ kopiFørst }));
   await åpne(A, ids.N);
   await åpne(B, ids.N);
   await skrivVed(B, 0, 0, 'SISTE ');
@@ -435,14 +489,18 @@ async function run(label, viewport, touch) {
     const snap = JSON.parse(localStorage.getItem('hk-note-crdt:' + uid) || '{}');
     return {
       editorÅpen: !document.getElementById('note-editor').hidden,
-      opsForNotatet: ops.filter((o) => o.note === id).length,
-      kopi: !!snap[id],
-      serNotatet: window.__huskis.state.notes.some((n) => n.id === id),
+      opsForNotatet: ops.filter((o) => o.note === id.aapen).length,
+      kopi: !!snap[id.aapen],
+      kopiLukket: !!snap[id.lukket],
+      opsLukket: ops.filter((o) => o.note === id.lukket).length,
+      serNotatet: window.__huskis.state.notes.some((n) => n.id === id.aapen),
     };
-  }, ids.N);
-  log(label + ' 17: mistet tilgang lukker editoren og etterlater ingen spor på enheten',
+  }, { aapen: ids.N, lukket: ids.NG });
+  log(label + ' 20: mistet tilgang lukker editoren og etterlater ingen spor på enheten',
     lukket && !sporB.editorÅpen && sporB.opsForNotatet === 0 && !sporB.kopi && !sporB.serNotatet,
     JSON.stringify(sporB));
+  log(label + ' 21: …og det LUKKEDE notatets kopi og kø ryddes med',
+    !sporB.kopiLukket && sporB.opsLukket === 0, JSON.stringify(sporB));
 
   /* ---------- 11. Notatet slettes fra en annen klient ---------- */
   await lukk(A);
@@ -461,7 +519,7 @@ async function run(label, viewport, touch) {
     const ops = JSON.parse(localStorage.getItem('hk-note-ops:' + uid) || '[]');
     return { kopi: !!snap[id], ops: ops.filter((o) => o.note === id).length };
   }, ids.NG);
-  log(label + ' 18: et slettet notat lukker editoren og ryddes bort lokalt',
+  log(label + ' 22: et slettet notat lukker editoren og ryddes bort lokalt',
     lukket2 && !sporA.kopi && sporA.ops === 0, JSON.stringify(sporA));
 
   log(label + ': ingen JS-feil', errs.length === 0, errs.slice(0, 3).join(' | '));
@@ -492,7 +550,7 @@ async function migreringsløp(label) {
   await åpne(A, ids.NG);
   await åpne(B, ids.NG);
   const åpnet = { a: await arkTekst(A), b: await arkTekst(B) };
-  log(label + ' 19: et notat fra før denne runden åpnes uten tap',
+  log(label + ' 23: et notat fra før denne runden åpnes uten tap',
     rader0 === 0 && åpnet.a.trim() === 'Skrevet før samskrivingen'
     && åpnet.b.trim() === 'Skrevet før samskrivingen',
     JSON.stringify({ rader0, åpnet }));
@@ -505,7 +563,7 @@ async function migreringsløp(label) {
   await runde(A, B);
   const etter = { a: await crdtTekst(A), b: await crdtTekst(B) };
   const enGang = (etter.a.match(/Skrevet før samskrivingen/g) || []).length;
-  log(label + ' 20: to samtidige frø gir ÉN tekst, ikke to (deterministisk frø)',
+  log(label + ' 24: to samtidige frø gir ÉN tekst, ikke to (deterministisk frø)',
     enGang === 1 && etter.a === etter.b && /^A: /.test(etter.a) && / \(B\)$/.test(etter.a),
     JSON.stringify({ enGang, etter }));
 
@@ -513,7 +571,7 @@ async function migreringsløp(label) {
   await skrivVed(A, 0, (await crdtTekst(A)).length, '!');
   await runde(A, B);
   const videre = { a: await crdtTekst(A), b: await crdtTekst(B) };
-  log(label + ' 21: notatet kan redigeres videre av begge etter migreringen',
+  log(label + ' 25: notatet kan redigeres videre av begge etter migreringen',
     videre.a === videre.b && /!$/.test(videre.b), JSON.stringify(videre));
 
   log(label + ' (migrering): ingen JS-feil', errs.length === 0, errs.slice(0, 3).join(' | '));

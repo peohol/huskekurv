@@ -137,11 +137,18 @@ etter et kort brudd — uten å måtte late som.
 
 **Skrivingene er «transaksjoner».** To faner er to ekte prosesser mot den samme
 `localStorage`, så en les–endre–skriv kan miste en skriving: begge leser det
-samme, begge skriver, den siste vinner. Mocken leser derfor teksten før
-handleren kjører og sjekker den igjen rett før skrivingen; har noen andre
-skrevet i mellomtiden, kjøres handleren på nytt mot den ferske databasen. Uten
-det ville et flerbrukerscenario med mange skrivinger feilet av harnisket i
-stedet for av koden — og feilet flakete, som er verre.
+samme, begge skriver, den siste vinner. Nettleseren speiler i tillegg
+`localStorage` i hver fane og oppdaterer speilet asynkront, så en fersk verdi
+kan fortsatt se gammel ut. Hver skriving holder derfor en ekte lås
+(`navigator.locks`) fra første lesing til siste skriving. Målt med to faner som
+gjorde 200 les–endre–skriv hver: 264 av 400 uten lås, 400 av 400 med. Uten det
+ville et flerbrukerscenario med mange skrivinger feilet av harnisket i stedet
+for av koden — og feilet flakete, som er verre.
+
+Redigerer TESTEN databasen mens mer enn én fane står oppe, må den inn samme vei:
+`await window.HK_MOCK._edit((db) => { … })` tar den samme låsen.
+`_loadDB()` + `_saveDB()` er to skritt, og en runde fra den andre fanen imellom
+overskriver endringen.
 
 To måter å komme inn i appen på:
 
@@ -211,7 +218,8 @@ på signaler appen faktisk gir:
   (eller `'saved'` når køen skal være tømt). MERK: `cloudCycle()` no-op-er hvis
   en runde alt er i gang, så et rått `await` på den er IKKE et ferdig-signal.
 - **Serverside-effekt**: les mock-databasen direkte (`window.HK_MOCK._loadDB()`
-  eller `localStorage['hk-mock-db']`) og vent på selve raden.
+  eller `localStorage['hk-mock-db']`) og vent på selve raden. Skal du ENDRE den
+  med flere faner oppe, bruk `window.HK_MOCK._edit()`.
 - Bruk `{ polling: 200 }` i filer med flere sider/faner — rAF-polling struper i
   bakgrunnsfaner.
 
