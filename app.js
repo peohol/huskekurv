@@ -18848,12 +18848,20 @@
   }
 
   /* `opts.tvang`: lukk selv om det du skrev ikke er lagret noe holdbart sted.
-     Brukes av brukerens eget «Lukk likevel», og av veiene der notatet er borte
-     for oss uansett (slettet, arkivert, tilgang trukket) — der kan utkastet
-     aldri leveres, og å nekte å lukke ville bare låst brukeren inne. */
+     Brukes av brukerens EGET «Lukk likevel», og av tilgangstap — der har vi
+     ikke lov til å beholde innholdet uansett. Handlinger som bare legger
+     notatet bort (arkiver, papirkurv) bruker den IKKE: de er
+     metadata-handlinger, ikke en beskjed om å kaste det man nettopp skrev.
+
+     `opts.etterpå`: kjøres når editoren FAKTISK ble lukket — også når det skjer
+     via brukerens «Lukk likevel». Det er slik arkivering og papirkurv henger
+     sammen med lukkingen i stedet for å gå utenom den.
+
+     Svarer `false` om lukkingen ble avvist. */
   function closeNoteEditor(opts) {
-    if (!noteEditorOpen()) return;
+    if (!noteEditorOpen()) return false;
     const tvang = !!(opts && opts.tvang === true);
+    const etterpå = opts && typeof opts.etterpå === 'function' ? opts.etterpå : null;
     flushNoteSave();
     /* STÅR OVERGANGEN, er det ikke et bilde som skal tas. Da er dokumentet
        fortsatt et foreløpig frø, og arket — den eneste kopien — forsvinner om
@@ -18877,9 +18885,9 @@
         if (!holdbar && !tvang) {
           showToast(tr('notes.historyStrandedHold'), {
             label: tr('notes.closeAnyway'),
-            fn: () => { hideToast(); closeNoteEditor({ tvang: true }); },
+            fn: () => { hideToast(); closeNoteEditor({ tvang: true, etterpå }); },
           }, { sticky: true });
-          return;
+          return false;
         }
         showToast(tr(holdbar ? 'notes.historyStranded' : 'notes.historyStrandedRam'));
       }
@@ -18929,6 +18937,9 @@
     // Scrollposisjonen gjenopprettes ETTER rendringen, som er det som gir
     // dokumentet høyden igjen.
     if (back) requestAnimationFrame(() => window.scrollTo(0, back.scrollY || 0));
+    // … og FØRST nå kjører handlingen som ba om lukkingen (arkiver, papirkurv).
+    if (etterpå) etterpå();
+    return true;
   }
 
   /* ---- Autosave ---- */
@@ -19449,6 +19460,7 @@
          inn i det. Se `noteLiveSettleSeed`. */
       seedPending: false,
       seedBase: null,     // dokumentet frøet ble sådd FRA (se noteLiveSettleSeed)
+      seedTitle: '',      // … og tittelen det hadde da. Åpningsbildet er BEGGE
       dirty: false,       // noen skrev mens frøet fortsatt var foreløpig
       pending: [],        // fjern-endringer som venter på at en komposisjon tar slutt
       mark: null,
@@ -19483,7 +19495,10 @@
     s.seedPending = seedPending;
     // Grunnlaget frøet ble sådd FRA. Det er dét som avgjør om en forskjell mot
     // serverens dokument betyr det vi tror — se `noteLiveSettleSeed`.
-    if (seedPending) s.seedBase = JSON.stringify(sanitizeNoteDoc(note.doc));
+    if (seedPending) {
+      s.seedBase = JSON.stringify(sanitizeNoteDoc(note.doc));
+      s.seedTitle = String(note.title || '');
+    }
     noteLive = s;
     noteLiveBindDoc(s, ydoc);
     /* FRØET KØES IKKE HER. Et frø som møter en logg noen andre alt har sådd,
@@ -19558,13 +19573,16 @@
     if (!Y) return;
     const skrev = s.dirty;
     const base = s.seedBase;
+    const tittelFør = s.seedTitle;
     /* Arket leses inn i det foreløpige dokumentet FØR noe avgjøres, slik at de
        siste tegnene er med uansett hvilken vei det går. Økten er fortsatt
        merket foreløpig her, så flushen publiserer ingenting — og det er
        nettopp poenget: en op fra det foreløpige dokumentet peker på noe
        serveren ikke har, og ville aldri kunne flettes inn hos de andre. */
     const mittUtkast = skrev ? noteVersionState(s.id) : null;
-    const ferdig = () => { s.seedPending = false; s.dirty = false; s.seedBase = null; };
+    const ferdig = () => {
+      s.seedPending = false; s.dirty = false; s.seedBase = null; s.seedTitle = '';
+    };
 
     /* SPØRSMÅLET ER OM LOGGEN ER TOM — ikke om DENNE hentingen hadde noe nytt.
        Hentingen legger radene i `s.log` og flytter merket FØR den spør her, så
@@ -19582,7 +19600,7 @@
          rakk å skrive mens hentingen sto på. Åpningsbildet må derfor tas av
          grunnlaget frøet ble sådd FRA, ikke av økten: ellers ville tilstanden
          som faktisk sto der før redigeringen manglet i historikken. */
-      noteSeedShot(s, base);
+      noteSeedShot(s, base, tittelFør);
       return;
     }
     const gammel = s.ydoc;
@@ -19630,7 +19648,7 @@
      økten som er poenget. Serveren avviser den som dublett hvis ingenting har
      endret seg siden sist, så en åpning som ikke fører til noe legger heller
      ikke igjen noe. */
-  function noteSeedShot(s, grunnlag) {
+  function noteSeedShot(s, grunnlag, tittelFør) {
     const n = findNoteById(s.id);
     if (!n || !noteEditable(n)) return;
     let doc = null;
@@ -19638,7 +19656,12 @@
       doc = grunnlag ? sanitizeNoteDoc(JSON.parse(grunnlag)) : sanitizeNoteDoc(noteYDoc(s.ydoc));
     } catch (e) { return; }
     if (!doc) return;
-    captureNoteVersion(s.id, { st: { title: String(n.title || ''), doc } });
+    /* TITTELEN HØRER TIL DET SAMME ØYEBLIKKET som dokumentet. Rakk brukeren å
+       endre tittelen mens hentingen sto på, ville `n.title` gitt et blandet
+       bilde: gammelt dokument, ny tittel. Historikkens kontrakt er tilstanden
+       ved åpning, før noe ble endret — begge deler. */
+    const title = grunnlag ? String(tittelFør || '') : String(n.title || '');
+    captureNoteVersion(s.id, { st: { title, doc } });
   }
 
   /* Det som ble skrevet oppå et frø vi måtte kaste. Det kan ikke settes inn i
@@ -21092,8 +21115,11 @@
            bortlagt notat er et blindspor. */
         const id = noteOpenId;
         const spec = noteObjMenuSpec('note', id, () => { try { noteTitleInput.focus(); noteTitleInput.select(); } catch (e) { /* ignorer */ } });
-        // Slett/arkiver legger notatet bort: da skal lukkingen ikke kunne nekte.
-        const wrap = (fn) => () => { closeNoteEditor({ tvang: true }); fn(); };
+        /* Slett/arkiver går gjennom den TRYGGE lukkingen: de legger notatet
+           bort, og skal ikke bety «kast det jeg nettopp skrev». Lukkingen
+           avvises, avvises handlingen med — og velger brukeren «Lukk likevel»,
+           kjøres den etterpå, som hen ba om. */
+        const wrap = (fn) => () => { closeNoteEditor({ etterpå: fn }); };
         spec.extraRows = spec.extraRows.map((r) =>
           (r && r.icon === ICONS.archive) ? Object.assign({}, r, { fn: wrap(r.fn) }) : r);
         spec.remove = wrap(() => deleteNoteObject('note', id));

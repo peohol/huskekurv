@@ -788,7 +788,50 @@ async function runUtenLagring() {
   check(navn + ' 18g2: … og et nytt forsøk legger ikke inn utkastet på nytt',
     toGanger.filter((t) => /MITT UTKAST/.test(t)).length === 1, toGanger);
 
-  // Velger brukeren å lukke likevel, blir teksten liggende i køen.
+  /* ARKIVER OG PAPIRKURV GÅR IKKE UTENOM. De legger notatet bort, og skal ikke
+     bety «kast det jeg nettopp skrev»: avvises lukkingen, avvises handlingen
+     med. */
+  await a.evaluate(() => document.getElementById('note-menu-btn').click());
+  await a.waitForTimeout(300);
+  await a.evaluate(() => {
+    const rad = [...document.querySelectorAll('#obj-menu-panel .obj-menu-row')]
+      .find((r) => /Arkiver/.test(r.textContent));
+    if (rad) rad.click();
+  });
+  await a.waitForTimeout(500);
+  const etterArkiv = await a.evaluate((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return {
+      arkivert: !!(n && n.archived),
+      åpen: !document.getElementById('note-editor').hidden,
+      ark: document.getElementById('note-doc').innerText.trim(),
+    };
+  }, ids.N);
+  check(navn + ' 18g4: «Arkiver» legger ikke notatet bort mens teksten står ulagret',
+    etterArkiv.arkivert === false && etterArkiv.åpen === true
+    && etterArkiv.ark.indexOf('MITT UTKAST') > -1, etterArkiv);
+
+  /* … men velger brukeren «Lukk likevel», skjer det hen ba om: notatet
+     arkiveres, og teksten blir liggende i køen. */
+  await a.evaluate(() => {
+    const b = document.querySelector('#toast .toast-action');
+    if (b) b.click();
+  });
+  await a.waitForTimeout(500);
+  const etterLikevel = await a.evaluate((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return { arkivert: !!(n && n.archived), åpen: !document.getElementById('note-editor').hidden };
+  }, ids.N);
+  check(navn + ' 18g5: … og «Lukk likevel» utfører arkiveringen brukeren ba om',
+    etterLikevel.arkivert === true && etterLikevel.åpen === false, etterLikevel);
+
+  // Notatet hentes ut av arkivet igjen, så resten av løpet står som før.
+  await a.evaluate(async (x) => {
+    await window.HK_MOCK._edit((d) => {
+      const n = d.notes.find((m) => m.id === x);
+      n.archived = false; n.ts = Date.now() + 1000; n.org = 'test';
+    });
+  }, ids.N);
   await a.evaluate(() => {
     const b = document.querySelector('#toast .toast-action');
     if (b) b.click();
@@ -798,7 +841,7 @@ async function runUtenLagring() {
     åpen: !document.getElementById('note-editor').hidden,
     kø: window.__huskis.noteDraftsInfo.texts,
   }));
-  check(navn + ' 18g3: «Lukk likevel» lukker, og teksten blir liggende i køen',
+  check(navn + ' 18g3: editoren er lukket, og teksten ligger i køen',
     etterLukking.åpen === false && etterLukking.kø.some((t) => /MITT UTKAST/.test(t)),
     etterLukking);
 
@@ -1041,7 +1084,10 @@ async function runÅpningsbilde() {
      `&lag=800` holder hentingen åpen. Notatet er aldri sådd, så loggen er tom
      og det foreløpige dokumentet beholdes — men teksten som sto der FØR skal
      likevel finnes i historikken. */
-  await a.goto(BASE + '/?mock=1&lag=800');
+  /* Et romsligere opphold enn ellers: her skal BÅDE dokumentet og tittelen
+     rekkes endret mens frøet er foreløpig, og tittelen skrives til
+     projeksjonen med en liten forsinkelse. */
+  await a.goto(BASE + '/?mock=1&lag=2500');
   await a.waitForFunction(() => {
     const H = window.__huskis;
     return !!(H && H.authUser && H.lastMy);
@@ -1063,7 +1109,19 @@ async function runÅpningsbilde() {
     const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
   });
   await a.keyboard.type('HELT NY TEKST', { delay: 8 });
-  await a.waitForTimeout(200);
+  // … og TITTELEN endres i det samme vinduet: åpningsbildet skal ha begge deler
+  // fra samme øyeblikk, ikke gammelt dokument med ny tittel.
+  await a.evaluate(() => {
+    const t = document.getElementById('note-title-input');
+    t.focus(); t.select();
+  });
+  await a.keyboard.type('HELT NY TITTEL', { delay: 8 });
+  // Tittelen må FAKTISK være endret i projeksjonen før frøet avgjøres, ellers
+  // måler testen ikke det den tror.
+  await a.waitForFunction((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return n && n.title === 'HELT NY TITTEL' && window.__huskis.noteLiveInfo.seedPending;
+  }, ids.N, { timeout: 20000, polling: 50 });
   await a.waitForFunction(() => !window.__huskis.noteLiveInfo.seedPending,
     null, { timeout: 20000, polling: 50 });
   await a.waitForTimeout(500);
@@ -1079,11 +1137,28 @@ async function runÅpningsbilde() {
   check(navn + ' 22: tilstanden FØR redigeringen finnes i historikken',
     rader22.some((r) => /OPPRINNELIG/.test(r.text) && !/HELT NY TEKST/.test(r.text)),
     rader22.map((r) => r.text));
+  const bilder22 = await a.evaluate((x) => {
+    const d = JSON.parse(localStorage.getItem('hk-mock-db'));
+    return (d.note_versions || []).filter((v) => v.note_id === x)
+      .map((v) => ({ tittel: v.title, tekst: JSON.stringify(v.doc) }));
+  }, ids.N);
+  const åpningen = bilder22.find((v) => v.tekst.indexOf('OPPRINNELIG') > -1
+    && v.tekst.indexOf('HELT NY TEKST') === -1);
+  check(navn + ' 22c: … med den opprinnelige TITTELEN, ikke den nye',
+    !!åpningen && åpningen.tittel === 'Felles notat', åpningen);
   await a.evaluate(() => window.__huskis.closeNoteHistory());
   await lukkEditor(a);
   await a.waitForTimeout(250);
 
-  /* ---- 23. «Nå» for et lukket notat teller enhetens egen kø ---- */
+  /* ---- 23. «Nå» for et lukket notat teller enhetens egen kø ----
+     Uten det kunstige oppholdet fra forrige del: her er det innholdet som er
+     poenget, ikke vinduet. */
+  await a.goto(BASE + '/?mock=1');
+  await a.waitForFunction(() => {
+    const H = window.__huskis;
+    return !!(H && H.authUser && H.lastMy);
+  }, null, { timeout: 20000, polling: 200 });
+  await a.evaluate(() => window.__huskis.setMainTab('notes'));
   await a.evaluate(() => window.HK_MOCK.setOffline(true));
   await åpneEditor(a, ids.N);
   await skrivSlutt(a, ' BARE PÅ ENHETEN');
