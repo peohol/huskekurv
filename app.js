@@ -18867,8 +18867,14 @@
         showToast(tr(holdbar ? 'notes.historyStranded' : 'notes.historyStrandedRam'));
       }
     } else {
-      const st = s && !s.seedPending ? noteVersionState(noteOpenId) : null;
-      captureNoteVersion(noteOpenId, st ? { st } : {});
+      /* Ellers tas bildet av PROJEKSJONEN, som `flushNoteSave()` nettopp har
+         skrevet: den ER det man forlot. Å lese økten her ville betydd en flush
+         til, og en flush er en SKRIVING — lukkingen skal ikke gjøre en. Uten
+         `st` ville kjeden, som kjører etter at økten er borte, hentet
+         dokumentet fra loggen, som ennå ikke har fått det siste. */
+      const n2 = findNoteById(noteOpenId);
+      const doc = n2 ? sanitizeNoteDoc(n2.doc) : null;
+      captureNoteVersion(noteOpenId, doc ? { st: { title: String(n2.title || ''), doc } } : {});
     }
     closeNoteLive();
     pushNoteOps();   // det siste man skrev skal ut med én gang, ikke ved neste runde
