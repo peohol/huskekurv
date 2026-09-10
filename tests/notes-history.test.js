@@ -28,6 +28,9 @@
    13. REGRESJON (frøet): en enhet som åpner et allerede samskrevet notat for
        FØRSTE gang skal ikke doble teksten. Frøet er en foreløpig antagelse til
        serveren har sagt om loggen er tom.
+   14. REGRESJON (frøet, andre vei): et NYTT notat virker fullt ut lokalt FØR
+       serveren har svart — raden ligger i synk-køen, så første henting sier
+       «finnes ikke», og det er publiseringen som venter, ikke skrivingen
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -338,6 +341,29 @@ async function run(navn, viewport, mobil) {
   await lukkEditor(p);
   check(navn + ' 13b: … og projeksjonen står uendret etterpå',
     (await notatDoc(p, ids.N)) === fasit, await notatDoc(p, ids.N));
+
+  // ---- 14. REGRESJON: et NYTT notat virker FØR serveren har svart ----
+  // Raden ligger i synk-køen når editoren åpnes, så den første hentingen
+  // svarer «finnes ikke». Det lokale dokumentet skal likevel være helt vanlig:
+  // det er PUBLISERINGEN som venter på svaret, ikke skrivingen.
+  await p.click('#add-note-btn');
+  await p.waitForFunction(() => !document.getElementById('note-editor').hidden,
+    null, { timeout: 5000, polling: 50 });
+  await skrivSlutt(p, 'FERSKT NOTAT');
+  await p.waitForTimeout(250);
+  const ferskt = await p.evaluate(() => {
+    const i = window.__huskis.noteLiveInfo;
+    return { seedPending: i.seedPending, crdt: i.text };
+  });
+  check(navn + ' 14: et nytt notat har teksten i CRDT-en med én gang',
+    ferskt.crdt === 'FERSKT NOTAT', ferskt);
+  await p.evaluate(() => window.__huskis.noteUndoRedo(true));
+  await p.waitForTimeout(200);
+  check(navn + ' 14b: … og angre virker før serveren har svart',
+    (await crdtTekst(p)) !== 'FERSKT NOTAT'
+    && (await arkTekst(p)) !== 'FERSKT NOTAT',
+    { crdt: await crdtTekst(p), ark: await arkTekst(p) });
+  await lukkEditor(p);
 
   check(navn + ': ingen JS-feil', feil.length === 0, feil.join(' | '));
   await br.close();

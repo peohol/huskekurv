@@ -298,10 +298,15 @@ den kan ikke dekke en enhet som sår et notat noen ALT har sådd og skrevet vide
 i, for da er innholdet et annet. Derfor er frøet bare en foreløpig lokal
 antagelse til den første hentingen har svart: har loggen rader, kastes frøet og
 økten bygges av radene (det som ble skrevet i mellomtiden skrives inn som en
-vanlig forskjell); er loggen tom, er frøet det første og køes. Uten svar — altså
-uten nett — skrives frøet verken til loggen eller til enhetens lagring, og
-notatet oppfører seg som før samskrivingen fantes: tegnene lagres i
-projeksjonen, og flettes inn i CRDT-en så snart serveren har svart.
+vanlig forskjell); er loggen tom, er frøet det første — med det som er skrevet
+oppå det — og køes.
+
+**Det er PUBLISERINGEN som venter, ikke skrivingen.** Lokalt er økten helt
+vanlig hele tiden: angre, formatering og lagring virker fra første tastetrykk.
+Så lenge svaret ikke har kommet, køes ingenting til loggen og ingen lokal kopi
+skrives. Det gjelder også et NYTT notat, der raden ennå ligger i synk-køen og
+første henting derfor svarer «finnes ikke» — uten dette ville et ferskt notat
+stått uten angre de første sekundene.
 
 **Offline er bedre enn før, ikke dårligere.** Oppdateringene legges i en kø i
 enhetens lagring, ved siden av en lokal kopi av CRDT-en, og køen tømmes ved
@@ -928,14 +933,16 @@ autoritative beskrivelsen; her er bare det som er verdt å vite om VALGENE:
   delt, samskrevet notat for første gang fikk dobbelt innhold. Frøet er nå en
   foreløpig antagelse til serveren har sagt om loggen er tom, og klient-id-en
   er avledet av innholdet, slik at to ulike frø aldri kan havne i det samme
-  (klient, teller)-rommet. Rettelsen hører hjemme her fordi gjenopprettingen
+  (klient, teller)-rommet. Det LOKALE dokumentet venter aldri på svaret — bare
+  publiseringen gjør det — for ellers ville et ferskt notat stått uten angre
+  til raden hadde synket. Rettelsen hører hjemme her fordi gjenopprettingen
   står på nøyaktig det fundamentet.
 
 Dekket av `tests/notes-history.test.js` (ny: bildene ved åpning og lukking,
 dubletthåndteringen, modalen, forhåndsvisningen, gjenoppretting gjennom CRDT-en
 med loggen som vokser, angring fra toasten, gjenoppretting MENS en annen
 skriver, en ren leser, tilbakekalling, uten nett, merking — og en regresjon på
-frøet som feiler uten rettelsen over; desktop og mobil),
+frøet i BEGGE retninger, som feiler uten rettelsen over; desktop og mobil),
 `supabase/tests/test-note-versions.sql` (serverkontrakten: grants, policy,
 fingeravtrykk, ren leser, utenforstående, merking og tak, alle fire lagene i
 uttynningen, tilbakekalling, kaskade og kontosletting) og en ny RPC-vakt i

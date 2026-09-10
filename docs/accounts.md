@@ -413,9 +413,11 @@ Klientsiden ligger i tre deler, alle i notat-seksjonen i `app.js`:
   skriver mens den er underveis. Et frø UTEN en lokal kopi er bare en foreløpig
   antagelse til den første hentingen har sagt om loggen er tom
   (`noteLiveSettleSeed`): har loggen rader, kastes frøet og økten bygges av
-  radene. Uten svar skrives frøet verken til loggen eller til enhetens lagring,
-  og notatet oppfører seg som før samskrivingen fantes — tegnene lagres i
-  projeksjonen.
+  radene i stedet. LOKALT er økten helt vanlig hele tiden — angre, formatering
+  og lagring virker fra første tastetrykk — det er PUBLISERINGEN som venter:
+  ingenting køes til loggen, og ingen lokal kopi skrives, før svaret har kommet.
+  Det gjelder også et NYTT notat, der raden ennå ligger i synk-køen og første
+  henting derfor svarer «finnes ikke».
 - **Køen** (`noteOps`, `pushNoteOps`) — radene som ennå ikke har nådd kontoen,
   lagret i enhetens lagring (`hk-note-ops:<uid>`) ved siden av en lokal kopi av
   CRDT-en (`hk-note-crdt:<uid>`). Køen rir på den SAMME synk-runden som resten

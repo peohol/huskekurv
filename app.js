@@ -18979,12 +18979,8 @@
     /* PROJEKSJONEN SKRIVES FRA CRDT-EN, ikke rett fra DOM-et: `body` skal alltid
        være nøyaktig det samskrivingen er blitt enig om, aldri en halv utgave av
        det. Flushen først, så dokumentet leses ut igjen. Uten en levende økt
-       (Yjs mangler), eller mens frøet ennå er foreløpig, faller vi tilbake på
-       DOM-et — som før samskrivingen fantes. Det er dét som gjør at en enhet
-       uten nett kan skrive i et notat den aldri har åpnet før: tegnene lagres
-       i projeksjonen, og flettes inn i CRDT-en så snart serveren har svart. */
-    const live = noteLive && noteLive.id === noteOpenId && !noteLive.seedPending
-      ? noteLive : null;
+       (Yjs mangler) faller vi tilbake på DOM-et, som før. */
+    const live = noteLive && noteLive.id === noteOpenId ? noteLive : null;
     if (live) noteLiveFlush();
     const doc = live ? noteYDoc(live.ydoc) : noteDocFromEl(noteDocEl);
     // Ingen endring → ingen skriving. Ellers ville hvert tastetrykk som ikke
@@ -19343,7 +19339,14 @@
        stengt (`noteLiveFlush`), så dokumentet står urørt til spørsmålet er
        avgjort. */
     ydoc.on('update', (update, origin) => {
-      if (origin === 'remote' || noteLive !== s || s.seedPending) return;
+      if (origin === 'remote' || noteLive !== s) return;
+      /* MENS FRØET ER FORELØPIG skrives ingenting ut — verken til loggen eller
+         til enhetens lagring. Dokumentet lokalt er derimot helt vanlig, så
+         angre, formatering og lagring virker fra første tastetrykk; det er
+         bare PUBLISERINGEN som venter på svaret om loggen er tom. `dirty` er
+         beskjeden til `noteLiveSettleSeed` om at det ligger lokale endringer
+         oppå frøet. */
+      if (s.seedPending) { s.dirty = true; return; }
       queueNoteOp(s.id, update);
       s.snapTimer = s.snapTimer || setTimeout(() => {
         s.snapTimer = null;
@@ -19354,36 +19357,45 @@
 
   /* ---- Frøet blir sant, eller det blir kastet ----
      Kalles ÉN gang per økt: ved den første hentingen som faktisk fikk svar.
+     Fram til da har økten vært helt vanlig LOKALT — angre, formatering og
+     lagring virker — men ingenting er publisert.
 
-     Loggen er TOM   → notatet har aldri vært samskrevet. Frøet vårt er det
-                       første, og køes (men bare av en som har skriverett).
+     Loggen er TOM   → notatet har aldri vært samskrevet. Frøet vårt, med det
+                       som er skrevet oppå det, er det første og køes (men bare
+                       av en som har skriverett).
      Loggen har rader → notatet er sådd fra før. Da skal vårt frø aldri møte
                        den: økten bygges på nytt fra radene, og det foreløpige
-                       dokumentet kastes urørt. Rakk noen å skrive i mellom-
-                       tiden, står tegnene fortsatt i DOM-et — de skrives inn
-                       som en vanlig forskjell mot det serveren har. */
+                       dokumentet kastes. Rakk noen å skrive i mellomtiden,
+                       står tegnene fortsatt i DOM-et — de skrives inn som en
+                       vanlig forskjell mot det serveren har.
+
+     MERK at et NYTT notat normalt går den første veien, men ikke med én gang:
+     raden ligger i synk-køen når editoren åpnes, så den første hentingen
+     svarer «finnes ikke» og økten blir stående foreløpig noen sekunder til.
+     Det er nettopp derfor det lokale dokumentet ikke venter på svaret. */
   function noteLiveSettleSeed(s, fresh) {
     const Y = noteYLib();
     if (!Y) return;
     s.seedPending = false;
     const skrev = s.dirty;
     s.dirty = false;
-    if (fresh.length) {
-      const gammel = s.ydoc;
-      const ydoc = noteYEmpty();
-      fresh.forEach((u) => { try { Y.applyUpdate(ydoc, u, 'remote'); } catch (e) { /* ignore */ } });
-      noteLiveBindDoc(s, ydoc);
-      try { gammel.destroy(); } catch (e) { /* ignore */ }
-    } else {
+    if (!fresh.length) {
       const n = findNoteById(s.id);
       if (noteEditable(n)) queueNoteOp(s.id, Y.encodeStateAsUpdate(s.ydoc));
+      refreshNoteSaveStatus();
+      return;
     }
+    const gammel = s.ydoc;
+    const ydoc = noteYEmpty();
+    fresh.forEach((u) => { try { Y.applyUpdate(ydoc, u, 'remote'); } catch (e) { /* ignore */ } });
+    noteLiveBindDoc(s, ydoc);
+    try { gammel.destroy(); } catch (e) { /* ignore */ }
     if (!(noteEditorOpen() && noteOpenId === s.id && noteDocEl)) return;
     if (skrev) {
       // Behold det som ble skrevet i mellomtiden: forskjellen mellom arket og
       // dokumentet vi nettopp fikk ER tastetrykkene.
       noteLiveFlush();
-    } else if (fresh.length) {
+    } else {
       noteApplyingDoc = true;
       noteDocIntoEl(noteDocEl, noteYDoc(s.ydoc));
       noteApplyIndent();
@@ -19560,12 +19572,6 @@
     noteFlushTimer = null;
     const s = noteLive;
     if (!s || !noteEditorOpen() || noteOpenId !== s.id || noteApplyingDoc) return false;
-    /* MENS FRØET ER FORELØPIG leser vi heller ikke DOM-et: dokumentet under
-       arket er en gjetning til serveren har svart, og en forskjell mot en
-       gjetning er ikke en endring. Tegnene står i DOM-et og i projeksjonen så
-       lenge, og `noteLiveSettleSeed` skriver dem inn når svaret kommer —
-       `dirty` er beskjeden om at det er noe å skrive inn. */
-    if (s.seedPending) { s.dirty = true; return false; }
     /* MIDT I EN KOMPOSISJON leser vi ikke DOM-et. Et IME-ord (kinesisk,
        japansk, eller bare et aksenttegn på macOS) står halvferdig i editoren
        til komposisjonen er over, og både en flush og en ommaling ville brutt
@@ -19703,13 +19709,7 @@
     if (!n) return false;
     const clean = sanitizeNoteDoc(doc);
     const Y = noteYLib();
-    if (Y && noteLive && noteLive.id === id && noteLive.seedPending) {
-      /* Frøet er foreløpig: CRDT-en er ikke fasiten ennå, og en skriving inn i
-         den ville vært en skriving inn i en gjetning. Dokumentet settes i
-         projeksjonen (under), og `dirty` sørger for at det blir skrevet inn
-         som en forskjell mot serverens dokument når svaret kommer. */
-      noteLive.dirty = true;
-    } else if (Y && noteLive && noteLive.id === id) {
+    if (Y && noteLive && noteLive.id === id) {
       noteYWriteFlat(noteLive.ydoc, noteDocToFlat(clean), 'local');
     } else if (Y) {
       const snap = readNoteSnap(id);
