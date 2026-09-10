@@ -20975,7 +20975,22 @@
     try { st = await noteAuthoritativeState(ctx.id); } catch (e) { /* under */ }
     if (noteHistoryCtx !== ctx) return;
     ctx.nowBusy = false;
-    if (!st) return;
+    /* KOM LESINGEN IKKE FRAM, FINNES DET INGEN «NÅ» Å SAMMENLIGNE MED. Å la
+       det forrige svaret bli stående ville vært å presentere en tilstand fra i
+       sted som den gjeldende — uten at noe sa fra, og uten at brukeren kan se
+       forskjell på en fersk diff og en foreldet. En diff mot noe utdatert er
+       verre enn ingen diff: sammenligningen tømmes, og feltet sier hvorfor.
+
+       VERSJONEN som er hentet (`ctx.doc`) røres ikke — den kan fortsatt leses i
+       sin helhet, og den er ikke avhengig av hva som gjelder nå. */
+    if (!st) {
+      if (!ctx.now) return;
+      ctx.now = null;
+      ctx.nowSig = '';
+      ctx.diff = null;
+      paintNoteHistory();
+      return;
+    }
     const sig = noteVersionSig(st.title, st.doc);
     if (ctx.nowSig === sig) return;
     ctx.now = st;

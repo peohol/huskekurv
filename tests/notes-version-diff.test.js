@@ -37,6 +37,8 @@
    21. Tilbakekalt tilgang lukker historikken — også midt i en sammenligning
    22. De to endringene man ikke kan SE i teksten — en blokk som byttet type og
        en som bare byttet plass — bærer det med ord
+   23. En oppfriskning av «Nå» som ikke kommer fram tømmer sammenligningen og
+       sier hvorfor — den gamle diffen blir aldri stående som fersk
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -746,6 +748,56 @@ async function runLukket() {
   const køDiff = await diffLinjer(a);
   check(navn + ' 18b: … så diffen mot en eldre versjon tar med det som ennå ikke er levert',
     køDiff.some((l) => /BARE PÅ ENHETEN/.test(l.ins)), køDiff.map((l) => l.kind + ':' + l.ins));
+
+  /* ---- 23. EN OPPFRISKNING SOM FEILER skal ikke la det gamle stå som «nå» ----
+     REGRESJON: den tvungne lesingen beholdt forrige svar når den nye ikke kom
+     fram. Da ble en tilstand fra i sted presentert som den gjeldende, uten at
+     noe sa fra — og en diff mot noe utdatert er verre enn ingen diff. */
+  const nåFør = await a.evaluate(() => window.__huskis.noteHistoryInfo.nowText);
+  check(navn + ' 23a: sammenligningen står med en gyldig «nå» (forutsetningen)',
+    !!nåFør && køDiff.length > 0, { nå: nåFør });
+
+  await a.evaluate(() => {
+    const c = window.__huskis.client;
+    const forrige = c.rpc.bind(c);
+    c.rpc = function (n2, params) {
+      if (n2 === 'note_crdt_load') {
+        return Promise.resolve({ data: null, error: { message: 'Failed to fetch' } });
+      }
+      return forrige(n2, params);
+    };
+    window.__hkLesingTilbake = () => { c.rpc = forrige; };
+  });
+  await velgVisning(a, 'full');
+  await velgVisning(a, 'diff');
+  await a.waitForTimeout(400);
+  const utilgjengelig = await a.evaluate(() => ({
+    nowText: window.__huskis.noteHistoryInfo.nowText,
+    harDiff: !!document.querySelector('.note-diff-doc'),
+    linjer: document.querySelectorAll('.note-diff-line').length,
+    melding: (document.querySelector('.note-diff-summary') || {}).textContent || '',
+  }));
+  check(navn + ' 23: en lesing som ikke kommer fram tømmer sammenligningen …',
+    utilgjengelig.nowText === null && utilgjengelig.harDiff === false
+    && utilgjengelig.linjer === 0, utilgjengelig);
+  check(navn + ' 23b: … og sier hvorfor, i stedet for å vise den gamle diffen som fersk',
+    /ingenting å sammenligne/.test(utilgjengelig.melding), utilgjengelig.melding);
+
+  // VERSJONEN som er hentet skal fortsatt kunne leses i sin helhet.
+  await velgVisning(a, 'full');
+  const fortsattLesbar = await a.evaluate(() =>
+    (document.querySelector('.note-history-doc') || {}).innerText || '');
+  check(navn + ' 23c: … mens selve versjonen fortsatt kan leses',
+    /OPPRINNELIG/.test(fortsattLesbar), fortsattLesbar.slice(0, 60));
+
+  // Og kommer lesingen fram igjen, virker sammenligningen som før.
+  await a.evaluate(() => window.__hkLesingTilbake());
+  await velgVisning(a, 'diff');
+  await a.waitForTimeout(400);
+  const tilbake = await diffLinjer(a);
+  check(navn + ' 23d: … og den virker igjen så snart lesingen kommer fram',
+    tilbake.some((l) => /BARE PÅ ENHETEN/.test(l.ins)),
+    tilbake.map((l) => l.kind + ':' + l.ins));
 
   check(navn + ': ingen JS-feil', feil.length === 0, feil.join(' | '));
   await br.close();

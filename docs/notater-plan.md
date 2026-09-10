@@ -600,9 +600,14 @@ når en rad åpnes mens den visningen står. Er den uendret, males ingenting om;
 en ommaling for ingenting ville flyttet fokus ut av kontrollen man nettopp
 brukte.
 
-Var økten uavklart da listen ble hentet, dekkes det av den samme lesingen; går
-det fortsatt ikke, sier visningen det i klartekst i stedet for å vise en diff
-mot noe utdatert.
+**Og kommer lesingen ikke fram, tømmes sammenligningen.** Å la det forrige
+svaret bli stående ville vært å presentere en tilstand fra i sted som den
+gjeldende — uten at noe sa fra, og uten at brukeren kan se forskjell på en fersk
+diff og en foreldet. Da er den ærlige visningen ingen diff: feltet sier i
+klartekst at det ikke finnes noe å sammenligne med ennå. VERSJONEN som er hentet
+røres ikke — den kan fortsatt leses i sin helhet, og den er ikke avhengig av hva
+som gjelder nå. Neste gang brukeren ber om sammenligningen, prøves lesingen
+igjen. Det samme gjelder en økt som ennå er uavklart.
 
 **Diffen SKRIVER INGENTING.** Den leser to dokumenter og bygger noder — den
 rører verken CRDT-en, projeksjonen, loggen, historikken eller synk-køen, og den
@@ -647,13 +652,15 @@ VALGET ved piltast, at det ikke skrives verken i loggen, i historikken eller i
 notatet av å sammenligne, at en gjenoppretting fortsatt gir nøyaktig den valgte
 versjonen, og at markeringene henter fargen fra drakten i både lys og mørk.
 
-**Og de fire tilfellene der «Nå» er det vanskelige:** historikk åpnet fra et
+**Og de fem tilfellene der «Nå» er det vanskelige:** historikk åpnet fra et
 LUKKET notat, «Nå» med enhetens usendte kø (leveringen nektes, så køen blir
 stående mens historikken kan hentes), en medforfatter som skriver MENS
 sammenligningen står åpen (testen rører aldri listen — den bytter visning, som
-en bruker gjør), og en ren leser som ser diffen uten å få skriverettigheter,
-uten å legge igjen et bilde, og som likevel ser det som kom til etter at
-modalen åpnet. Tilbakekalt tilgang midt i en sammenligning lukker historikken.
+en bruker gjør), en ren leser som ser diffen uten å få skriverettigheter, uten å
+legge igjen et bilde, og som likevel ser det som kom til etter at modalen åpnet,
+og en lesing som IKKE kommer fram: da skal sammenligningen tømmes og si hvorfor,
+mens versjonen fortsatt kan leses. Tilbakekalt tilgang midt i en sammenligning
+lukker historikken.
 
 Regresjonene fra historikk-runden står uendret i `tests/notes-history.test.js`,
 `tests/notes-collab.test.js` og `tests/notes-sharing.test.js`.
