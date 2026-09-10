@@ -44,8 +44,8 @@
        fortsatt bare én gang
    18. REGRESJON (datatap): nekter BÅDE enhetens lagring og serveren, finnes
        det ingen holdbar destinasjon — og da kastes ingenting. Økten blir
-       stående foreløpig, teksten står i editoren, ingenting publiseres, og
-       overgangen fullfører seg selv når lagringen er tilbake
+       stående foreløpig, teksten står i editoren, loggen får ingen nye rader,
+       og overgangen fullfører seg selv når lagringen er tilbake
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -720,6 +720,7 @@ async function runUtenLagring() {
   const iVinduet = await a.evaluate(() => window.__huskis.noteLiveInfo.seedPending);
   check(navn + ' 18a: frøet er foreløpig når vi begynner å skrive (forutsetningen)',
     iVinduet === true, { seedPending: iVinduet });
+  const førUtkastet = await loggRader(a, ids.N);
   await skrivSlutt(a, ' MITT UTKAST');
 
   /* Vent på at overgangen faktisk ble FORSØKT — signalet er at lagringen sa
@@ -742,14 +743,13 @@ async function runUtenLagring() {
   check(navn + ' 18c: … og køen vokser ikke med en rad for hver runde',
     blokkert.iKøen === 0, { iKøen: blokkert.iKøen });
 
-  // Og ingenting ble publisert: den andres avsnitt står urørt på serveren.
-  const påServeren = await a.evaluate((x) => {
-    const d = JSON.parse(localStorage.getItem('hk-mock-db'));
-    const n = d.notes.find((m) => m.id === x);
-    return { body: JSON.stringify(n.body), rader: (d.note_updates || []).filter((u) => u.note_id === x).length };
-  }, ids.N);
-  check(navn + ' 18d: … og ingenting ble publisert oppå det den andre skrev',
-    påServeren.body.indexOf('MITT UTKAST') === -1, påServeren);
+  /* Og INGENTING ble publisert. Målt på loggen, ikke på projeksjonen: det er
+     loggen som avgjør innhold, mens projeksjonen skrives om av den som lagret
+     sist uansett. Kom det en rad her, ville det foreløpige dokumentet vært på
+     vei ut til de andre — og den andres avsnitt med i dragsuget. */
+  const iLoggen = await loggRader(a, ids.N);
+  check(navn + ' 18d: … og loggen fikk ingen nye rader — ingenting gikk ut til de andre',
+    iLoggen === førUtkastet, { før: førUtkastet, nå: iLoggen });
 
   /* OG APPEN PÅSTÅR IKKE NOE ANNET. Toasten som sier at teksten er tatt vare
      på skal ikke ha vært vist — den er sann bare når en holdbar destinasjon
