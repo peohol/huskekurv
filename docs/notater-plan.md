@@ -355,8 +355,9 @@ forsøk på å lukke legger ikke inn utkastet en gang til. Så snart lagringen
 virker igjen, skriver neste synk-runde køen ned av seg selv.
 
 **Arkiver og papirkurv går IKKE utenom.** De legger notatet bort, og skal ikke
-bety «kast det jeg nettopp skrev»: de går gjennom den samme lukkingen, og
-avvises den, avvises handlingen med. Velger brukeren «Lukk likevel», kjøres
+bety «kast det jeg nettopp skrev»: begge går gjennom den samme lukkingen — de
+henger på hvert sitt sted i objektmenyen, så begge er dekket av hver sin
+regresjon — og avvises lukkingen, avvises handlingen med. Velger brukeren «Lukk likevel», kjøres
 handlingen etterpå, som hen ba om. Det ene unntaket er reelt tilgangstap — der
 har vi ikke lov til å beholde innholdet uansett.
 
@@ -417,10 +418,11 @@ gjelder nå: den kan ligge etter loggen, og et bilde derfra ville lagt gammelt
 innhold inn med NÅ-tidspunkt og stått øverst i historikken som «Nå».
 Åpningsbildet tas derfor når frøet er avgjort, ikke idet editoren åpnes — og er
 loggen TOM, beholdes det foreløpige dokumentet, som da alt inneholder det
-brukeren rakk å skrive. Bildet tas i det tilfellet av grunnlaget frøet ble sådd
-FRA — både dokumentet og TITTELEN, som hører til det samme øyeblikket. Ellers
-ville tilstanden før redigeringen manglet, eller blitt et blandet bilde med
-gammelt dokument og ny tittel.
+brukeren rakk å skrive. Dokumentet hentes i det tilfellet fra grunnlaget frøet
+ble sådd FRA; har loggen rader, er serverens dokument det autoritative. TITTELEN
+er uansett den fra ÅPNINGEN, uavhengig av hvor dokumentet kommer fra: rakk
+brukeren å endre den mens hentingen sto på, ville bildet ellers blitt en
+blanding — gammelt dokument, ny tittel.
 
 Er notatet lukket — historikken åpnes rett fra kortet — bygges dokumentet av
 loggens rader OG av enhetens egne: den lokale kopien og radene som ennå ikke er
@@ -1047,9 +1049,9 @@ den står — den lokale kopien til et notat med usendte endringer som aldri
 ryddes, den utdaterte projeksjonen som ikke får bli et falskt «Nå»,
 gjenopprettingen fra et lukket kort som faktisk blir gjeldende,
 gjenopprettingen som ikke skjer når bildet av tilstanden før feiler,
-åpningsbildet som er tilstanden FØR redigeringen når loggen er tom — tittelen
-med — «Nå» som teller enhetens egen kø, og arkiveringen som ikke går utenom
-vakten; desktop og mobil),
+åpningsbildet som er tilstanden FØR redigeringen — tittelen med, både når loggen
+er tom og når den har rader — «Nå» som teller enhetens egen kø, og arkiveringen
+og papirkurven som ikke går utenom vakten; desktop og mobil),
 `supabase/tests/test-note-versions.sql` (serverkontrakten: grants, policy,
 fingeravtrykk, ren leser, utenforstående, merking og tak, alle fire lagene i
 uttynningen, tilbakekalling, kaskade og kontosletting),

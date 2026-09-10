@@ -19460,7 +19460,7 @@
          inn i det. Se `noteLiveSettleSeed`. */
       seedPending: false,
       seedBase: null,     // dokumentet frøet ble sådd FRA (se noteLiveSettleSeed)
-      seedTitle: '',      // … og tittelen det hadde da. Åpningsbildet er BEGGE
+      seedTitle: null,    // tittelen notatet hadde da økten åpnet (åpningsbildet)
       dirty: false,       // noen skrev mens frøet fortsatt var foreløpig
       pending: [],        // fjern-endringer som venter på at en komposisjon tar slutt
       mark: null,
@@ -19495,10 +19495,11 @@
     s.seedPending = seedPending;
     // Grunnlaget frøet ble sådd FRA. Det er dét som avgjør om en forskjell mot
     // serverens dokument betyr det vi tror — se `noteLiveSettleSeed`.
-    if (seedPending) {
-      s.seedBase = JSON.stringify(sanitizeNoteDoc(note.doc));
-      s.seedTitle = String(note.title || '');
-    }
+    /* TITTELEN VED ÅPNING huskes alltid, ikke bare når vi sår: åpningsbildet
+       skal pare dokumentet med tittelen slik den var i det SAMME øyeblikket,
+       uansett hvilken vei dokumentet kommer fra. */
+    s.seedTitle = String(note.title || '');
+    if (seedPending) s.seedBase = JSON.stringify(sanitizeNoteDoc(note.doc));
     noteLive = s;
     noteLiveBindDoc(s, ydoc);
     /* FRØET KØES IKKE HER. Et frø som møter en logg noen andre alt har sådd,
@@ -19581,7 +19582,7 @@
        serveren ikke har, og ville aldri kunne flettes inn hos de andre. */
     const mittUtkast = skrev ? noteVersionState(s.id) : null;
     const ferdig = () => {
-      s.seedPending = false; s.dirty = false; s.seedBase = null; s.seedTitle = '';
+      s.seedPending = false; s.dirty = false; s.seedBase = null; s.seedTitle = null;
     };
 
     /* SPØRSMÅLET ER OM LOGGEN ER TOM — ikke om DENNE hentingen hadde noe nytt.
@@ -19625,7 +19626,10 @@
     noteLiveBindDoc(s, ydoc);
     try { gammel.destroy(); } catch (e) { /* ignore */ }
     ferdig();          // FØRST nå er dokumentet serverens, og skrivinger kan ut
-    noteSeedShot(s);
+    /* Dokumentet er serverens — det er det autoritative — men TITTELEN skal
+       være den fra åpningen: rakk brukeren å endre den mens hentingen sto på,
+       ville bildet ellers blitt en blanding. Kildene velges hver for seg. */
+    noteSeedShot(s, null, tittelFør);
     if (!påSkjermen) return;
     if (skrev && trygt) {
       noteLiveFlush();
@@ -19656,11 +19660,12 @@
       doc = grunnlag ? sanitizeNoteDoc(JSON.parse(grunnlag)) : sanitizeNoteDoc(noteYDoc(s.ydoc));
     } catch (e) { return; }
     if (!doc) return;
-    /* TITTELEN HØRER TIL DET SAMME ØYEBLIKKET som dokumentet. Rakk brukeren å
-       endre tittelen mens hentingen sto på, ville `n.title` gitt et blandet
-       bilde: gammelt dokument, ny tittel. Historikkens kontrakt er tilstanden
-       ved åpning, før noe ble endret — begge deler. */
-    const title = grunnlag ? String(tittelFør || '') : String(n.title || '');
+    /* TITTELEN HØRER TIL DET SAMME ØYEBLIKKET som dokumentet, og velges
+       UAVHENGIG av det: dokumentet kan komme fra frøets grunnlag eller fra
+       serverens rader, men tittelen skal uansett være den fra åpningen. Rakk
+       brukeren å endre den mens hentingen sto på, ville `n.title` gitt et
+       blandet bilde. Historikkens kontrakt er tilstanden ved åpning. */
+    const title = typeof tittelFør === 'string' ? tittelFør : String(n.title || '');
     captureNoteVersion(s.id, { st: { title, doc } });
   }
 

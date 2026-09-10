@@ -51,6 +51,8 @@
        åpningsbildet tas av grunnlaget frøet ble sådd fra, ikke av det
        brukeren rakk å skrive
    23. «Nå» for et lukket notat teller enhetens egne, usendte endringer
+   24. … og tittelen ved åpning gjelder også når loggen HAR rader: dokumentet
+       er serverens, tittelen er den fra åpningen
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -832,10 +834,67 @@ async function runUtenLagring() {
       n.archived = false; n.ts = Date.now() + 1000; n.org = 'test';
     });
   }, ids.N);
+  await a.waitForFunction((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return n && !n.archived;
+  }, ids.N, { timeout: 20000, polling: 200 });
+
+  /* PAPIRKURVEN ER EN ANNEN KOBLING i menyen (`spec.remove`, ikke
+     `spec.extraRows`), så arkivtesten beskytter den ikke. Samme scenario, en
+     gang til: overgangen står, og handlingen skal avvises. */
+  await a.evaluate((x) => window.__huskis.openNoteEditor(x), ids.N);
+  await a.waitForFunction(() => !document.getElementById('note-editor').hidden,
+    null, { timeout: 5000, polling: 50 });
+  const iVinduet2 = await a.evaluate(() => window.__huskis.noteLiveInfo.seedPending);
+  check(navn + ' 18g6: frøet er foreløpig igjen (forutsetningen)',
+    iVinduet2 === true, { seedPending: iVinduet2 });
+  await skrivSlutt(a, ' NOE MER');
+  await a.waitForFunction(() => window.__hkNektet > 0,
+    null, { timeout: 20000, polling: 100 });
+  await a.waitForTimeout(600);
+  await a.evaluate(() => document.getElementById('note-menu-btn').click());
+  await a.waitForTimeout(300);
+  await a.evaluate(() => {
+    const rad = [...document.querySelectorAll('#obj-menu-panel .obj-menu-row')]
+      .find((r) => /Slett notatet/.test(r.textContent));
+    if (rad) rad.click();
+  });
+  await a.waitForTimeout(600);
+  // En sletting ligger først i angre-vinduet (`_pendingDelete`) før flagget
+  // skrives, så begge teller som «lagt i papirkurven».
+  const etterKurv = await a.evaluate((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return {
+      iKurven: !!(n && (n.trashed || n._pendingDelete)),
+      åpen: !document.getElementById('note-editor').hidden,
+      ark: document.getElementById('note-doc').innerText.trim(),
+    };
+  }, ids.N);
+  check(navn + ' 18g7: «Slett notatet» legger det ikke i papirkurven mens teksten står ulagret',
+    etterKurv.iKurven === false && etterKurv.åpen === true
+    && etterKurv.ark.indexOf('NOE MER') > -1, etterKurv);
+
   await a.evaluate(() => {
     const b = document.querySelector('#toast .toast-action');
     if (b) b.click();
   });
+  await a.waitForTimeout(600);
+  const etterKurvLikevel = await a.evaluate((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return {
+      iKurven: !!(n && (n.trashed || n._pendingDelete)),
+      åpen: !document.getElementById('note-editor').hidden,
+    };
+  }, ids.N);
+  check(navn + ' 18g8: … og «Lukk likevel» utfører papirkurven brukeren ba om',
+    etterKurvLikevel.iKurven === true && etterKurvLikevel.åpen === false, etterKurvLikevel);
+
+  // Angres med det samme, så resten av løpet står som før.
+  await a.evaluate((x) => window.__huskis.restoreNoteObject('note', x), ids.N);
+  await a.waitForFunction((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return n && !n.trashed && !n._pendingDelete;
+  }, ids.N, { timeout: 20000, polling: 200 });
   await a.waitForTimeout(400);
   const etterLukking = await a.evaluate(() => ({
     åpen: !document.getElementById('note-editor').hidden,
@@ -1191,6 +1250,72 @@ async function runÅpningsbilde() {
   check(navn + ' 23: «Nå» er enhetens egen tilstand, ikke serverens eldre dokument',
     /BARE PÅ ENHETEN/.test(nå23.text), nå23.text);
   await a.evaluate(() => window.__huskis.closeNoteHistory());
+
+  /* ---- 24. Tittelen ved åpning, også når loggen HAR rader ----
+     Da bygges dokumentet av serverens rader — det er det autoritative — men
+     tittelen skal fortsatt være den fra åpningen. */
+  await a.evaluate(() => window.__hkNettTilbake && window.__hkNettTilbake());
+  await a.reload();
+  await a.waitForFunction(() => {
+    const H = window.__huskis;
+    return !!(H && H.authUser && H.lastMy);
+  }, null, { timeout: 20000, polling: 200 });
+  await a.evaluate(() => window.__huskis.setMainTab('notes'));
+  await a.evaluate(async () => { await window.__huskis.pushNoteOps(); });
+  await a.waitForFunction((x) => {
+    const d = JSON.parse(localStorage.getItem('hk-mock-db'));
+    return (d.note_updates || []).filter((u) => u.note_id === x).length > 0;
+  }, ids.N, { timeout: 20000, polling: 200 });
+
+  // Ingen lokal kopi: enheten åpner notatet «første gang», og loggen har rader.
+  await a.evaluate(() => {
+    Object.keys(localStorage).forEach((k) => {
+      if (k.indexOf('hk-note-crdt:') === 0 || k.indexOf('hk-note-ops:') === 0) localStorage.removeItem(k);
+    });
+  });
+  const tittelFør24 = await a.evaluate((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return n ? n.title : null;
+  }, ids.N);
+  await a.goto(BASE + '/?mock=1&lag=2500');
+  await a.waitForFunction(() => {
+    const H = window.__huskis;
+    return !!(H && H.authUser && H.lastMy);
+  }, null, { timeout: 20000, polling: 200 });
+  await a.evaluate(() => window.__huskis.setMainTab('notes'));
+  await a.evaluate((x) => window.__huskis.openNoteEditor(x), ids.N);
+  await a.waitForFunction(() => !document.getElementById('note-editor').hidden,
+    null, { timeout: 5000, polling: 50 });
+  const iVinduet24 = await a.evaluate(() => window.__huskis.noteLiveInfo.seedPending);
+  check(navn + ' 24a: frøet er foreløpig, og loggen har rader (forutsetningen)',
+    iVinduet24 === true, { seedPending: iVinduet24 });
+  await a.evaluate(() => {
+    const t = document.getElementById('note-title-input');
+    t.focus(); t.select();
+  });
+  await a.keyboard.type('ENDA EN TITTEL', { delay: 8 });
+  await a.waitForFunction((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return n && n.title === 'ENDA EN TITTEL' && window.__huskis.noteLiveInfo.seedPending;
+  }, ids.N, { timeout: 20000, polling: 50 });
+  await a.waitForFunction(() => !window.__huskis.noteLiveInfo.seedPending,
+    null, { timeout: 20000, polling: 50 });
+  /* Hvert kall bruker et drøyt to og et halvt sekund her, så bildet må få tid
+     til å nå fram før radene leses — ellers måler testen tomrommet. */
+  await a.waitForTimeout(6000);
+  const bilder24 = await a.evaluate((x) => {
+    const d = JSON.parse(localStorage.getItem('hk-mock-db'));
+    return (d.note_versions || []).filter((v) => v.note_id === x)
+      .sort((p, q) => q.created_at - p.created_at)
+      .map((v) => ({ tittel: v.title, tekst: JSON.stringify(v.doc) }));
+  }, ids.N);
+  check(navn + ' 24: den nye tittelen blir ikke en del av åpningsbildet',
+    !bilder24.some((v) => v.tittel === 'ENDA EN TITTEL'),
+    bilder24.slice(0, 3));
+  check(navn + ' 24b: … og den ferskeste raden bærer tittelen fra åpningen',
+    !!bilder24.length && bilder24[0].tittel === tittelFør24,
+    { nå: bilder24[0] && bilder24[0].tittel, ved_åpning: tittelFør24 });
+  await lukkEditor(a);
 
   check(navn + ': ingen JS-feil', feil.length === 0, feil.join(' | '));
   await br.close();
