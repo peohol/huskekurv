@@ -244,13 +244,79 @@ autoritative datamodellen hvis en tryggere strukturert representasjon passer
 arkitekturen bedre.
 
 Editoren bruker **autosave**. Endringer lagres optimistisk lokalt og synkes uten
-egen Lagre-knapp. En diskret status kan vise `Lagrer …` / `Lagret` når det gir
-nyttig informasjon.
+egen Lagre-knapp. Statusen i verktøylinjen er ingen påstand noen setter, men en
+AVLEDNING av det som faktisk står igjen: en ventende skriving, eller rader i
+samskrivingskøen som ennå ikke har nådd kontoen. Kommer køen ikke fram, sier den
+«Lagret på denne enheten» i stedet for å love noe den ikke vet.
 
-Første versjon trenger ikke Google Docs-lignende samtidig tegn-for-tegn-
-redigering. Samtidig redigering av samme notat kan følge en dokumentbasert
-konfliktmodell som passer eksisterende synk. En eventuell CRDT-/sanntidseditor er
-et eget senere prosjekt.
+## Sanntids samskriving
+
+To personer med skriverett kan ha det SAMME notatet åpent og skrive samtidig —
+også i det samme avsnittet — uten at den enes tegn forsvinner.
+
+**Innholdet har to lag, og bare det ene avgjør konflikter:**
+
+- **Dokumentet** er en CRDT (Yjs, `vendor/yjs-13.6.32.js`), og loggen den lever
+  i er `note_updates`: append-only, én rad per oppdatering. Ingen skriving kan
+  overskrive en annen — verken i databasen eller mellom to enheter — og den
+  samme raden kan brukes to ganger uten virkning.
+- **`notes.body` er PROJEKSJONEN** av dokumentet: lesbar tekst til søk, utdrag
+  på kortet, utklippstavlen og offline-kopien. Den skrives fortsatt ved hver
+  lagring, og den flettes fortsatt per felt (LWW) som alt annet innhold — men
+  den er ikke lenger stedet innholdskonflikter avgjøres. Det gamle
+  dokumentregisteret (`ts`/`org`) har dermed en klar og AVGRENSET rolle igjen:
+  det styrer tittel, `trashed`/`archived` og projeksjonen. To konkurrerende
+  konfliktmodeller lever ikke side om side.
+
+**Tittelen er et navn**, og flettes som alle andre navn i appen (felt-LWW), ikke
+i CRDT-en. Den kan endres fra kortet uten at editoren er åpen, og en slik
+omdøping ville vært umulig å få inn i dokumentet uten å laste det først.
+
+**Editoren er den samme som før.** Broen legger seg UNDER den: etter hver
+endring leses DOM-et til modellen gjennom `noteDocFromEl()` som før, modellen
+sammenlignes med CRDT-ens innhold, og bare FORSKJELLEN skrives inn. Derfor
+virker formatering, innliming, utklippstavle, spesialtegn og lesemodus uendret
+— de kjenner ikke CRDT-en. **Angre/gjør om** er derimot CRDT-ens egen: en fjern
+endring maler editoren på nytt og river nettleserens angre-stabel, og en angring
+skal uansett bare ta MINE endringer tilbake, ikke den andres.
+
+**Fasongen i CRDT-en er flat**: én blokk per avsnitt, overskrift, skillelinje —
+og per LISTEPUNKT. To som skriver i hvert sitt punkt i den samme lista rører da
+hver sin tekst og kan ikke komme i veien for hverandre. Markeringene (fet,
+kursiv, understrek, hevet, senket, lenke) er attributter med de samme navnene
+som i dokumentmodellen.
+
+**Et notat fra før denne runden har bare `body`.** Første klient som åpner det
+sår CRDT-en fra dokumentet, og frøet er DETERMINISTISK: to klienter som sår fra
+det samme dokumentet lager bit-identiske operasjoner, så de to frøene er den
+samme operasjonen og flettes til én — ikke til to kopier av notatet.
+Migreringen krever derfor ingen backfill og ingen nedetid.
+
+**Offline er bedre enn før, ikke dårligere.** Oppdateringene legges i en kø i
+enhetens lagring, ved siden av en lokal kopi av CRDT-en, og køen tømmes ved
+første synk-runde etter at nettet er tilbake. Enheten som var borte mister
+ingenting og overskriver ingenting.
+
+**Loggen klappes sammen** når den blir lang: den sammenslåtte tilstanden legges
+inn som ÉN ny rad, og radene den inneholder slettes i samme transaksjon.
+Komprimeringen navngir radene den folder inn, så en rad som var underveis
+overlever.
+
+**Tilgangen håndheves serverside, som alt annet.** Loggen har én policy — en
+lesepolicy på `can_read_note` — og klienten har ikke engang kolonne-rettighet
+til innholdet: alt går gjennom fire SECURITY DEFINER-RPC-er som sjekker
+`can_read_note`/`can_edit_content` selv. En ren LESER får live-oppdateringene og
+kommer ikke forbi editoren heller: serveren sier nei. Trekkes tilgangen tilbake,
+stopper både realtime og RPC-ene i samme øyeblikk, editoren lukkes, og verken
+køen eller den lokale kopien blir liggende igjen på enheten. Autoritativt for
+tabellen, policyen og RPC-ene:
+[`arkitektur-brukere-deling.md`](arkitektur-brukere-deling.md).
+
+**Tilstedeværelse er ÉN diskret indikasjon** — «Andre redigerer nå» i
+verktøylinjen — og den leses av samskrivingen selv: kommer det en endring vi
+ikke laget, er noen andre i gang. Det finnes ingen egen tilstedeværelseskanal og
+ingen fjernmarkører. Indikasjonen navngir heller ingen: hvem som skriver er mer
+enn lesetilgangen lover, og `note_updates.author_id` når aldri klienten.
 
 ## Globalt søk
 
@@ -392,8 +458,9 @@ Det korte:
   vises bare for eieren sin, og den blir stående (uåpnelig) hvis man mister
   tilgang til målet.
 
-Sanntids samskriving i samme notat er fortsatt ikke med: konfliktmodellen er per
-DOKUMENT (innholdsregisteret), som planen sier.
+Rettighetene gjelder samskrivingen på nøyaktig samme måte som resten av
+innholdet: den som kan redigere notatet kan skrive i loggen, den som bare kan
+lese får live-oppdateringene og ingenting mer. Se «Sanntids samskriving».
 
 ## Leveranseplan
 
@@ -693,6 +760,58 @@ en ny sjekk i `tests/notes-sharing.test.js` (en ren leser beholder begge
 kopieringsradene) og av de to nye påstandene i `tests/capacitor-android.test.js`
 (ankeret finnes, står i `noteHtmlAnchor`, og normaliseres først).
 
+### PR 5 — Sanntids samskriving i samme notat
+
+**Mål:** To eller flere med skriverett kan ha det samme notatet åpent og skrive
+samtidig, uten at den enes endringer overskriver den andres.
+
+Omfang: en CRDT under den eksisterende editoren, en append-only logg i
+databasen med serverhåndhevet tilgang, realtime + poll, offline-kø, komprimering
+og en diskret tilstedeværelses-indikasjon.
+
+Status: **gjennomført**. Hvordan det virker står i «Sanntids samskriving», som
+er den autoritative beskrivelsen; her er bare det som er verdt å vite om
+VALGENE:
+
+- **Yjs, ikke en hjemmelaget tekst-CRDT.** Flettingen av samtidig tekst er den
+  ene delen av dette som er lett å gjøre nesten riktig og vanskelig å gjøre
+  riktig. Biblioteket ligger i `vendor/` som de to andre — en innsjekket kopi
+  med versjonen i filnavnet, uten CDN og uten bundler for resten av appen
+  ([`sikkerhetsheadere.md`](sikkerhetsheadere.md)).
+- **En BRO, ikke en ny editor.** Editoren er den samme `contenteditable`-en, og
+  `noteDocFromEl()` er fortsatt den ene trakten inn. Broen leser modellen,
+  sammenligner med CRDT-ens innhold og skriver bare forskjellen. Derfor er
+  formatering, innliming, utklippstavle og lesemodus uendret, og derfor kunne
+  hele runden gjøres uten å bygge om editoren.
+- **Dokumentformatet består.** `{v, blocks}` er fortsatt appens dokument;
+  CRDT-en er en FLAT utgave av det samme (ett listepunkt = én blokk), og
+  konverteringen går begge veier uten tap. Et notat fra før runden sås
+  deterministisk, så to klienter som åpner det samtidig ikke lager to kopier —
+  ingen backfill, ingen nedetid.
+- **Loggen er append-only.** Det er dét som gjør både samtidighet og reconnect
+  trygt: en skriving kan aldri overskrive en annen, og en oppdatering kan brukes
+  to ganger uten virkning. Den inkrementelle hentingen bruker
+  `pg_snapshot_xmin`, ikke en sekvens, nettopp for at en rad som var underveis
+  ikke kan hoppes permanent over.
+- **Projeksjonen fikk en avgrenset rolle** i stedet for å bli fjernet:
+  `notes.body` bærer søk, utdrag, utklippstavle og offline-kopi, og
+  innholdsregisteret styrer tittel og livssyklusflaggene. Det er ikke to
+  konkurrerende konfliktmodeller — det er ett dokument og én projeksjon av det.
+- **Angre ble CRDT-ens.** Nettleserens egen angre-stabel overlever ikke at
+  editoren males om når den andre skriver, og den ville uansett tatt tilbake
+  endringer som ikke er mine.
+- **Tilstedeværelse uten et tilstedeværelses-system.** Indikasjonen leses av
+  samskrivingen selv, og navngir ingen: hvem som skriver er mer enn
+  lesetilgangen lover.
+
+Dekket av `tests/notes-collab.test.js` (ny: to nettleserkontekster som skriver
+samtidig, ulike steder og overlappende, formatering samtidig med tekst, kort
+nettbrudd + reconnect, lagringsstatusen, angre, ren leser, tilbakekalling,
+sletting fra en annen klient, komprimering og migreringen av et notat fra før
+runden — desktop og mobil), `supabase/tests/test-note-collab.sql`
+(serverkontrakten) og en ny vakt i `tests/db-contract.test.js` for at
+samskrivingsloggen faktisk ligger i realtime-publikasjonen.
+
 ## Prinsipper for gjennomføring
 
 - Bygg vertikale leveranser som kan testes end-to-end.
@@ -724,19 +843,22 @@ databasekontrakten; døp dem ikke om.
 | PR 3A — Deling og rettigheter | **Gjennomført** |
 | PR 3B — Robusthet og polering | **Gjennomført** |
 | PR 4 — Kopiering og innliming | **Gjennomført** |
+| PR 5 — Sanntids samskriving | **Gjennomført** |
 
 **Leveranseplanen er gjennomført.** Notatene er en hel del av appen: de kan
 deles på alle tre nivåene med den samme serverhåndhevede modellen som listene,
-de har arkiv og søppelkasse, de finnes i det felles søket, de kan kobles til
-listesiden, og de oppfører seg som resten av appen på telefon — tastatur,
-fokus, berøringsflater, den sikre sonen og systemets tilbakeknapp.
+flere kan skrive i det samme notatet samtidig, de har arkiv og søppelkasse, de
+finnes i det felles søket, de kan kobles til listesiden, og de oppfører seg som
+resten av appen på telefon — tastatur, fokus, berøringsflater, den sikre sonen
+og systemets tilbakeknapp.
 
 **Det som gjenstår er egne leveranser, ikke restarbeid:**
 
-- **Sanntids samskriving i samme notat.** Konfliktmodellen er per DOKUMENT, som
-  planen sier; en CRDT-editor er et eget prosjekt.
 - `object_links` kan bære flere typer per side enn de seks som finnes i dag —
   men bare de seks er koblingsbare nå.
+- Samskrivingen viser AT noen andre skriver, ikke HVOR. Fjernmarkører med navn
+  og farge ville krevd en egen tilstedeværelseskanal og en avklaring av hvem som
+  får se hvem — et eget produktvalg, ikke restarbeid.
 
 **Import/eksport av notater som filer er IKKE et neste steg.** Utklippstavlen
 dekker det brukeren faktisk trenger — notatet ut i et annet program og inn igjen

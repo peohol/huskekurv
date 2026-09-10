@@ -130,6 +130,19 @@ her før den når produksjon.
 `&lag=800` gir kunstig serverforsinkelse og brukes til å vise at UI-et er
 umiddelbart og at operasjonskøen serialiserer riktig.
 
+`window.HK_MOCK.setOffline(true)` gir et EKTE nettbrudd i den ene fanen: kallet
+nås aldri, løftet avvises med den meldingen `isNetworkError()` kjenner igjen, og
+realtime slutter å levere. Det er slik `notes-collab.test.js` måler reconnect
+etter et kort brudd — uten å måtte late som.
+
+**Skrivingene er «transaksjoner».** To faner er to ekte prosesser mot den samme
+`localStorage`, så en les–endre–skriv kan miste en skriving: begge leser det
+samme, begge skriver, den siste vinner. Mocken leser derfor teksten før
+handleren kjører og sjekker den igjen rett før skrivingen; har noen andre
+skrevet i mellomtiden, kjøres handleren på nytt mot den ferske databasen. Uten
+det ville et flerbrukerscenario med mange skrivinger feilet av harnisket i
+stedet for av koden — og feilet flakete, som er verre.
+
 To måter å komme inn i appen på:
 
 1. **Kjør registreringen i UI-et** (som `nav-modal.test.js`) — dekker

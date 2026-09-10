@@ -115,8 +115,61 @@ dokumentet sto i, ikke dokumentet.
 Begge forelder-pekerne følger POSISJONSREGISTERET (som `card_id`/`cat_id` på et
 listepunkt), og begge er `deferrable initially deferred` — doc-rekkefølgen er
 vilkårlig. `notes.body` er editorens dokument som `jsonb`; databasen lagrer det
-og tolker det ikke, og hele verdien rir på INNHOLDSREGISTERET, altså er
-konfliktmodellen per dokument.
+og tolker det ikke. Verdien rir på INNHOLDSREGISTERET som før, men rollen er
+avgrenset: den er PROJEKSJONEN av dokumentet, ikke stedet konflikter avgjøres.
+Det gjøres i `note_updates` (under).
+
+### Samskrivingsloggen (`note_updates`)
+
+Notatinnholdet har to lag. `notes.body` er projeksjonen — lesbar tekst til søk,
+utdrag på kortet, utklippstavle og offline-kopi — og `note_updates` er
+DOKUMENTET: én rad per Yjs-oppdatering, append-only, med `note_id` som
+`on delete cascade`. To med skriverett kan derfor skrive i det samme notatet
+samtidig uten at den enes tegn forsvinner; det er ikke mulig med ett felt på et
+LWW-register, som velger én vinner per dokument.
+
+| Kolonne | Betydning |
+|---|---|
+| `id` | klientgenerert `uuid`, slik at en push som ble sendt uten at svaret kom fram kan sendes på nytt (`on conflict do nothing`) |
+| `note_id` | notatet raden hører til (`on delete cascade`) |
+| `author_id` | hvem som skrev den (`on delete set null` — en slettet konto skal ikke ta tegnene ut av andres notat). ALDRI synlig for klienten |
+| `payload` | selve oppdateringen, base64 |
+| `xid` | `pg_current_xact_id()` — grunnlaget for hullfri inkrementell henting |
+| `created_at` | sporbarhet |
+
+**Loggen har ingen UPDATE og ingen DELETE for klienten**, og bare ÉN policy: en
+lesepolicy på `can_read_note`. Den finnes fordi realtime leser tabellen direkte
+på abonnentens vegne — uten den kunne hvem som helst abonnert på et notat de
+ikke får lese. Grant-en er i tillegg KOLONNE-avgrenset til `id`, `note_id` og
+`created_at`, så verken innholdet eller forfatteren kan leses ut av et rått
+oppslag eller en realtime-hendelse.
+
+Alt innhold går gjennom fire SECURITY DEFINER-RPC-er som sjekker myndigheten
+selv (seksjon 9d i `users-and-sharing.sql`):
+
+| RPC | Krever | Gjør |
+|---|---|---|
+| `note_crdt_load(note)` | `can_read_note` | hele loggen + et merke å hente videre fra |
+| `note_crdt_since(note, mark)` | `can_read_note` | radene fra merket og framover |
+| `note_crdt_push(note, updates)` | `can_edit_content('note', …)` | legger inn én eller flere rader i én transaksjon |
+| `note_crdt_compact(note, id, snapshot, ids)` | `can_edit_content('note', …)` | legger den sammenslåtte tilstanden inn som ÉN ny rad og sletter nøyaktig de oppgitte radene, i samme transaksjon |
+
+**Merket er `pg_snapshot_xmin(pg_current_snapshot())`**, lest i det samme
+uttrykket som radene, ikke en sekvens. Sekvensverdier deles ut i
+innsettingsrekkefølge, men blir synlige i COMMIT-rekkefølge, så «største jeg har
+sett» kunne hoppet permanent over en rad som var underveis. Hver rad med lavere
+`xid` enn merket tilhører en transaksjon som er ferdig; alt annet har
+`xid >= merket` og kommer med neste henting. Å få den samme raden to ganger er
+gratis — en Yjs-oppdatering er idempotent.
+
+**Komprimeringen navngir radene den folder inn**, i stedet for å slette «alt
+eldre enn». En rad som var underveis da øyeblikksbildet ble regnet ut, er ikke
+med i det — og heller ikke i listen, så den overlever. To klienter som
+komprimerer samtidig koster en rad for mye, ikke et tegn for lite.
+
+`supabase/tests/test-note-collab.sql` dekker append-only-garantien,
+kolonne-grantene, to samtidige skrivere, en ren leser, en utenforstående, det
+hullfrie merket, komprimeringen, tilbakekalling, kontosletting og kaskaden.
 
 At man har lov til å legge noe i bokhyllen/notatboken er en egen betingelse i
 `note_folders_insert`/`notes_insert` (`can_create_child` / `can_create_note`),
@@ -442,7 +495,8 @@ gravsteiner), server-side LWW, import (determinisme + idempotens + foreldreløse
 gravsteiner, anon-avvisning, hele migreringen av gamle listedelinger og
 NOTATDELINGEN (roller og arv på tre nivåer, ren leser via lås, flytting mellom
 foreldre med ulike delingsforhold, tilbakekalling, koblinger på tvers av delt og
-privat, kontosletting).
+privat, kontosletting) og SAMSKRIVINGSLOGGEN (append-only, kolonne-grantene,
+to samtidige skrivere, ren leser, hullfritt merke, komprimering).
 
 ## Manuelle steg (utenfor SQL — én gang, i Supabase-dashboardet)
 

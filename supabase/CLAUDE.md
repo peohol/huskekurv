@@ -60,7 +60,8 @@ PGHOST=/tmp/hkpg PGPORT=5433 PGUSER=postgres PGDATABASE=hk_test \
 uten Supabase. En ny serverside-regel skal ha en ny sjekk i den testfilen som
 dekker området (roller/deling, mappeflytting, gravsteiner, kontosletting,
 e-postvarsel, varsler, web push, native varselenheter, innloggede økter,
-migrering av gamle listedelinger, reparasjon av en halvmigrert database).
+samskrivingsloggen for notater, migrering av gamle listedelinger, reparasjon av
+en halvmigrert database).
 
 Én ting kan ikke bevises fra én databaseøkt: at to samtidige operasjoner på den
 samme raden ikke kan passere hverandre. `tests/test-push-race.sh` kjører derfor

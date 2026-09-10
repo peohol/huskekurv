@@ -278,7 +278,9 @@ samme nested `state` som før; synken går slik (`cloudCycle`):
    `merge*Scalar`/`mergeItem` fra v1, `mergeIdea` for idéene og
    `mergeNoteProject`/`mergeNoteFolder`/`mergeNote` for notatene) for rader som
    finnes begge steder; et NOTATDOKUMENT flettes som ÉN verdi på
-   innholdsregisteret — konflikten avgjøres per dokument, ikke per tegn; en
+   innholdsregisteret, men det er PROJEKSJONEN som flettes der — selve
+   dokumentet er en CRDT med sin egen logg, og den går ikke gjennom fletteren i
+   det hele tatt (se «Samskriving i ett notat» under); en
    KOBLING har ingen felter å flette (`mergeLink` tar serverens rad uendret),
    så den skriver aldri en update — der er det gravsteinene som avgjør;
    eksistens avgjøres 3-veis (base skiller «lokalt slettet» fra
@@ -386,6 +388,39 @@ samme nested `state` som før; synken går slik (`cloudCycle`):
 Offline-buffer: `state` caches per bruker (`mine-lister-v1:<uid>`), uten intern
 metadata (`stateReplacer` hopper over `_`-felt for å unngå sykliske refs — med
 unntak av `_createdByMe`, `_tomb`, `_hlc` og `_base`/`_baseV`).
+
+### Samskriving i ett notat
+
+Innholdet i et notat har to lag, og bare det ene går gjennom fletteren over:
+
+- **Projeksjonen** (`notes.body`) flettes som alt annet innhold — felt-LWW på
+  innholdsregisteret — og bærer søk, utdrag, utklippstavle og offline-kopien.
+- **Dokumentet** er en CRDT (Yjs) med sin egen append-only logg i databasen.
+  Den har ingen fletting og ingen base: en rad kan ikke overskrive en annen, og
+  den samme raden kan brukes to ganger uten virkning. Autoritativt:
+  [`notater-plan.md`](notater-plan.md) → «Sanntids samskriving».
+
+Klientsiden ligger i tre deler, alle i notat-seksjonen i `app.js`:
+
+- **Broen** (`noteDocToFlat`/`noteFlatToDoc`, `noteYWriteFlat`, `noteYDoc`) —
+  oversetter mellom dokumentmodellen og CRDT-en, og skriver bare FORSKJELLEN
+  inn. Editoren selv er uendret.
+- **Økten** (`openNoteLive`/`closeNoteLive`) — ett Yjs-dokument per åpent notat,
+  bygget SYNKRONT av det enheten allerede har (en lokal kopi, ellers et
+  deterministisk frø fra `body`), med et realtime-abonnement på notatets egen
+  kanal og et poll på 2,5 s som sikkerhetsnett. Serverens logg kommer etterpå og
+  går den vanlige fjern-veien, så den kan ikke komme i veien for det brukeren
+  skriver mens den er underveis.
+- **Køen** (`noteOps`, `pushNoteOps`) — radene som ennå ikke har nådd kontoen,
+  lagret i enhetens lagring (`hk-note-ops:<uid>`) ved siden av en lokal kopi av
+  CRDT-en (`hk-note-crdt:<uid>`). Køen rir på den SAMME synk-runden som resten
+  (`cloudCycle` kaller `pushNoteOps` først), så den får pollets kadens og
+  reconnect-en gratis. Begge nøklene tømmes ved utlogging, og for ett enkelt
+  notat når tilgangen til det forsvinner.
+
+**Lagringsstatusen i editoren** er avledet av nettopp dette: står det rader i
+køen, sier den «Lagrer …»; kommer de ikke fram, «Lagret på denne enheten»; og
+først når køen er tom og siste skriving gikk gjennom, «Lagret».
 
 ### Lagringsstatus (`syncStatus`, `#sync-status`)
 

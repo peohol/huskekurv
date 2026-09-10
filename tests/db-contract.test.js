@@ -86,6 +86,16 @@ for (const t of rtTabeller) {
   check("realtime-sjekken dekker «" + t + "»", new RegExp("'" + t + "'").test(rtSeksjon));
 }
 
+/* Samskrivingen abonnerer på sin EGEN kanal, én per åpent notat, og den står
+   utenfor listen over: den er ikke bruker-scopet, men notat-scopet
+   (docs/notater-plan.md). Tabellen må likevel ligge i publikasjonen, ellers
+   kommer det ingen hendelse — og da er samskrivingen redusert til pollet uten
+   at noe sier fra. */
+const nyhetsTabell = (app.match(/table:\s*'([a-z_]+)',\s*\n\s*filter:\s*'note_id=eq\./) || [])[1];
+check('fant den notat-scopede realtime-kanalen i app.js', !!nyhetsTabell, nyhetsTabell);
+check('realtime-sjekken dekker også samskrivingsloggen',
+  !!nyhetsTabell && new RegExp("'" + nyhetsTabell + "'").test(rtSeksjon), nyhetsTabell);
+
 /* ---- 3. Kolonner klienten skriver, PER TABELL ---- */
 // insertPayload()/updatePayload() bygger `base` (felles for alle fire nivåene)
 // og legger radtypens egne felter oppå med Object.assign. Nøklene er NØYAKTIG

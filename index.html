@@ -1393,6 +1393,14 @@
            med her også, koblet til nøyaktig de samme funksjonene og den samme
            tilstanden som hjørnegruppens knapper (docs/notater-plan.md). -->
       <div class="note-editor-aside">
+        <!-- «Andre redigerer nå»: DISKRET, og uten identitet. Signalet kommer
+             fra samskrivingen selv (en endring vi ikke laget), ikke fra et eget
+             tilstedeværelses-system — og hvem som skriver er mer enn
+             lesetilgangen lover (docs/notater-plan.md). -->
+        <span class="note-live" id="note-live" role="status" aria-live="polite" hidden>
+          <span class="note-live-dot" aria-hidden="true"></span>
+          <span data-i18n="notes.othersEditing">Andre redigerer nå</span>
+        </span>
         <span class="note-save-status" id="note-save-status" role="status" aria-live="polite"></span>
         <button class="corner-btn note-editor-btn" id="note-ideas-btn" type="button"
                 data-i18n-title="ideas.title" data-i18n-aria-label="ideas.open"
@@ -1448,6 +1456,12 @@
        modulskript ville kjørt etter alle klassiske skript, altså etter app.js.
        Se docs/drag-and-drop.md og docs/sikkerhetsheadere.md. -->
   <script src="vendor/smett-0.2.0.js"></script>
+  <!-- Samskrivings-motoren (Yjs), samme opplegg som de to over: en innsjekket
+       kopi i repoet, versjonen i filnavnet, ingen CDN. Filen er esbuild-IIFE-en
+       av npm-pakken — den definerer den globale `Yjs`, og MÅ lastes som et
+       klassisk skript FØR app.js. Den bærer sanntids samskriving i ett notat;
+       se docs/notater-plan.md og docs/sikkerhetsheadere.md. -->
+  <script src="vendor/yjs-13.6.32.js"></script>
   <script src="config.js"></script>
   <!-- huskis:kun-dev:start — mock-backenden for hermetisk to-bruker-testing
        (?mock=1). HELE blokken, og begge filene den peker på, fjernes av

@@ -77,8 +77,20 @@ forlatt — og `notes.project_id` er `on delete cascade`, så notatet ville blit
 SLETTET når den bokhyllen forsvant. Klienten leser den samme regelen
 (`pruneNoteParents`: notatbokens bokhylle vinner), så de to er aldri uenige.
 
-Innholdet (`doc`) er et strukturert riktekstdokument, ikke HTML, og rir på
-innholdsregisteret som ÉN verdi — konfliktmodellen er altså per DOKUMENT.
+Innholdet (`doc`) er et strukturert riktekstdokument, ikke HTML. Det rir på
+innholdsregisteret som ÉN verdi, men det er PROJEKSJONEN av dokumentet —
+lesbar tekst til søk, utdrag på kortet, utklippstavlen og offline-kopien — ikke
+stedet innholdskonflikter avgjøres. Selve dokumentet er en CRDT med sin egen
+append-only logg (`note_updates`), slik at to med skriverett kan skrive i det
+samme notatet samtidig; se [`notater-plan.md`](notater-plan.md) → «Sanntids
+samskriving». Innholdsregisteret styrer fortsatt tittelen,
+`trashed`/`archived` og projeksjonen.
+
+`doc` skrives derfor bare to steder: av editorens autosave (som leser det ut av
+CRDT-en) og av `setNoteDoc()`, som er den ene veien noe annet kan bytte ut HELE
+dokumentet — den skriver forskjellen inn i CRDT-en først og setter projeksjonen
+etterpå. En `n.doc = …` uten den veien ville gjort de to uenige, og CRDT-en
+ville vunnet ved neste åpning.
 Notatene **deles på alle tre nivåene**, med de samme rollene, låsene og
 capabilities som områder og mapper
 ([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14): objektene bærer

@@ -480,6 +480,64 @@ do $$ begin
     check (invite_policy in ('inherit','allow','deny'));
 exception when duplicate_object then null; end $$;
 
+
+-- ------------------------------------------------------------
+-- 2b-2. SAMSKRIVING I SAMME NOTAT — public.note_updates
+--
+--    To personer med skriverett skal kunne skrive i det samme notatet
+--    SAMTIDIG uten at den ene overskriver den andre. `notes.body` alene kan
+--    ikke bære det: den er ett felt på innholdsregisteret, og felt-LWW velger
+--    én vinner per dokument. Derfor har notatinnholdet fått et ANDRE lag —
+--    en CRDT (Yjs) — og denne tabellen er loggen den lever i.
+--
+--    LOGGEN ER APPEND-ONLY, og det er hele poenget: en skriving kan aldri
+--    overskrive en annen, verken her eller i en samtidig transaksjon. Hver
+--    rad er én binær Yjs-oppdatering (base64). Klienten fletter dem lokalt,
+--    og flettingen er kommutativ og idempotent — rekkefølgen spiller ingen
+--    rolle, og den samme raden kan brukes to ganger uten virkning.
+--
+--    `notes.body` BLIR STÅENDE, men rollen er avgrenset: den er PROJEKSJONEN
+--    av CRDT-en — lesbar tekst for søk, utdrag på kortet, offline-kopi og
+--    utklippstavle — ikke lenger stedet konflikter avgjøres. Innholds-
+--    registeret (`ts`/`org`) styrer fortsatt tittel, `trashed`/`archived` og
+--    projeksjonen; DOKUMENTET flettes her. Se docs/notater-plan.md.
+--
+--    `xid` er `pg_current_xact_id()`, og den er det som gjør en INKREMENTELL
+--    henting hullfri. En `bigserial` duger ikke: sekvensverdier deles ut i
+--    innsettingsrekkefølge, men blir synlige i COMMIT-rekkefølge, så en klient
+--    som husker «største seq jeg har sett» kan hoppe permanent over en rad
+--    som var underveis. Klienten husker i stedet
+--    `pg_snapshot_xmin(pg_current_snapshot())` fra forrige henting: hver
+--    transaksjon med lavere xid er ferdig (committet eller avbrutt), så en rad
+--    med `xid >= merket` er alt klienten kan mangle — og en rad som fortsatt
+--    er underveis har per definisjon `xid >= merket` og kommer med neste gang.
+--
+--    `author_id` er `on delete set null`: slettes en konto, skal notatet
+--    hennes medforfattere fortsatt eier ikke miste tegnene hun skrev.
+--    Kolonnen er dessuten ALDRI synlig for klienten (grants nederst i fila):
+--    hvem som skrev hva i et delt notat er mer enn lesetilgangen lover.
+-- ------------------------------------------------------------
+
+create table if not exists public.note_updates (
+  id         uuid primary key,
+  note_id    uuid not null references public.notes (id) on delete cascade,
+  author_id  uuid references public.profiles (id) on delete set null,
+  -- Én Yjs-oppdatering, base64. Taket er en vakt mot en ødelagt eller
+  -- ondsinnet klient, ikke en produktgrense: et sammenslått øyeblikksbilde av
+  -- et langt notat ligger typisk på noen titalls kB.
+  payload    text not null,
+  xid        xid8 not null default pg_current_xact_id(),
+  created_at timestamptz not null default now()
+);
+do $$ begin
+  alter table public.note_updates drop constraint if exists note_updates_payload_chk;
+  alter table public.note_updates add constraint note_updates_payload_chk
+    check (length(payload) <= 4000000);
+exception when others then null; end $$;
+
+create index if not exists note_updates_note_idx on public.note_updates (note_id, xid);
+
+alter table public.note_updates enable row level security;
 -- ------------------------------------------------------------
 -- 2c. KOBLINGER MELLOM NOTATER OG LISTER — public.object_links
 --
@@ -1274,6 +1332,7 @@ drop policy if exists notes_select on public.notes;
 drop policy if exists notes_insert on public.notes;
 drop policy if exists notes_update on public.notes;
 drop policy if exists notes_delete on public.notes;
+drop policy if exists note_updates_select on public.note_updates;
 drop policy if exists object_links_select on public.object_links;
 drop policy if exists object_links_insert on public.object_links;
 drop policy if exists object_links_delete on public.object_links;
@@ -2990,6 +3049,24 @@ create policy notes_update on public.notes
                     or public.can_reorder_in_parent('note', id, (select auth.uid())));
 create policy notes_delete on public.notes
   for delete using (public.can_delete_object('note', id, (select auth.uid())));
+
+/* note_updates: samskrivingsloggen for ett notat (docs/notater-plan.md).
+
+   ÉN policy, og den er en LESEPOLICY — ikke fordi klienten skal lese innhold
+   herfra (det gjør den gjennom RPC-ene under, og grant-en nederst i fila gir
+   den ikke engang `payload`), men fordi realtime leser tabellen DIREKTE på
+   abonnentens vegne. Uten den kunne hvem som helst abonnert på et notat de
+   ikke har lesetilgang til og fått vite at det finnes og endrer seg. Med den
+   er svaret det samme som for notatet selv: `can_read_note`. Trekkes tilgangen
+   tilbake, slutter leveringen i samme øyeblikk — policyen evalueres per rad,
+   per abonnent.
+
+   Ingen INSERT-, UPDATE- eller DELETE-policy: loggen skrives og komprimeres
+   utelukkende gjennom `note_crdt_push`/`note_crdt_compact`, som sjekker
+   `can_edit_content` selv. Loggen er dessuten APPEND-ONLY — en rad endres
+   aldri — så en UPDATE-policy ville beskrevet noe som ikke finnes. */
+create policy note_updates_select on public.note_updates
+  for select using (public.can_read_note(note_id, (select auth.uid())));
 
 /* object_links: koblingene mine mellom notatsiden og listesiden.
 
@@ -6314,6 +6391,129 @@ begin
 end;
 $$;
 -- ------------------------------------------------------------
+-- 9d. SAMSKRIVINGS-RPC-ER — loggen for ett notat (docs/notater-plan.md)
+--
+--    Fire innganger, og de er de ENESTE veiene til innholdet i
+--    `note_updates`. Alle er SECURITY DEFINER og sjekker myndigheten selv:
+--    lesing krever `can_read_note`, skriving `can_edit_content('note', …)` —
+--    nøyaktig de samme funksjonene resten av notatsiden bruker. En ren LESER
+--    (medlem av et låst notat) kommer derfor gjennom `note_crdt_load` og
+--    `note_crdt_since`, men får `insufficient_privilege` på `note_crdt_push`.
+--    Mister hen tilgangen helt, svarer alle fire likt: notatet finnes ikke.
+--
+--    Grunnen til at de er DEFINER og ikke INVOKER er `payload`: klienten har
+--    ikke kolonne-grant på den (seksjon 12), slik at et direkte
+--    tabelloppslag — eller en realtime-hendelse — aldri bærer innhold. Alt
+--    innhold går gjennom disse fire, som ser hele raden på brukerens vegne
+--    etter å ha kontrollert at hen får.
+--
+--    MERKET (`mark`) er `pg_snapshot_xmin(pg_current_snapshot())`, lest i det
+--    SAMME uttrykket som radene. Hver rad med `xid` under merket tilhører en
+--    transaksjon som er ferdig, og er dermed enten med i svaret eller aldri
+--    committet; alt annet har `xid >= mark` og kommer med neste henting. Det
+--    gjør den inkrementelle hentingen hullfri uten å måtte hente hele loggen
+--    hver gang. Å få den samme raden to ganger er gratis: en Yjs-oppdatering
+--    er idempotent.
+-- ------------------------------------------------------------
+
+create or replace function public.note_crdt_load(p_note uuid)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); res jsonb;
+begin
+  if uid is null or not public.can_read_note(p_note, uid) then
+    raise exception 'ingen lesetilgang til notatet' using errcode = '42501';
+  end if;
+  select jsonb_build_object(
+           'mark', pg_snapshot_xmin(pg_current_snapshot())::text,
+           'updates', coalesce((
+             select jsonb_agg(jsonb_build_object('id', u.id, 'u', u.payload) order by u.xid, u.created_at, u.id)
+               from public.note_updates u where u.note_id = p_note), '[]'::jsonb))
+    into res;
+  return res;
+end;
+$$;
+
+create or replace function public.note_crdt_since(p_note uuid, p_mark text)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); res jsonb;
+begin
+  if uid is null or not public.can_read_note(p_note, uid) then
+    raise exception 'ingen lesetilgang til notatet' using errcode = '42501';
+  end if;
+  select jsonb_build_object(
+           'mark', pg_snapshot_xmin(pg_current_snapshot())::text,
+           'updates', coalesce((
+             select jsonb_agg(jsonb_build_object('id', u.id, 'u', u.payload) order by u.xid, u.created_at, u.id)
+               from public.note_updates u
+              where u.note_id = p_note
+                and (p_mark is null or u.xid >= p_mark::xid8)), '[]'::jsonb))
+    into res;
+  return res;
+end;
+$$;
+
+/* Én eller flere oppdateringer inn i loggen. Flere om gangen fordi en enhet
+   som har vært offline har en kø å tømme, og fordi hele køen da lander i ÉN
+   transaksjon — enten kommer alt fram, eller ingenting.
+
+   `on conflict (id) do nothing` gjør kallet trygt å gjenta: en kø som ble
+   sendt, men der svaret aldri kom fram, kan sendes på nytt uten å legge inn
+   dubletter. Id-en lages av klienten nettopp for det. */
+create or replace function public.note_crdt_push(p_note uuid, p_updates jsonb)
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); n integer := 0;
+begin
+  if uid is null or not public.can_read_note(p_note, uid) then
+    raise exception 'ingen lesetilgang til notatet' using errcode = '42501';
+  end if;
+  if not public.can_edit_content('note', p_note, uid) then
+    raise exception 'mangler skriverett i notatet' using errcode = '42501';
+  end if;
+  insert into public.note_updates (id, note_id, author_id, payload)
+  select (e->>'id')::uuid, p_note, uid, e->>'u'
+    from jsonb_array_elements(coalesce(p_updates, '[]'::jsonb)) e
+   where e ? 'id' and e ? 'u'
+  on conflict (id) do nothing;
+  get diagnostics n = row_count;
+  return jsonb_build_object('written', n,
+                            'mark', pg_snapshot_xmin(pg_current_snapshot())::text);
+end;
+$$;
+
+/* KOMPRIMERING. Loggen vokser med én rad per skrivepause, så den må kunne
+   klappes sammen. Det gjøres uten et eget øyeblikksbilde-felt: den
+   sammenslåtte tilstanden legges inn som ÉN NY RAD i den samme loggen, og de
+   radene den erstatter slettes i SAMME transaksjon. Loggen blir dermed kort
+   uten at noen rad noen gang står alene som «fasit».
+
+   Slettingen går på EKSPLISITTE ID-ER, ikke på «alt eldre enn». En rad som
+   var underveis da øyeblikksbildet ble regnet ut, er ikke med i det — og den
+   er heller ikke i `p_ids`, så den overlever. To klienter som komprimerer
+   samtidig kan legge inn hvert sitt sammenslåtte bilde; det koster en rad for
+   mye, ikke et tegn for lite, og neste komprimering rydder det. */
+create or replace function public.note_crdt_compact(p_note uuid, p_id uuid,
+                                                    p_snapshot text, p_ids uuid[])
+returns jsonb language plpgsql security definer set search_path = public as $$
+declare uid uuid := auth.uid(); n integer := 0;
+begin
+  if uid is null or not public.can_read_note(p_note, uid) then
+    raise exception 'ingen lesetilgang til notatet' using errcode = '42501';
+  end if;
+  if not public.can_edit_content('note', p_note, uid) then
+    raise exception 'mangler skriverett i notatet' using errcode = '42501';
+  end if;
+  insert into public.note_updates (id, note_id, author_id, payload)
+  values (p_id, p_note, uid, p_snapshot)
+  on conflict (id) do nothing;
+  delete from public.note_updates
+   where note_id = p_note and id = any(coalesce(p_ids, '{}'::uuid[])) and id <> p_id;
+  get diagnostics n = row_count;
+  return jsonb_build_object('removed', n,
+                            'mark', pg_snapshot_xmin(pg_current_snapshot())::text);
+end;
+$$;
+
+-- ------------------------------------------------------------
 -- 10. import_doc(p_doc) — migrering av dagens (lokale) doc inn som
 --     den innloggede brukerens egne data. Klienten normaliserer
 --     doc-et først (samme migreringssteg som i dag) og sender
@@ -6690,7 +6890,8 @@ on conflict do nothing;
 
 revoke all on public.profiles, public.universes, public.groups, public.cards,
               public.items, public.ideas, public.note_projects, public.note_folders,
-              public.notes, public.object_links, public.memberships, public.share_invites,
+              public.notes, public.note_updates,
+              public.object_links, public.memberships, public.share_invites,
               public.tombstones, public.notifications,
               public.notification_prefs, public.push_subscriptions,
               public.device_sessions, public.native_notif_devices from anon;
@@ -6712,6 +6913,16 @@ grant select, insert, update, delete on public.universes, public.groups,
 -- innerste.
 grant select, insert, delete on public.object_links to authenticated;
 revoke update on public.object_links from authenticated;
+/* note_updates: samskrivingsloggen. Klienten skal kunne VITE at et notat hun
+   leser har endret seg — det er alt realtime trenger — men aldri lese
+   innholdet eller forfatteren rett fra tabellen. Grant-en er derfor
+   KOLONNE-avgrenset til de tre feltene realtime filtrerer og leverer på, og
+   `payload`/`author_id`/`xid` står utenfor. Innholdet går utelukkende gjennom
+   de fire SECURITY DEFINER-RPC-ene (seksjon 9d), som sjekker `can_read_note`
+   og `can_edit_content` selv. Loggen er append-only, så INSERT/UPDATE/DELETE
+   er trukket tilbake i sin helhet. */
+revoke all on public.note_updates from authenticated;
+grant select (id, note_id, created_at) on public.note_updates to authenticated;
 -- Å UTELATE en grant er ikke nok i Supabase: prosjektet har
 -- `alter default privileges in schema public grant all on tables to anon,
 -- authenticated`, så en ny tabell får ALL — inkludert INSERT — i det den
@@ -6729,6 +6940,13 @@ revoke update on public.object_links from authenticated;
 --   note_projects, |   |   |   |   |
 --   note_folders,  |   |   |   |   |
 --   notes          |   |   |   |   |
+--   note_updates   | ✓*| – | – | – | *KOLONNE-avgrenset: id/note_id/
+--                  |   |   |   |   |  created_at, aldri `payload` eller
+--                  |   |   |   |   |  `author_id`. Grant-en finnes bare for
+--                  |   |   |   |   |  at realtime skal kunne si «noe skjedde
+--                  |   |   |   |   |  i dette notatet»; innholdet hentes med
+--                  |   |   |   |   |  note_crdt_load/_since og skrives med
+--                  |   |   |   |   |  note_crdt_push/_compact.
 --   object_links   | ✓ | ✓ | – | ✓ | en kobling finnes eller finnes ikke;
 --                  |   |   |   |   |  den har ingen felter å oppdatere
 --   profiles       | ✓ | – | ✓*| – | *kun display_name/avatar; e-post speiles
@@ -6820,6 +7038,10 @@ begin
     'public.set_invite_policy(text, uuid, text)',
     'public.get_members(text, uuid)',
     'public.get_my_doc()',
+    'public.note_crdt_load(uuid)',
+    'public.note_crdt_since(uuid, text)',
+    'public.note_crdt_push(uuid, jsonb)',
+    'public.note_crdt_compact(uuid, uuid, text, uuid[])',
     'public.move_group(uuid, uuid, uuid, double precision)',
     'public.import_doc(jsonb)',
     'public.delete_account()',
@@ -6917,7 +7139,7 @@ begin
   if exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
     foreach t in array array['universes', 'groups', 'cards', 'items', 'ideas',
                              'note_projects', 'note_folders', 'notes',
-                             'object_links',
+                             'note_updates', 'object_links',
                              'memberships', 'share_invites'] loop
       if not exists (
         select 1 from pg_publication_tables

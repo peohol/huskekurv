@@ -224,9 +224,9 @@ check("font-src er låst til eget origin (assets/fonts/)",
   String(headerCsp['font-src']) === "'self'", headerCsp['font-src']);
 
 /* ================= 8) Bibliotekene: lokale, låste kopier ================= */
-/* Begge tredjepartsbibliotekene ligger i `vendor/`, med den eksakte versjonen i
+/* Alle tredjepartsbibliotekene ligger i `vendor/`, med den eksakte versjonen i
    filnavnet og sjekksummen regnet ut på nytt her. Det de IKKE deler er hvor
-   bytene kommer fra, og guarden må si det riktige om hver av dem:
+   bytene kommer fra, og guarden må si det riktige om hvert av dem:
 
      • Supabase er publisert på npm, så kopien er byte for byte pakken npm
        leverte (`@supabase/supabase-js@<versjon>` → `dist/umd/supabase.js`).
@@ -236,10 +236,16 @@ check("font-src er låst til eget origin (assets/fonts/)",
        den finnes det ingen kilde å regne bytene ut fra på nytt. Smett pinner
        esbuild til en eksakt versjon nettopp for at den påstanden skal holde
        over tid (en minifiserer kan endre output i en patch-utgivelse).
+     • Yjs er på npm, men publiserer bare ESM/CJS — ingen ferdig IIFE. Kopien
+       er derfor esbuild-bunten av pakken, laget av ett enkelt inngangspunkt
+       (`export * from 'yjs'`) med de flaggene som står i `origin`. Hele
+       pakken re-eksporteres med vilje: en håndplukket eksportliste ville gjort
+       bytene avhengige av hvilke navn Huskis tilfeldigvis brukte den dagen.
+       Som for Smett er esbuild-versjonen en del av påstanden.
 
-   Oppgraderer du et av dem, må den nye versjonen (og for Smett: den nye
-   commit-en) inn her — en ukjent versjon feiler, så en kopi kan verken byttes
-   ut eller redigeres uten at det synes. */
+   Oppgraderer du et av dem, må den nye versjonen (og for Smett/Yjs: den nye
+   commit-en eller esbuild-versjonen) inn her — en ukjent versjon feiler, så en
+   kopi kan verken byttes ut eller redigeres uten at det synes. */
 const VENDORED = {
   'supabase-js': {
     what: 'Supabase-biblioteket',
@@ -255,12 +261,24 @@ const VENDORED = {
     origin: 'peohol/smett@fa94e65 → npm run build:iife → dist/smett.iife.js',
     sha384: 'sha384-QX+eobU8pHXcyy4ZbW2wRiHNRbauZ4gw5tXKSHl5uzhmvHtaYm2tE12GhRgHvhZk',
   },
+  yjs: {
+    what: 'samskrivings-motoren (Yjs)',
+    version: '13.6.32',
+    // Byte for byte: esbuild 0.28.2 over ett inngangspunkt med linjen
+    //   export * from 'yjs';
+    // og flaggene
+    //   --bundle --format=iife --global-name=Yjs --minify --target=es2019
+    //   --legal-comments=none
+    origin: "npm: yjs@13.6.32 → esbuild@0.28.2 --bundle --format=iife "
+          + "--global-name=Yjs --minify --target=es2019 --legal-comments=none",
+    sha384: 'sha384-cR1+YMOIlUf6N/BgLCwffJbHx/RbVpVRJ8c0tylClvQPFBBxFbhiRnregDdZ28S8',
+  },
 };
 
 // Alle vendor-skriptene index.html faktisk laster, i rekkefølge.
 const vendorScripts = (html.match(/<script src="vendor\/[^"]+"/g) || [])
   .map((m) => /"(vendor\/[^"]+)"/.exec(m)[1]);
-check('index.html laster begge bibliotekene fra lokale kopier i vendor/',
+check('index.html laster alle bibliotekene fra lokale kopier i vendor/',
   vendorScripts.length === Object.keys(VENDORED).length, vendorScripts);
 // Smett MÅ ligge før app.js: den er et klassisk skript som definerer `Smett`,
 // og app.js leser den globalen mens den kjører.
@@ -268,6 +286,12 @@ check('vendor/smett-0.2.0.js lastes FØR app.js',
   html.indexOf('vendor/smett-0.2.0.js') > -1 &&
   html.indexOf('vendor/smett-0.2.0.js') < html.indexOf('src="app.js"'),
   { smett: html.indexOf('vendor/smett-0.2.0.js'), app: html.indexOf('src="app.js"') });
+// Samme krav til Yjs, og av samme grunn: app.js leser den globale `Yjs` mens
+// den kjører (docs/notater-plan.md, «Sanntids samskriving»).
+check('vendor/yjs-13.6.32.js lastes FØR app.js',
+  html.indexOf('vendor/yjs-13.6.32.js') > -1 &&
+  html.indexOf('vendor/yjs-13.6.32.js') < html.indexOf('src="app.js"'),
+  { yjs: html.indexOf('vendor/yjs-13.6.32.js'), app: html.indexOf('src="app.js"') });
 check('app.js er ikke gjort til et modulskript (det ville kjørt etter alle klassiske)',
   !/<script[^>]+type="module"/i.test(html),
   (html.match(/<script[^>]+type="module"[^>]*>/i) || [])[0]);

@@ -21,7 +21,10 @@ er Huskis', og den politikken er delt mellom scopene. Autoritativt:
 `docs/drag-and-drop.md`.
 
 Notatinnholdet er et strukturert riktekstdokument (ikke HTML), redigert i en
-fullskjermseditor med autosave.
+fullskjermseditor med autosave. Flere med skriverett kan skrive i det SAMME
+notatet samtidig: dokumentet er en CRDT (Yjs, `vendor/`) med en append-only
+logg i databasen, mens `notes.body` er projeksjonen av den — søk, utdrag,
+utklippstavle og offline-kopi.
 
 `dist/` er generert output fra `node build.js` og skal aldri redigeres direkte.
 Mobilskallet (Capacitor + `android/`) pakker den samme `dist/`-en inn i native
