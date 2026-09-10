@@ -438,9 +438,10 @@ Klientsiden ligger i tre deler, alle i notat-seksjonen i `app.js`:
   først når serveren har bekreftet bildet. Køen har **ikke noe tak**: hver rad
   er den eneste kopien av noe brukeren har skrevet, og et tak måtte kastet den
   eldste. Forsøket på nytt bruker køradens egen id, så serveren kjenner igjen et
-  bilde den alt har lagret. Sier lagringen nei, ryddes de lokale CRDT-kopiene
-  bort først — de er en hurtigbuffer serveren har — og skrivingen forsøkes en
-  gang til; går det fortsatt ikke, kastes ingenting, og teksten blir stående i
+  bilde den alt har lagret. Sier lagringen nei, ryddes lokale CRDT-kopier bort
+  først — men bare for notater uten rader i køen, for de andre kopiene er ikke
+  en hurtigbuffer, men grunnlaget de ventende radene er laget mot. Går
+  skrivingen fortsatt ikke, kastes ingenting, og teksten blir stående i
   editoren. Nøkkelen tømmes ved utlogging, og for ett enkelt notat når tilgangen
   til det forsvinner — som de to andre.
 

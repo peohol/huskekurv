@@ -331,11 +331,14 @@ bruker køradens egen id, så et bilde serveren alt har lagret ikke legges inn e
 gang til. Køen ryddes som resten av notatlagringen: ved utlogging, og for et
 notat når tilgangen til det forsvinner.
 
-**Og sier enhetens lagring nei, ofres hurtigbufferen for utkastet.** De lokale
-kopiene av CRDT-en er en hurtigbuffer serveren har; et strandet utkast har ingen
-andre steder. De ryddes derfor bort, og skrivingen forsøkes en gang til — i den
-rekkefølgen, aldri omvendt. Køen av ventende oppdateringer røres ikke: den er
-ikke en kopi av noe serveren har.
+**Og sier enhetens lagring nei, ofres hurtigbufferen for utkastet — men bare
+den delen som VIRKELIG er en hurtigbuffer.** En lokal kopi av CRDT-en er noe
+serveren har, så lenge alt som er laget mot den har nådd fram. Står det rader
+igjen i køen for det notatet, er de laget mot nettopp dette dokumentets
+identiteter: kastes dokumentet, peker de på noe ingen har, og de kan aldri
+flettes inn. De notatene røres derfor ikke, og et strandet utkast får aldri
+koste et annet notats offline-endringer. Finnes det ingenting som trygt kan
+ryddes, feiler skrivingen — og da kastes ingenting i det hele tatt.
 
 **Går det fortsatt ikke, kastes INGENTING.** Uten en holdbar destinasjon —
 verken enheten eller kontoen — blir hele overgangen stående: økten er fortsatt
@@ -343,6 +346,12 @@ foreløpig, arket beholder teksten, ingenting publiseres, og neste runde prøver
 igjen. Toasten sier da at teksten ikke er lagret ennå, ikke at den er tatt vare
 på. Det er den samme regelen som ellers, tatt helt ut: den eneste kopien slippes
 aldri før noe holdbart har tatt imot den.
+
+**Lukkes notatet mens overgangen står, forsvinner arket — og da blir raden
+stående i MINNET.** En lukking skjer én gang, så køen kan ikke vokse av den, og
+minnet er bedre enn ingenting. Toasten sier da at teksten ikke tåler at appen
+lukkes. Så snart lagringen virker igjen, skriver neste synk-runde køen ned av
+seg selv.
 
 At overgangen kan bli stående, er grunnen til at «er loggen tom?» avgjøres av
 ALLE radene økten har sett, ikke av hva den siste hentingen hadde med seg.
@@ -396,6 +405,15 @@ endre noe), med jevne mellomrom mens man skriver, ved lukking, når historikken
 ville et notat som ble tømt og lukket i løpet av et halvt minutt aldri hatt en
 rad å hente fra.
 
+**Og bare av en AVKLART tilstand.** Projeksjonen alene kan ikke svare på hva som
+gjelder nå: den kan ligge etter loggen, og et bilde derfra ville lagt gammelt
+innhold inn med NÅ-tidspunkt og stått øverst i historikken som «Nå».
+Åpningsbildet tas derfor når frøet er avgjort, ikke idet editoren åpnes. Er
+notatet lukket — historikken åpnes rett fra kortet — bygges dokumentet av
+loggens rader, akkurat som en økt ville gjort; har loggen ingen rader, ER
+projeksjonen notatet, for det er aldri sådd. Ved lukking leses tilstanden mens
+økten ennå lever, siden kjeden kjører etter at den er borte.
+
 **Serveren avviser dubletter.** Et bilde med samme tittel og samme dokument som
 det ferskeste blir ingen ny rad — så et notat som åpnes og lukkes uten en eneste
 endring legger ikke igjen noe, og to enheter som ber om det samme bildet ender
@@ -403,7 +421,14 @@ med ett. Det er dét som gjør at klienten kan be så ofte. Sammenligningen er
 serialisert per notat, ellers ville to samtidige forespørsler begge sett den
 samme forrige raden og lagt inn hver sin.
 
-**En gjenoppretting er en vanlig endring.** Bildet skrives inn ved at
+**En gjenoppretting har to forutsetninger, og gjøres ikke uten dem.** Økten for
+notatet må være AVKLART — står den på et foreløpig frø, ville endringen blitt
+lest som strandet når radene kom, serverens dokument ville vunnet, og brukeren
+fått «gjenopprettet» uten at noe var gjenopprettet. Og tilstanden slik den er NÅ
+må ligge i historikken først, ellers er gjenopprettingen en enveisdør. Går ikke
+det bildet gjennom, gjøres ingenting, og beskjeden sier hvorfor.
+
+**En gjenoppretting er ellers en vanlig endring.** Bildet skrives inn ved at
 FORSKJELLEN mellom det og dokumentet legges i CRDT-en, som et hvilket som helst
 tastetrykk. Derfor fletter den mot en som skriver samtidig, derfor virker den
 offline, og derfor kan den angres — fra toasten der og da, eller senere gjennom
@@ -1000,8 +1025,12 @@ som hver feiler uten sin rettelse: den doblede teksten ved første åpning, det
 ferske notatet uten angre, den utdaterte projeksjonen som ikke får slette den
 andres avsnitt (også med lagringen av utkastet tvunget til å feile, så køen på
 enheten er bevist), de 25 ubekreftede utkastene der ingen kastes, forsøket på
-nytt som gir én historikkrad og ikke to, og overgangen som blir stående når
-BÅDE enhetens lagring og serveren sier nei; desktop og mobil),
+nytt som gir én historikkrad og ikke to, overgangen som blir stående når BÅDE
+enhetens lagring og serveren sier nei — også når notatet lukkes mens den står —
+den lokale kopien til et notat med usendte endringer som aldri ryddes, den
+utdaterte projeksjonen som ikke får bli et falskt «Nå», gjenopprettingen fra et
+lukket kort som faktisk blir gjeldende, og gjenopprettingen som ikke skjer når
+bildet av tilstanden før feiler; desktop og mobil),
 `supabase/tests/test-note-versions.sql` (serverkontrakten: grants, policy,
 fingeravtrykk, ren leser, utenforstående, merking og tak, alle fire lagene i
 uttynningen, tilbakekalling, kaskade og kontosletting),

@@ -758,13 +758,23 @@ async function runUtenLagring() {
   check(navn + ' 18e: … og appen sier ikke at teksten er lagret',
     sagt.indexOf('tatt vare på') === -1 && sagt.indexOf('ikke lagret ennå') > -1, sagt);
 
-  /* Går lagringen igjen, fullfører overgangen av seg selv: utkastet blir
-     holdbart, det foreløpige dokumentet kastes, og serverens dokument vinner.
-     Serveren tar fortsatt ikke imot bildet — raden skal derfor stå i køen. */
+  /* LUKKES NOTATET MENS DET STÅR SLIK, forsvinner arket — og da er minnet
+     bedre enn ingenting. Raden blir stående i køen, og toasten sier at teksten
+     ikke tåler at appen lukkes. */
+  await lukkEditor(a);
+  const etterLukking = await a.evaluate(() => ({
+    kø: window.__huskis.noteDraftsInfo.texts,
+    toast: (document.getElementById('toast') || {}).textContent || '',
+  }));
+  check(navn + ' 18f: lukkes notatet, blir teksten liggende i køen — den kastes ikke',
+    etterLukking.kø.some((t) => /MITT UTKAST/.test(t)), etterLukking.kø);
+  check(navn + ' 18g: … og toasten sier at den ikke tåler at appen lukkes',
+    etterLukking.toast.indexOf('Ikke lukk appen') > -1, etterLukking.toast);
+
+  /* Går lagringen igjen, blir raden holdbar av seg selv ved neste synk-runde —
+     uten at brukeren gjør noe. Serveren tar fortsatt ikke imot bildet. */
   await a.evaluate(() => window.__hkLagringTilbake());
-  await a.waitForFunction(() => !window.__huskis.noteLiveInfo.seedPending,
-    null, { timeout: 20000, polling: 100 });
-  await a.waitForTimeout(300);
+  await a.evaluate(async () => { await window.__huskis.pushNoteDrafts(); });
   const køen = await a.evaluate(() => {
     const key = Object.keys(localStorage).find((k) => k.indexOf('hk-note-draft:') === 0);
     return {
@@ -772,7 +782,7 @@ async function runUtenLagring() {
       iLagringen: JSON.parse(localStorage.getItem(key) || '[]').length,
     };
   });
-  check(navn + ' 18f: med lagringen tilbake blir utkastet holdbart, og overgangen fullføres',
+  check(navn + ' 18h: med lagringen tilbake blir raden holdbar av seg selv',
     køen.kø.some((t) => /MITT UTKAST/.test(t)) && køen.iLagringen >= 1, køen);
 
   // … og når serveren tar imot igjen, havner det i historikken ÉN gang.
@@ -785,8 +795,193 @@ async function runUtenLagring() {
     return (d.note_versions || []).filter((v) => v.note_id === x)
       .filter((v) => JSON.stringify(v.doc).indexOf('MITT UTKAST') > -1).length;
   }, ids.N);
-  check(navn + ' 18g: … og når serveren tar imot igjen, ligger det i historikken ÉN gang',
+  check(navn + ' 18i: … og når serveren tar imot igjen, ligger det i historikken ÉN gang',
     iHistorikken === 1, { rader: iHistorikken });
+
+  check(navn + ': ingen JS-feil', feil.length === 0, feil.join(' | '));
+  await br.close();
+}
+
+/* ============================================================
+   Løp 1d — et bilde tas bare av en AVKLART tilstand
+
+   19. Hurtigbufferen som ofres for et strandet utkast er bare en
+       hurtigbuffer så lenge alt som er laget mot den har nådd serveren. Et
+       notat med rader i køen skal aldri miste sin lokale kopi.
+   20. Historikken åpnet fra et LUKKET kort skal ikke legge en utdatert
+       projeksjon inn som «Nå» — og en gjenoppretting derfra skal faktisk bli
+       gjeldende, ikke tapes i frø-oppgjøret.
+   21. Går ikke bildet av tilstanden FØR gjennom, gjennomføres ingen
+       gjenoppretting: løftet er at man alltid kan komme tilbake.
+   ============================================================ */
+async function runAvklart() {
+  const navn = 'avklart';
+  const { ids, db } = buildDB();
+  const br = await chromium.launch();
+  const ctx = await br.newContext({ viewport: { width: 1200, height: 900 } });
+  const feil = [];
+  const a = await ctx.newPage();
+  a.on('pageerror', (e) => feil.push('A: ' + e.message));
+  await loadAs(a, db, 'uA', 'a@x.no', true);
+
+  /* ---- 19. Et notat med usendte endringer mister aldri sin lokale kopi ---- */
+  await åpneEditor(a, ids.N);
+  await skrivSlutt(a, ' AVSNITT FRA A');
+  await a.evaluate(async () => { window.__huskis.noteLiveFlush(); await window.__huskis.pushNoteOps(); });
+  await lukkEditor(a);
+  await a.waitForTimeout(250);
+
+  // Nå skrives det UTEN nett: raden blir stående i køen, og den lokale kopien
+  // er det eneste stedet dokumentet den er laget mot finnes.
+  await a.evaluate(() => window.HK_MOCK.setOffline(true));
+  await åpneEditor(a, ids.N);
+  await skrivSlutt(a, ' OFFLINE-TILLEGG');
+  await a.evaluate(async () => { window.__huskis.noteLiveFlush(); await window.__huskis.pushNoteOps(); });
+  await lukkEditor(a);
+  await a.waitForTimeout(250);
+  const før19 = await a.evaluate((x) => {
+    const snapKey = Object.keys(localStorage).find((k) => k.indexOf('hk-note-crdt:') === 0);
+    const snaps = JSON.parse(localStorage.getItem(snapKey) || '{}');
+    return { harKopi: !!snaps[x], iKøen: window.__huskis.noteLiveInfo ? 0 : 0,
+             ops: (JSON.parse(localStorage.getItem(
+               Object.keys(localStorage).find((k) => k.indexOf('hk-note-ops:') === 0) || 'x') || '[]')).length };
+  }, ids.N);
+  check(navn + ' 19a: notatet har en lokal kopi OG rader i køen (forutsetningen)',
+    før19.harKopi && før19.ops > 0, før19);
+
+  // Enhetens lagring nekter køen av strandede utkast. Ventilen skal da IKKE
+  // finne noe den trygt kan rydde — og skrivingen skal feile.
+  const nektet = await a.evaluate((x) => {
+    const ekte = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = function (k, v) {
+      if (String(k).indexOf('hk-note-draft:') === 0) throw new Error('QuotaExceededError');
+      return ekte(k, v);
+    };
+    const svar = window.__huskis.queueNoteDraft(x, {
+      title: 'Felles notat',
+      doc: { v: 1, blocks: [{ t: 'p', c: [{ s: 'ET STRANDET UTKAST' }] }] },
+    });
+    localStorage.setItem = ekte;
+    const snapKey = Object.keys(localStorage).find((k) => k.indexOf('hk-note-crdt:') === 0);
+    const snaps = JSON.parse(localStorage.getItem(snapKey) || '{}');
+    return { holdbar: svar, harKopi: !!snaps[x] };
+  }, ids.N);
+  check(navn + ' 19: den lokale kopien til et notat med usendte endringer ryddes ALDRI',
+    nektet.harKopi === true && nektet.holdbar === false, nektet);
+
+  /* … og når raden er levert, ER kopien bare en hurtigbuffer: da kan den ofres
+     for utkastet, som ikke finnes noe annet sted. */
+  await a.evaluate(() => window.HK_MOCK.setOffline(false));
+  await a.evaluate(async () => { await window.__huskis.pushNoteOps(); });
+  await a.waitForFunction(() => {
+    const k = Object.keys(localStorage).find((n2) => n2.indexOf('hk-note-ops:') === 0);
+    return JSON.parse(localStorage.getItem(k) || '[]').length === 0;
+  }, null, { timeout: 20000, polling: 100 });
+  const ofret = await a.evaluate((x) => {
+    const ekte = localStorage.setItem.bind(localStorage);
+    let forsøk = 0;
+    localStorage.setItem = function (k, v) {
+      // Bare den FØRSTE skrivingen av køen nektes: etter at kopien er ryddet
+      // skal den andre gå gjennom.
+      if (String(k).indexOf('hk-note-draft:') === 0 && forsøk++ === 0) {
+        throw new Error('QuotaExceededError');
+      }
+      return ekte(k, v);
+    };
+    const svar = window.__huskis.queueNoteDraft(x, {
+      title: 'Felles notat',
+      doc: { v: 1, blocks: [{ t: 'p', c: [{ s: 'ET STRANDET UTKAST' }] }] },
+    });
+    localStorage.setItem = ekte;
+    const snapKey = Object.keys(localStorage).find((k) => k.indexOf('hk-note-crdt:') === 0);
+    return { holdbar: svar, harKopi: !!JSON.parse(localStorage.getItem(snapKey) || '{}')[x] };
+  }, ids.N);
+  check(navn + ' 19b: … men er alt levert, er kopien en hurtigbuffer som kan ofres',
+    ofret.holdbar === true && ofret.harKopi === false, ofret);
+  await a.evaluate(async () => { await window.__huskis.pushNoteDrafts(); });
+  await a.waitForFunction(() => window.__huskis.noteDraftsInfo.count === 0,
+    null, { timeout: 20000, polling: 100 });
+
+  /* ---- 20. Ingen falsk «Nå» fra en utdatert projeksjon ---- */
+  await a.evaluate(async (x) => {
+    await window.HK_MOCK._edit((d) => {
+      const n = d.notes.find((m) => m.id === x);
+      n.body = { v: 1, blocks: [{ t: 'p', c: [{ s: 'UTDATERT PROJEKSJON' }] }] };
+      n.ts = Date.now() + 60000;
+      n.org = 'annen-enhet';
+    });
+    Object.keys(localStorage).forEach((k) => {
+      if (k.indexOf('hk-note-crdt:') === 0 || k.indexOf('hk-note-ops:') === 0) localStorage.removeItem(k);
+    });
+  }, ids.N);
+  await a.goto(BASE + '/?mock=1');
+  await a.waitForFunction(() => {
+    const H = window.__huskis;
+    return !!(H && H.authUser && H.lastMy);
+  }, null, { timeout: 20000, polling: 200 });
+  await a.evaluate(() => window.__huskis.setMainTab('notes'));
+  await a.waitForFunction((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return n && JSON.stringify(n.doc).indexOf('UTDATERT PROJEKSJON') > -1;
+  }, ids.N, { timeout: 20000, polling: 200 });
+
+  // Historikken åpnes DIREKTE fra kortet, uten at editoren har vært innom.
+  await åpneHistorikk(a, ids.N);
+  const rader20 = await historikkRader(a);
+  const nå = rader20.find((r) => r.nå) || rader20[0] || {};
+  check(navn + ' 20: «Nå» er loggens dokument, ikke den utdaterte projeksjonen',
+    /OFFLINE-TILLEGG/.test(nå.text) && !/UTDATERT PROJEKSJON/.test(nå.text), nå.text);
+  check(navn + ' 20b: … og den utdaterte projeksjonen kom ikke inn som en ny rad',
+    !rader20.some((r) => /UTDATERT PROJEKSJON/.test(r.text)), rader20.map((r) => r.text));
+
+  // … og en gjenoppretting derfra blir FAKTISK gjeldende.
+  const eldst = await a.evaluate((x) => {
+    const d = JSON.parse(localStorage.getItem('hk-mock-db'));
+    const rader = (d.note_versions || []).filter((v) => v.note_id === x)
+      .sort((p, q) => p.created_at - q.created_at);
+    return rader.length ? { id: rader[0].id, tekst: JSON.stringify(rader[0].doc) } : null;
+  }, ids.N);
+  check(navn + ' 20c: det finnes en eldre versjon å hente (forutsetningen)', !!eldst, eldst && eldst.tekst);
+  await a.evaluate(async (p) => { await window.__huskis.restoreNoteVersion(p.n, p.v); },
+    { n: ids.N, v: (eldst || {}).id });
+  await a.waitForTimeout(600);
+  await sync(a);
+  const etter20 = await notatDoc(a, ids.N);
+  check(navn + ' 20d: … og det gjenopprettede innholdet er det som gjelder etterpå',
+    !!eldst && etter20 === eldst.tekst, { nå: etter20, ba_om: eldst && eldst.tekst });
+  await a.evaluate(() => window.__huskis.closeNoteHistory());
+  await lukkEditor(a);
+
+  /* ---- 21. Ingen gjenoppretting uten bildet av tilstanden FØR ---- */
+  await åpneEditor(a, ids.N);
+  await skrivSlutt(a, ' NOE NYTT SIDEN SIST');
+  await a.evaluate(async () => { window.__huskis.noteLiveFlush(); await window.__huskis.pushNoteOps(); });
+  // Projeksjonen skrives med et opphold; les den først når tegnene er inne,
+  // ellers måler «før» en tilstand som alt er passert.
+  await a.waitForFunction((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return n && JSON.stringify(n.doc).indexOf('NOE NYTT SIDEN SIST') > -1;
+  }, ids.N, { timeout: 20000, polling: 100 });
+  const før21 = await notatDoc(a, ids.N);
+  await a.evaluate(() => {
+    const c = window.__huskis.client;
+    const ekte = c.rpc.bind(c);
+    c.rpc = function (n2, params) {
+      if (n2 === 'note_version_save') {
+        return Promise.resolve({ data: null, error: { message: 'Failed to fetch' } });
+      }
+      return ekte(n2, params);
+    };
+  });
+  await a.evaluate(async (p) => { await window.__huskis.restoreNoteVersion(p.n, p.v); },
+    { n: ids.N, v: (eldst || {}).id });
+  await a.waitForTimeout(400);
+  const etter21 = await notatDoc(a, ids.N);
+  const sagt21 = await a.evaluate(() => (document.getElementById('toast') || {}).textContent || '');
+  check(navn + ' 21: gjenopprettingen gjennomføres IKKE når bildet av tilstanden før feiler',
+    etter21 === før21, { før: før21, etter: etter21 });
+  check(navn + ' 21b: … og beskjeden sier HVORFOR, ikke bare at det feilet',
+    sagt21.indexOf('ingenting ble gjenopprettet') > -1, sagt21);
 
   check(navn + ': ingen JS-feil', feil.length === 0, feil.join(' | '));
   await br.close();
@@ -944,6 +1139,7 @@ async function runFlere() {
   await run('mobil', { width: 390, height: 780 }, true);
   await runUtdatert();
   await runUtenLagring();
+  await runAvklart();
   await runFlere();
   console.log('\n==== ' + pass + '/' + (pass + fail) + ' PASS ====');
   process.exit(fail ? 1 : 0);

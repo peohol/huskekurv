@@ -226,6 +226,16 @@
        som er sant: den er ikke lagret ennå, så la notatet stå åpent. */
     'notes.historyStrandedWait': ['Det du skriver er ikke lagret ennå. La notatet stå åpent til det er lagret.',
                               'What you are writing is not saved yet. Leave the note open until it is.'],
+    /* … og lukkes notatet mens det står slik, forsvinner arket. Teksten blir
+       liggende i appen og sendes så snart noe tar imot, men den tåler ikke at
+       appen lukkes. Det skal brukeren få vite. */
+    'notes.historyStrandedRam': ['Det du skrev er ikke lagret ennå. Ikke lukk appen før det er det.',
+                              'What you wrote is not saved yet. Do not close the app until it is.'],
+    /* En gjenoppretting skal alltid ha en vei tilbake: tilstanden slik den er
+       NÅ må ligge i historikken først. Går ikke det bildet gjennom, gjøres
+       ingenting — og da skal beskjeden si hvorfor, ikke bare at det feilet. */
+    'notes.historyNoBefore': ['Fikk ikke lagret notatet slik det er nå, så ingenting ble gjenopprettet. Prøv igjen.',
+                              'Could not save the note as it is now, so nothing was restored. Try again.'],
 
     /* Livssyklus: arkiv og søppelkasse for alle tre nivåene
        (docs/notater-plan.md). «Arkiver» legger til side; «Slett» legger i
