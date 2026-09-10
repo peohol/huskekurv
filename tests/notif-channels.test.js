@@ -262,9 +262,13 @@ async function seed(p, url, db) {
     }));
   }, { db, uid });
   await p.goto(url);
+  /* Preferanseraden er signalet på at varselgenereringen har vært hele runden
+     gjennom: den lages av den FØRSTE genereringen. Uten den kunne en måling av
+     historikken like gjerne truffet før den første raden fantes — og da ville
+     en senere runde sett ut som om kanalen la noe til. */
   await p.waitForFunction(() => {
     const H = window.__huskis;
-    return H && H.authUser && H.lastMy && H.state.universes.length > 0;
+    return H && H.authUser && H.lastMy && H.state.universes.length > 0 && !!H.notifPrefs;
   }, null, { timeout: 15000, polling: 200 });
 }
 
