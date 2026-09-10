@@ -54,7 +54,7 @@ declare
 begin
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes', 'object_links',
+    'note_projects', 'note_folders', 'notes', 'note_updates', 'object_links',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs',
     'push_subscriptions', 'push_deliveries', 'device_sessions',
@@ -131,6 +131,12 @@ begin
     'notes:locked', 'notes:unlocked', 'notes:invite_policy',
     'notes:ts', 'notes:org',
     'notes:pos', 'notes:pos_ts', 'notes:pos_org',
+
+    -- Samskrivingsloggen (docs/notater-plan.md, «Sanntids samskriving»).
+    -- Klienten skriver den ikke direkte — alt går gjennom note_crdt_*-RPC-ene
+    -- — men kolonnene må finnes, ellers feiler de fire RPC-ene i stedet.
+    'note_updates:id', 'note_updates:note_id', 'note_updates:author_id',
+    'note_updates:payload', 'note_updates:xid', 'note_updates:created_at',
 
     -- Koblinger Lister <-> Notater: én fremmednøkkel per koblingsbar type,
     -- nøyaktig én satt per side (docs/notater-plan.md).
@@ -269,7 +275,7 @@ declare
 begin
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes', 'object_links',
+    'note_projects', 'note_folders', 'notes', 'note_updates', 'object_links',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs',
     'push_subscriptions', 'push_deliveries', 'device_sessions',
@@ -314,6 +320,7 @@ begin
     'note_folders:note_folders_update', 'note_folders:note_folders_delete',
     'notes:notes_select', 'notes:notes_insert',
     'notes:notes_update', 'notes:notes_delete',
+    'note_updates:note_updates_select',
     'object_links:object_links_select', 'object_links:object_links_insert',
     'object_links:object_links_delete',
     'memberships:memberships_select', 'memberships:memberships_update',
@@ -353,6 +360,11 @@ begin
   foreach fn in array array[
     'public.get_my_doc()',
     'public.import_doc(jsonb)',
+    -- Samskrivingsloggen for ett notat (docs/notater-plan.md).
+    'public.note_crdt_load(uuid)',
+    'public.note_crdt_since(uuid, text)',
+    'public.note_crdt_push(uuid, jsonb)',
+    'public.note_crdt_compact(uuid, uuid, text, uuid[])',
     'public.create_share_invite(text, uuid, text, text)',
     'public.accept_share_invite(uuid, uuid, double precision)',
     'public.decline_share_invite(uuid)',
@@ -675,7 +687,7 @@ begin
   -- anon skal ikke se noe som helst.
   foreach t in array array[
     'profiles', 'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes', 'object_links',
+    'note_projects', 'note_folders', 'notes', 'note_updates', 'object_links',
     'memberships', 'share_invites', 'tombstones',
     'notifications', 'notification_prefs', 'push_subscriptions', 'push_deliveries',
     'device_sessions', 'native_notif_devices'
@@ -708,7 +720,7 @@ begin
   end if;
   foreach t in array array[
     'universes', 'groups', 'cards', 'items', 'ideas',
-    'note_projects', 'note_folders', 'notes', 'object_links',
+    'note_projects', 'note_folders', 'notes', 'note_updates', 'object_links',
     'memberships', 'share_invites'
   ] loop
     select count(*) into n from pg_publication_tables

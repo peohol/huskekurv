@@ -130,7 +130,9 @@ async function nyttNotat(p, doc, tittel) {
     H.closeNoteEditor();
     const live = H.state.notes.find((x) => x.id === n.id);
     live.title = tittel;
-    live.doc = H.sanitizeNoteDoc(doc);
+    // Gjennom appens egen vei: dokumentet er samskrivingens, og `body` er
+    // projeksjonen av den (docs/notater-plan.md).
+    H.setNoteDoc(live.id, doc);
     H.save();
     H.renderNotes();
     return n.id;

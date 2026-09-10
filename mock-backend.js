@@ -41,11 +41,34 @@
     return setTimeout(fn, AUTH_LAG);
   }
 
+  /* NETTBRUDD PÅ BESTILLING (`HK_MOCK.setOffline(true)`). Et brudd er ikke det
+     samme som en feilmelding fra serveren: forespørselen når aldri fram, og
+     `fetch` avviser løftet. Mocken gjør nøyaktig det, med den meldingen
+     `isNetworkError()` i app.js kjenner igjen — så klienten går i
+     frakoblet-modus på ekte, og ikke bare later som.
+     Realtime dør med det samme: en kanal uten forbindelse leverer ingenting. */
+  var OFFLINE = false;
+  function setOffline(v) { OFFLINE = !!v; }
+
   // Utfør et «server»-kall: run() kjøres ETTER forsinkelsen (som om forespørselen
   // var underveis), og resultatet leveres asynkront. Kastede feil → { error }.
   function serverCall(run) {
+    if (OFFLINE) {
+      return new Promise(function (_, reject) {
+        setTimeout(function () { reject(new TypeError('Failed to fetch')); }, LAG || 0);
+      });
+    }
+    /* Handleren kan svare med et LØFTE (låsen i `transact` er asynkron). En
+       avvisning derfra skal bli det samme `{ error }` som et synkront kast —
+       ellers ville en autorisasjonsfeil plutselig kastet hos kalleren, mens
+       den samme feilen uten lås ga et pent svar. */
     function attempt() {
-      try { return run(); } catch (e) { return { data: null, error: { message: e.message } }; }
+      try {
+        var r = run();
+        return (r && typeof r.then === 'function')
+          ? r.catch(function (e) { return { data: null, error: { message: e.message } }; })
+          : r;
+      } catch (e) { return { data: null, error: { message: e.message } }; }
     }
     if (!LAG) return Promise.resolve(attempt());
     return new Promise(function (resolve) {
@@ -57,6 +80,9 @@
     var db = null;
     try {
       var raw = localStorage.getItem(DB_KEY);
+      // Speilet som `saveDB` sammenligner mot, hentet fra det som FAKTISK står
+      // i lagringen nå — en annen fane kan ha skrevet siden sist.
+      lastDbJson = raw;
       if (raw) db = JSON.parse(raw);
     } catch (e) {}
     if (!db) {
@@ -70,6 +96,9 @@
         // Mappe > Notat. Ingen deling, ingen roller — eierskapet er hele
         // autorisasjonen, som for idéene.
         note_projects: [], note_folders: [], notes: [], object_links: [],
+        // Samskrivingsloggen for ett notat (docs/notater-plan.md): append-only,
+        // én rad per Yjs-oppdatering. `mark` speiler serverens xid-teller.
+        note_updates: [], note_mark: 1,
         memberships: [], share_invites: [], tombstones: [],
         notifications: [], notification_prefs: [],
         push_subscriptions: [], push_deliveries: [],
@@ -90,6 +119,8 @@
     if (!Array.isArray(db.note_folders)) db.note_folders = [];
     if (!Array.isArray(db.object_links)) db.object_links = [];
     if (!Array.isArray(db.notes)) db.notes = [];
+    if (!Array.isArray(db.note_updates)) db.note_updates = [];
+    if (typeof db.note_mark !== 'number') db.note_mark = 1;
     return migrateRoles(db);
   }
   // Speiler rolle-backfillen i users-and-sharing.sql: en database fra FØR
@@ -168,10 +199,64 @@
     db.share_invites.forEach(function (s) { if (!s.role) s.role = 'member'; });
     return db;
   }
+  /* Pinget er realtime: den andre fanen leser det som «noe skjedde i
+     databasen». Da må det bare gå ut når noe FAKTISK skjedde. En ren LESING
+     (`get_my_doc`, `note_crdt_load` …) ender også her, fordi rpc-veien alltid
+     lagrer til slutt — og et ping på en lesing gjør to faner til en evig
+     ping-pong: A leser, B våkner og leser, A våkner og leser … Ekte Postgres
+     sender ingen WAL-hendelse for en select, og mocken skal ikke gjøre det
+     heller. Derfor sammenlignes den serialiserte databasen med den forrige:
+     er den lik, er dette en lesing, og ingen skal vekkes. */
+  var lastDbJson = null;
   function saveDB(db) {
-    localStorage.setItem(DB_KEY, JSON.stringify(db));
+    var json = JSON.stringify(db);
+    if (json === lastDbJson) return;
+    lastDbJson = json;
+    localStorage.setItem(DB_KEY, json);
     localStorage.setItem(PING_KEY, String(Math.random()) + ':' + (window.__pingc = (window.__pingc || 0) + 1));
   }
+  /* EN «TRANSAKSJON» OVER DEN DELTE LAGRINGEN.
+
+     To faner er to ekte prosesser mot den samme `localStorage`. En
+     les–endre–skriv uten vern kan derfor miste en skriving: begge leser den
+     samme teksten, begge skriver, og den siste vinner. Ekte Postgres gjør ikke
+     det, og en mock som gjør det ville latt et flerbrukerscenario feile av
+     harnisket i stedet for av koden — og feile flakete, som er verre.
+
+     Vernet er en EKTE LÅS på tvers av faner (`navigator.locks`): hver
+     les–endre–skriv holder låsen fra første lesing til siste skriving, så to
+     faner aldri står i den samme runden. Det er nødvendig, ikke pynt —
+     nettleseren speiler `localStorage` i hver fane og oppdaterer speilet
+     asynkront, så en optimistisk sjekk kan lese en fersk verdi som fortsatt
+     ser gammel ut. En måling av to faner som gjorde 200 les–endre–skriv hver:
+     264 av 400 uten lås, 400 av 400 med.
+
+     I tillegg sjekkes teksten en gang til rett før skrivingen — uten en eneste
+     `await` imellom — for å fange den som skriver UTENOM låsen: en test som
+     redigerer databasen direkte med `_loadDB`/`_saveDB` mens en runde er i
+     lufta.
+
+     Kaster handleren (en autorisasjonsfeil), skrives ingenting og feilen går
+     videre uendret. */
+  function transactNow(run) {
+    for (var i = 0; i < 12; i++) {
+      var før = localStorage.getItem(DB_KEY);
+      var db = loadDB();
+      var ut = run(db);
+      // Ingen `await` mellom sjekken og skrivingen: den optimistiske sjekken
+      // fanger den som skrev UTENOM låsen — en test som redigerer databasen
+      // direkte med `_loadDB`/`_saveDB` mens en runde er i lufta.
+      if (localStorage.getItem(DB_KEY) === før) { saveDB(db); return ut; }
+    }
+    throw new Error('for mange samtidige skrivinger mot mock-databasen');
+  }
+  function transact(run) {
+    if (navigator.locks && navigator.locks.request) {
+      return navigator.locks.request(DB_KEY, function () { return transactNow(run); });
+    }
+    return transactNow(run);
+  }
+
   function clone(v) { return v == null ? v : JSON.parse(JSON.stringify(v)); }
 
   function hash(str) {
@@ -2151,6 +2236,11 @@
           db.notes.forEach(function (n) { if (n.folder_id === id) n.folder_id = null; });
         }
       });
+      // `note_updates.note_id` er `on delete cascade`: en logg uten notat
+      // finnes ikke. Loggen har ingen egen gravstein — notatets holder.
+      var levende = {};
+      db.notes.forEach(function (n) { levende[n.id] = 1; });
+      db.note_updates = db.note_updates.filter(function (u) { return levende[u.note_id]; });
       return;
     }
     var type = table === 'universes' ? 'universe' : table === 'groups' ? 'group' : table === 'cards' ? 'card' : 'item';
@@ -2204,6 +2294,54 @@
     });
   }
 
+  /* ---------------- Samskrivingsloggen (docs/notater-plan.md) ----------------
+     Speiler `note_crdt_load/_since/_push/_compact`: lesing krever
+     `can_read_note`, skriving `can_edit_content('note', ...)`. Svaret bærer
+     ALDRI forfatteren videre — i produksjon har klienten ikke engang
+     kolonne-rettigheten til `author_id`.
+
+     `mark` er mockens motstykke til `pg_snapshot_xmin(pg_current_snapshot())`.
+     Her er alt serialisert i én tråd, så en enkel teller holder: en rad får
+     tellerens verdi, og merket som gis ut er tellerens NESTE verdi. */
+  function noteCrdtDenied(db, id, uid, write) {
+    if (!canReadNote(db, id, uid)) throw new Error('ingen lesetilgang til notatet');
+    if (write && !canEditContent(db, 'note', id, uid)) throw new Error('mangler skriverett i notatet');
+  }
+  function noteCrdtRows(db, id, mark) {
+    return db.note_updates
+      .filter(function (u) { return u.note_id === id && (mark == null || u.xid >= Number(mark)); })
+      .sort(function (a, b) { return a.xid - b.xid; })
+      .map(function (u) { return { id: u.id, u: u.payload }; });
+  }
+  function noteCrdtLoad(db, id, uid, mark) {
+    noteCrdtDenied(db, id, uid, false);
+    return { mark: String(db.note_mark), updates: noteCrdtRows(db, id, mark) };
+  }
+  function noteCrdtPush(db, id, uid, rows) {
+    noteCrdtDenied(db, id, uid, true);
+    var n = 0;
+    (rows || []).forEach(function (r) {
+      if (!r || !r.id || typeof r.u !== 'string') return;
+      if (db.note_updates.some(function (u) { return u.id === r.id; })) return;  // on conflict do nothing
+      db.note_updates.push({ id: r.id, note_id: id, author_id: uid, payload: r.u, xid: db.note_mark });
+      n++;
+    });
+    db.note_mark++;
+    return { written: n, mark: String(db.note_mark) };
+  }
+  function noteCrdtCompact(db, id, uid, rowId, snapshot, ids) {
+    noteCrdtDenied(db, id, uid, true);
+    if (!db.note_updates.some(function (u) { return u.id === rowId; })) {
+      db.note_updates.push({ id: rowId, note_id: id, author_id: uid, payload: snapshot, xid: db.note_mark });
+    }
+    var vekk = {};
+    (ids || []).forEach(function (x) { if (x !== rowId) vekk[x] = 1; });
+    var f = db.note_updates.length;
+    db.note_updates = db.note_updates.filter(function (u) { return !(u.note_id === id && vekk[u.id]); });
+    db.note_mark++;
+    return { removed: f - db.note_updates.length, mark: String(db.note_mark) };
+  }
+
   /* ---------------- RPC-er ---------------- */
   function nextPersonalPos(db, uid) {
     return db.memberships.filter(function (m) { return m.user_id === uid; })
@@ -2213,6 +2351,12 @@
   function rpcHandlers(db, uid) {
     return {
       get_my_doc: function () { return getMyDoc(db, uid); },
+      note_crdt_load: function (p) { return noteCrdtLoad(db, p.p_note, uid, null); },
+      note_crdt_since: function (p) { return noteCrdtLoad(db, p.p_note, uid, p.p_mark); },
+      note_crdt_push: function (p) { return noteCrdtPush(db, p.p_note, uid, p.p_updates); },
+      note_crdt_compact: function (p) {
+        return noteCrdtCompact(db, p.p_note, uid, p.p_id, p.p_snapshot, p.p_ids);
+      },
       notify_record: function (p) { return notifRecord(db, uid, p.p_rows || [], p.p_cursor || 0); },
       push_subscribe: function (p) { return pushSubscribe(db, uid, p); },
       push_unsubscribe: function (p) { return pushUnsubscribe(db, uid, p.p_endpoint); },
@@ -2688,7 +2832,10 @@
     function sessionObj() { var u = getSess(); return u ? { user: u } : null; }
 
     var channels = [];
-    function fireChannels() { channels.forEach(function (ch) { ch._handlers.forEach(function (h) { try { h(); } catch (e) {} }); }); }
+    function fireChannels() {
+      if (OFFLINE) return;   // ingen forbindelse, ingen hendelser
+      channels.forEach(function (ch) { ch._handlers.forEach(function (h) { try { h(); } catch (e) {} }); });
+    }
     /* Som i supabase-js: å fjerne en kanal går via `unsubscribe()`, og den
        melder `CLOSED` tilbake. Klienten svarer på det med å subscribe på nytt
        (`startCloudRealtime`), så en mock som bare tømmer lista ville skjult at
@@ -2841,30 +2988,34 @@
           insert: function (payload) {
             return thenable(function () {
               var u = getSess(); if (!u) return { data: null, error: { message: 'ikke innlogget' } };
-              var db = loadDB();
-              var tomb = tombstoneError(db, table, payload);
-              if (tomb) return { data: null, error: tomb };
-              var fk = catFkError(db, table, payload);
-              if (fk) return { data: null, error: fk };
-              applyInsert(db, table, u.id, payload); saveDB(db);
-              return { data: null, error: null };
+              return transact(function (db) {
+                var tomb = tombstoneError(db, table, payload);
+                if (tomb) return { data: null, error: tomb };
+                var fk = catFkError(db, table, payload);
+                if (fk) return { data: null, error: fk };
+                applyInsert(db, table, u.id, payload);
+                return { data: null, error: null };
+              });
             });
           },
           update: function (payload) {
             return thenable(function (filters) {
               var u = getSess(); if (!u) return { data: null, error: { message: 'ikke innlogget' } };
-              var db = loadDB();
-              var fk = catFkError(db, table, payload);
-              if (fk) return { data: null, error: fk };
-              applyUpdate(db, table, u.id, clone(payload), filters); saveDB(db);
-              return { data: null, error: null };
+              return transact(function (db) {
+                var fk = catFkError(db, table, payload);
+                if (fk) return { data: null, error: fk };
+                applyUpdate(db, table, u.id, clone(payload), filters);
+                return { data: null, error: null };
+              });
             });
           },
           delete: function () {
             return thenable(function (filters) {
               var u = getSess(); if (!u) return { data: null, error: { message: 'ikke innlogget' } };
-              var db = loadDB(); applyDelete(db, table, u.id, filters); saveDB(db);
-              return { data: null, error: null };
+              return transact(function (db) {
+                applyDelete(db, table, u.id, filters);
+                return { data: null, error: null };
+              });
             });
           },
           select: function () {
@@ -2881,19 +3032,20 @@
         return serverCall(function () {
           var u = getSess();
           if (!u) return { data: null, error: { message: 'ikke innlogget' } };
-          // Databasen leses FØRST når kallet «når serveren» (etter forsinkelsen),
-          // så serialiserte kall ser hverandres skrivinger — som ekte Postgres.
-          var db = loadDB();
-          /* Økten registreres når den først RØRER serveren. En test som seedet
-             `hk-mock-session` selv (tests/CLAUDE.md) har ingen `session_id`;
-             her får den en, slik at «Innloggede enheter» virker uten at hver
-             eneste fikstur må kjenne øktlaget. */
-          sessionId(db, u);
-          var h = rpcHandlers(db, u.id)[name];
-          if (!h) return { data: null, error: { message: 'ukjent rpc: ' + name } };
-          var data = h(params || {});
-          saveDB(db);
-          return { data: data, error: null };
+          /* Databasen leses FØRST når kallet «når serveren» (etter
+             forsinkelsen), så serialiserte kall ser hverandres skrivinger — som
+             ekte Postgres. `transact` gjør i tillegg les–endre–skriv trygg mot
+             en annen FANE som skriver i det samme øyeblikket. */
+          return transact(function (db) {
+            /* Økten registreres når den først RØRER serveren. En test som seedet
+               `hk-mock-session` selv (tests/CLAUDE.md) har ingen `session_id`;
+               her får den en, slik at «Innloggede enheter» virker uten at hver
+               eneste fikstur må kjenne øktlaget. */
+            sessionId(db, u);
+            var h = rpcHandlers(db, u.id)[name];
+            if (!h) return { data: null, error: { message: 'ukjent rpc: ' + name } };
+            return { data: h(params || {}), error: null };
+          });
         });
       },
       channel: function (nm) {
@@ -2912,5 +3064,14 @@
     return client;
   }
 
-  window.HK_MOCK = { createClient: createClient, _loadDB: loadDB, _saveDB: saveDB };
+  window.HK_MOCK = {
+    createClient: createClient, _loadDB: loadDB, _saveDB: saveDB,
+    /* Les–endre–skriv fra en TEST, med den samme låsen appen bruker. Står det
+       mer enn én fane åpen, er dette veien inn: `_loadDB` + `_saveDB` er to
+       skritt, og en runde fra den andre fanen imellom overskriver endringen. */
+    _edit: function (fn) { return transact(function (db) { return fn(db); }); },
+    // Nettbrudd på bestilling — se serverCall(). Brukes av
+    // tests/notes-collab.test.js til å måle reconnect etter et kort brudd.
+    setOffline: setOffline, isOffline: function () { return OFFLINE; },
+  };
 })();

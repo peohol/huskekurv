@@ -5,7 +5,7 @@ kode, innramming og eksfiltrering ligger i responsheaderne og i hvilke
 tredjeparter appen i det hele tatt har lov til å snakke med. Filene:
 `vercel.json` (headerne i produksjon), `index.html` (den samme policyen som
 `<meta>`), `styles.css` + `assets/fonts/` (den selvhostede webfonten),
-`vendor/` (de lokale kopiene av Supabase og Smett), `build.js` (fjerner testmodusen fra
+`vendor/` (de lokale kopiene av Supabase, Smett og Yjs), `build.js` (fjerner testmodusen fra
 deployen), `tests/security-headers.test.js` + `tests/csp-enforced.test.js`.
 
 ## Hvorfor policyen står to steder
@@ -167,11 +167,12 @@ DENY` som reserve. Ingen del av Huskis er ment å vises inne i en annen side.
 
 ## Bibliotekene i `vendor/`: lokale kopier, eksakte versjoner
 
-Appen har to tredjepartsbiblioteker, og begge ligger i repoet, ikke på et CDN:
+Appen har tre tredjepartsbiblioteker, og alle ligger i repoet, ikke på et CDN:
 
 ```html
 <script src="vendor/supabase-js-2.111.0.js"></script>
 <script src="vendor/smett-0.2.0.js"></script>
+<script src="vendor/yjs-13.6.32.js"></script>
 ```
 
 Supabase-filen er en **uendret kopi** av `dist/umd/supabase.js` fra npm-pakken
@@ -191,10 +192,19 @@ nytt. Smett pinner esbuild til en eksakt versjon nettopp for at påstanden skal
 holde over tid — en minifiserer kan endre output i en patch-utgivelse, og et
 `^`-spenn ville latt samme kildekode gi en annen fil.
 
-Smett MÅ lastes som et klassisk skript FØR `app.js`: den definerer den globale
-`Smett`, og app.js leser den mens den kjører. Å gjøre `app.js` til et
-modulskript i stedet er ikke et alternativ — et modulskript kjører etter ALLE
-klassiske skript på siden, altså også etter `update-check.js`.
+Yjs-filen — samskrivingen i notatene, se [`notater-plan.md`](notater-plan.md) —
+er publisert på npm, men bare som ESM og CommonJS: det finnes ingen ferdig
+IIFE-bygg å kopiere. Kopien er derfor esbuild-bunten av pakken, laget av ett
+inngangspunkt som re-eksporterer HELE biblioteket (`export * from 'yjs'`) med
+flaggene som står i guarden. Hele pakken med vilje: en håndplukket
+eksportliste ville gjort bytene avhengige av hvilke navn Huskis tilfeldigvis
+brukte den dagen, og en ny bruk senere ville endret fila uten at biblioteket
+hadde endret seg. Som for Smett er esbuild-versjonen en del av påstanden.
+
+Smett og Yjs MÅ lastes som klassiske skript FØR `app.js`: de definerer de
+globale `Smett` og `Yjs`, og app.js leser dem mens den kjører. Å gjøre `app.js`
+til et modulskript i stedet er ikke et alternativ — et modulskript kjører etter
+ALLE klassiske skript på siden, altså også etter `update-check.js`.
 
 `vercel.json` gir `/vendor/(.*)` langtidscache (`immutable`). Filene der får
 ikke `?b=<build-ID>` som resten av JS-en: versjonen står allerede i navnet, så
@@ -204,8 +214,8 @@ URL-en endrer seg av seg selv når innholdet gjør det.
 sammenligner med sjekksummen for den versjonen (`VENDORED`, der hver oppføring
 også sier hvor bytene kommer fra). En redigert, byttet eller uregistrert kopi
 feiler i CI. Testen slår også fast at `script-src` ikke har noen eksterne
-kilder, at `index.html` ikke laster skript fra en fremmed vert, at Smett lastes
-før `app.js`, og at ingen av skriptene er `type="module"`.
+kilder, at `index.html` ikke laster skript fra en fremmed vert, at Smett og Yjs
+lastes før `app.js`, og at ingen av skriptene er `type="module"`.
 
 **Oppgradering av Supabase** er fire steg:
 

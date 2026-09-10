@@ -100,13 +100,15 @@ async function byggNotat(p, mål) {
     const n = H.addNote();
     H.closeNoteEditor();
     n.title = 'Blodprøver';
-    n.doc = { v: 1, blocks: [
+    // Hele dokumentet byttes ut gjennom appens egen vei: `setNoteDoc` skriver
+    // det inn i samskrivingen OG i projeksjonen (docs/notater-plan.md).
+    H.setNoteDoc(n.id, { v: 1, blocks: [
       { t: 'p', c: [{ s: 'Se ' }, { s: 'håndboken', url: adresse }, { s: ' for referanseområder.' }] },
       { t: 'p', c: [{ s: 'Skriv til ' }, { s: 'laben', url: 'mailto:lab@example.com' }] },
       // Rent avsnitt: her lages en NY lenke i punkt 10, uten å pakke en
       // eksisterende lenke inn i en annen.
       { t: 'p', c: [{ s: 'Referanseområdene revideres årlig.' }] },
-    ] };
+    ] });
     H.save();
     H.renderNotes();
     return { proj: proj.id, note: n.id };

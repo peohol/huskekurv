@@ -762,6 +762,8 @@ notat kan stå uten eksplisitt eier, for bokhylleeierne dekker dem.
 |---|---|---|---|
 | **lese** | rolle på bokhyllen | rolle på notatboken **eller** bokhyllen | rolle på notatet, notatboken **eller** bokhyllen |
 | **redigere innhold** | lesetilgang + (eier ELLER ikke effektivt låst) | ⟶ | ⟶ |
+| **skrive i notatet samtidig med andre** | – | – | redigeringsrett (`note_crdt_push`/`_compact`) |
+| **motta andres tegn mens de skrives** | – | – | lesetilgang (`note_crdt_load`/`_since` + realtime) |
 | **opprette under** | redigeringsrett på bokhyllen | redigeringsrett på notatboken | – |
 | **omrokkere** | alltid (PERSONLIG rekkefølge) | redigeringsrett på bokhyllen | redigeringsrett på forelderen |
 | **arkivere / hente ut av arkivet** | redigeringsrett | ⟶ | ⟶ |
@@ -788,6 +790,16 @@ ikke sikte på noe serveren ville avvist. Se
 **Et rent DIREKTE medlem kan aldri slette objektet for alle.** Samme grense som
 holder et direkte mappemedlem fra å slette mappen: deler man et notat med noen,
 deler man lesing og redigering — ikke retten til å ta det fra resten.
+
+**Samskrivingen har ingen egne rettigheter.** Å skrive i et notat sammen med
+andre er `can_edit_content` på notatet, og å motta det de skriver er
+lesetilgang — de samme to portene som ellers, håndhevet både av policyen på
+loggen (som er dét realtime spør) og av RPC-ene som bærer innholdet. En ren
+LESER får derfor live-oppdateringene og kommer ikke forbi editoren heller: en
+skriving rett mot serveren avvises. Trekkes tilgangen tilbake mens editoren står
+åpen, slutter leveringen i samme øyeblikk, bildet lukkes, og verken køen eller
+den lokale kopien av innholdet blir liggende igjen på enheten. Autoritativt for
+mekanikken: [`notater-plan.md`](notater-plan.md) → «Sanntids samskriving».
 
 ### Flytting mellom foreldre med ulike delingsforhold
 

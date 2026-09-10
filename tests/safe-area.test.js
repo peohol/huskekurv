@@ -536,7 +536,7 @@ async function run(label, viewport, touchMode) {
     H.setActiveNoteFolder(null);
     const n = H.addNote();          // åpner editoren med det samme
     n.title = 'Sonen';
-    n.doc = { v: 1, blocks: [{ t: 'p', c: [{ s: 'Tekst nok til å fylle arket. '.repeat(30) }] }] };
+    H.setNoteDoc(n.id, { v: 1, blocks: [{ t: 'p', c: [{ s: 'Tekst nok til å fylle arket. '.repeat(30) }] }] });
     H.renderNotes();
   });
   await p.waitForFunction(() => !document.getElementById('note-editor').hidden,

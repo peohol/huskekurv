@@ -15824,6 +15824,246 @@
   }
 
   /* ------------------------------------------------------------
+     NOTATDOKUMENTET SOM CRDT — BROEN MELLOM MODELLEN OG Yjs
+     ------------------------------------------------------------
+     To personer med skriverett skal kunne skrive i det SAMME notatet samtidig
+     uten at den enes tegn forsvinner. Det klarer ikke ett felt på
+     innholdsregisteret: felt-LWW velger én vinner per dokument. Derfor har
+     notatinnholdet fått et andre lag — en CRDT — og denne seksjonen er broen
+     mellom Huskis' egen dokumentmodell og den.
+
+     VALGET ER Yjs (`vendor/yjs-13.6.32.js`), ikke en hjemmelaget tekst-CRDT.
+     Flettingen av samtidig tekst er den ene delen av dette som er lett å gjøre
+     nesten riktig og vanskelig å gjøre riktig; den skal ikke skrives her.
+
+     BROEN, IKKE EN NY EDITOR. Editoren er den samme `contenteditable`-en som
+     før, og `noteDocFromEl()` er fortsatt den ene trakten inn. Broen legger seg
+     UNDER den: etter hver endring leses DOM-et til modellen som før, modellen
+     sammenlignes med CRDT-ens nåværende innhold, og BARE forskjellen skrives
+     inn. Formatering, innliming, utklippstavle og lesemodus er dermed uendret
+     — de kjenner ikke CRDT-en.
+
+     FASONGEN I Yjs er flat med vilje:
+
+       ydoc.getArray('blocks') : Y.Array<Y.Map>
+       Y.Map: { t: 'p'|'h1'|'h2'|'h3'|'ul'|'ol'|'hr', x: Y.Text }
+
+     Et LISTEPUNKT er sin egen blokk (`t: 'ul'`/`'ol'`), ikke et element i en
+     nøstet array. Det er både enklere og MER riktig: to som skriver i hvert
+     sitt punkt i den samme lista rører da hver sin `Y.Text` og kan ikke komme
+     i veien for hverandre. Dokumentmodellens `ul`/`ol`-blokker med `items` er
+     bare grupperingen av naboer med samme type, og den gjenskapes på vei ut.
+
+     MARKERINGENE er Y.Text-attributter med nøyaktig de samme navnene som i
+     modellen (`b`, `i`, `u`, `sup`, `sub`, `url`), så en `toDelta()` ER
+     kjøringene våre. */
+  const NOTE_Y_ROOT = 'blocks';
+  const NOTE_Y_SEED_CLIENT = 0;   // se noteYSeed(): frøet må bli BIT-IDENTISK
+  const noteYLib = () => (typeof window !== 'undefined' ? window.Yjs : null);
+
+  /* Dokument → flat blokkliste (ett listepunkt = én blokk). */
+  function noteDocToFlat(doc) {
+    const out = [];
+    ((doc && doc.blocks) || []).forEach((b) => {
+      if (b.t === 'hr') { out.push({ t: 'hr', runs: [] }); return; }
+      if (b.t === 'ul' || b.t === 'ol') {
+        (b.items || []).forEach((runs) => out.push({ t: b.t, runs: runs || [] }));
+        return;
+      }
+      out.push({ t: NOTE_TEXT_BLOCKS.indexOf(b.t) === -1 ? 'p' : b.t, runs: b.c || [] });
+    });
+    return out;
+  }
+  /* Flat blokkliste → dokument. Naboer med samme listetype samles igjen. */
+  function noteFlatToDoc(flat) {
+    const doc = emptyNoteDoc();
+    (flat || []).forEach((f) => {
+      if (f.t === 'hr') { doc.blocks.push({ t: 'hr' }); return; }
+      if (f.t === 'ul' || f.t === 'ol') {
+        const prev = doc.blocks[doc.blocks.length - 1];
+        if (prev && prev.t === f.t) prev.items.push(f.runs || []);
+        else doc.blocks.push({ t: f.t, items: [f.runs || []] });
+        return;
+      }
+      doc.blocks.push({ t: f.t, c: f.runs || [] });
+    });
+    return sanitizeNoteDoc(doc);
+  }
+
+  /* ---- Kjøringer ↔ Yjs-delta ---- */
+  function noteRunAttrs(run) {
+    const a = {};
+    NOTE_MARKS.forEach((m) => { if (run && run[m]) a[m] = 1; });
+    if (run && run.url) a.url = run.url;
+    return a;
+  }
+  /* Alle attributtene, med `null` der markeringen IKKE skal stå. `null` er det
+     Yjs leser som «fjern» — utelater vi navnet, blir markeringen stående. */
+  function noteFullAttrs(a) {
+    const out = {};
+    NOTE_MARKS.forEach((m) => { out[m] = a && a[m] ? 1 : null; });
+    out.url = (a && a.url) || null;
+    return out;
+  }
+  const noteSameAttrs = (a, b) => NOTE_MARKS.every((m) => !!(a && a[m]) === !!(b && b[m]))
+    && ((a && a.url) || '') === ((b && b.url) || '');
+  function noteDeltaToRuns(delta) {
+    const runs = [];
+    (delta || []).forEach((op) => {
+      if (typeof op.insert !== 'string' || !op.insert) return;
+      runs.push(Object.assign({ s: op.insert }, noteRunAttrs(op.attributes || {})));
+    });
+    return sanitizeNoteRuns(runs);
+  }
+  const noteDeltaText = (delta) => (delta || [])
+    .map((op) => (typeof op.insert === 'string' ? op.insert : '')).join('');
+  /* Attributtene tegn for tegn — grunnlaget for å finne NØYAKTIG de områdene
+     som må formateres om. */
+  function noteAttrsPerChar(runs) {
+    const out = [];
+    (runs || []).forEach((r) => {
+      const a = noteRunAttrs(r);
+      for (let i = 0; i < (r.s || '').length; i++) out.push(a);
+    });
+    return out;
+  }
+  function noteDeltaAttrsPerChar(delta) {
+    const out = [];
+    (delta || []).forEach((op) => {
+      if (typeof op.insert !== 'string') return;
+      const a = noteRunAttrs(op.attributes || {});
+      for (let i = 0; i < op.insert.length; i++) out.push(a);
+    });
+    return out;
+  }
+
+  /* ---- Y.Text ← kjøringer: minste forskjell, ikke «skriv alt på nytt» ----
+     En full utskiftning ville fungert lokalt og vært katastrofal sammen: den
+     ville slettet HVERT tegn den andre nettopp skrev og satt inn våre i
+     stedet. Derfor to trinn, begge minimale: teksten (felles for- og
+     etterstavelse, bare midten byttes) og deretter markeringene (kun de
+     områdene som faktisk avviker). */
+  function noteYSyncText(ytext, runs) {
+    const oldText = noteDeltaText(ytext.toDelta());
+    const newText = noteRunsText(runs);
+    const want = noteAttrsPerChar(runs);
+    if (oldText !== newText) {
+      let a = 0;
+      const max = Math.min(oldText.length, newText.length);
+      while (a < max && oldText.charCodeAt(a) === newText.charCodeAt(a)) a++;
+      let z = 0;
+      while (z < max - a
+             && oldText.charCodeAt(oldText.length - 1 - z) === newText.charCodeAt(newText.length - 1 - z)) z++;
+      const del = oldText.length - a - z;
+      const ins = newText.slice(a, newText.length - z);
+      if (del > 0) ytext.delete(a, del);
+      if (ins) ytext.insert(a, ins, noteFullAttrs(want[a] || {}));
+    }
+    const have = noteDeltaAttrsPerChar(ytext.toDelta());
+    let i = 0;
+    while (i < want.length) {
+      if (noteSameAttrs(want[i], have[i])) { i++; continue; }
+      let j = i + 1;
+      while (j < want.length && !noteSameAttrs(want[j], have[j])
+             && noteSameAttrs(want[j], want[i])) j++;
+      ytext.format(i, j - i, noteFullAttrs(want[i]));
+      i = j;
+    }
+  }
+  function noteYNewBlock(Y, f) {
+    const m = new Y.Map();
+    m.set('t', f.t || 'p');
+    const t = new Y.Text();
+    m.set('x', t);
+    if ((f.runs || []).length) noteYSyncText(t, f.runs);
+    return m;
+  }
+  function noteYArr(ydoc) { return ydoc.getArray(NOTE_Y_ROOT); }
+  function noteYReadFlat(ydoc) {
+    const out = [];
+    noteYArr(ydoc).toArray().forEach((m) => {
+      if (!m || typeof m.get !== 'function') return;
+      const t = NOTE_BLOCK_TYPES.indexOf(m.get('t')) === -1 ? 'p' : m.get('t');
+      const x = m.get('x');
+      out.push({ t, runs: t === 'hr' ? [] : noteDeltaToRuns(x && x.toDelta ? x.toDelta() : []) });
+    });
+    return out;
+  }
+  const noteYDoc = (ydoc) => noteFlatToDoc(noteYReadFlat(ydoc));
+  const noteFlatSig = (f) => (f.t || 'p') + ' ' + JSON.stringify(f.runs || []);
+
+  /* ---- CRDT ← modellen: skriv inn forskjellen ----
+     Blokkene sammenlignes med felles for- og etterstavelse, og BARE midten
+     røres. Å trykke Enter midt i et dokument blir dermed «del denne blokken og
+     sett inn én», ikke «bygg alle blokkene under på nytt».
+     Returnerer sant hvis noe faktisk ble endret. */
+  function noteYWriteFlat(ydoc, next, origin) {
+    const Y = noteYLib();
+    if (!Y) return false;
+    const arr = noteYArr(ydoc);
+    const cur = noteYReadFlat(ydoc);
+    let p = 0;
+    while (p < cur.length && p < next.length && noteFlatSig(cur[p]) === noteFlatSig(next[p])) p++;
+    let s = 0;
+    while (s < cur.length - p && s < next.length - p
+           && noteFlatSig(cur[cur.length - 1 - s]) === noteFlatSig(next[next.length - 1 - s])) s++;
+    const oldMid = cur.length - p - s;
+    const newMid = next.length - p - s;
+    if (!oldMid && !newMid) return false;
+    ydoc.transact(() => {
+      const pair = Math.min(oldMid, newMid);
+      for (let i = 0; i < pair; i++) {
+        const m = arr.get(p + i);
+        const f = next[p + i];
+        if (m.get('t') !== f.t) m.set('t', f.t);
+        const x = m.get('x');
+        if (x && x.toDelta) noteYSyncText(x, f.t === 'hr' ? [] : f.runs);
+      }
+      if (oldMid > newMid) arr.delete(p + pair, oldMid - newMid);
+      else if (newMid > oldMid) {
+        arr.insert(p + pair, next.slice(p + pair, p + newMid).map((f) => noteYNewBlock(Y, f)));
+      }
+    }, origin || 'local');
+    return true;
+  }
+
+  /* ---- Frøet ----
+     Et notat som ble skrevet FØR samskrivingen fantes, har bare `body`. Første
+     klient som åpner det må så CRDT-en fra dokumentet — og to klienter kan
+     gjøre det i samme øyeblikk, hver på sin kant av nettet.
+
+     Derfor er frøet DETERMINISTISK: klient-id-en settes til 0 og hele frøet
+     skrives i én transaksjon, slik at to klienter som sår fra det SAMME
+     dokumentet lager bit-identiske operasjoner. Yjs identifiserer en operasjon
+     med (klient-id, teller), så de to frøene er da den samme operasjonen — og
+     å flette dem er en no-op i stedet for en dublett av hele notatet. Etterpå
+     får dokumentet en tilfeldig klient-id, som alle andre. */
+  function noteYEmpty() {
+    const Y = noteYLib();
+    return Y ? new Y.Doc() : null;
+  }
+  function noteYSeed(doc) {
+    const Y = noteYLib();
+    if (!Y) return null;
+    const ydoc = new Y.Doc();
+    ydoc.clientID = NOTE_Y_SEED_CLIENT;
+    const flat = noteDocToFlat(sanitizeNoteDoc(doc));
+    if (flat.length) {
+      ydoc.transact(() => {
+        noteYArr(ydoc).insert(0, flat.map((f) => noteYNewBlock(Y, f)));
+      }, 'seed');
+    }
+    return ydoc;
+  }
+  /* Ny, tilfeldig klient-id etter at frøet er sådd. Yjs trekker den selv i
+     konstruktøren, så vi låner den fra et tomt dokument i stedet for å finne
+     på vår egen tilfeldighetskilde. */
+  function noteYRandomizeClient(ydoc) {
+    const fresh = noteYEmpty();
+    if (fresh) { ydoc.clientID = fresh.clientID; fresh.destroy(); }
+  }
+
+  /* ------------------------------------------------------------
      UTKLIPPSTAVLEN — HELE NOTATET UT, OG FREMMED INNHOLD INN
      ------------------------------------------------------------
      Fire konverteringer, hver med ÉN retning og ett ansvar:
@@ -18431,6 +18671,8 @@
   const noteBackBtn = document.getElementById('note-back');
   const noteToolsEl = document.getElementById('note-tools');
   const noteStatusEl = document.getElementById('note-save-status');
+  // «Andre redigerer nå» — diskret, og uten identitet (se refreshNoteLiveChip).
+  const noteLiveEl = document.getElementById('note-live');
   const noteTitleInput = document.getElementById('note-title-input');
   const noteDocEl = document.getElementById('note-doc');
   const noteLinkPanel = document.getElementById('note-link-panel');
@@ -18484,13 +18726,34 @@
     else { main.inert = false; main.removeAttribute('aria-hidden'); }
   }
 
+  let noteStatusShown = '';
   function setNoteStatus(key) {
     if (!noteStatusEl) return;
+    noteStatusShown = key || '';
     clearTimeout(noteStatusTimer);
     noteStatusEl.textContent = key ? tr(key) : '';
     if (key === 'notes.saved') {
       noteStatusTimer = setTimeout(() => { noteStatusEl.textContent = ''; }, NOTE_SAVED_LINGER);
     }
+  }
+  /* «Lagret» skal bety LAGRET. Statusen er derfor ikke en påstand noen setter,
+     men en avledning av det som faktisk står igjen: en ventende skriving, en
+     ventende flush, eller rader i samskrivingskøen som ennå ikke har nådd
+     kontoen. Kommer køen ikke fram, sier statusen nettopp det — «Lagret på
+     denne enheten» — i stedet for å love noe den ikke vet
+     (docs/notater-plan.md). */
+  function refreshNoteSaveStatus() {
+    if (!noteEditorOpen() || !noteStatusEl) return;
+    const n = noteOpenId ? findNoteById(noteOpenId) : null;
+    if (!noteEditable(n)) { setNoteStatus('notes.readOnly'); return; }
+    const venter = !!noteSaveTimer || !!noteFlushTimer || noteOpsFor(noteOpenId).length > 0;
+    const key = noteOpsBlocked ? 'notes.savedDevice' : venter ? 'notes.saving' : 'notes.saved';
+    /* Statusen males på nytt ved hver synk-runde — hvert femte sekund. Er
+       tilstanden den SAMME, skal den ikke skrives om: «Lagret» slukner etter
+       et par sekunder med vilje, og en ny skriving av den samme teksten ville
+       tent den igjen i det uendelige. */
+    if (key === noteStatusShown) return;
+    setNoteStatus(key);
   }
 
   function openNoteEditor(id, opts) {
@@ -18512,8 +18775,15 @@
     document.body.classList.add('note-editing');
     setNoteEditorInert(true);
     noteTitleInput.value = n.title || '';
+    /* SAMSKRIVINGEN ÅPNES FØRST, og editoren males fra CRDT-en — ikke fra
+       `body`. De to er normalt like (projeksjonen skrives av hver lagring),
+       men er de det ikke, er CRDT-en fasiten: `body` kan ha tapt en LWW-runde
+       mot en annen enhet mens tegnene våre fortsatt lever i loggen. Økten
+       bygges SYNKRONT av det enheten allerede har, så åpningen er like rask
+       uten nett; serverens logg kommer etterpå, den vanlige fjern-veien. */
+    const live = openNoteLive(n);
     noteApplyingDoc = true;
-    noteDocIntoEl(noteDocEl, n.doc);
+    noteDocIntoEl(noteDocEl, live ? noteYDoc(live.ydoc) : n.doc);
     noteApplyIndent();
     noteApplyingDoc = false;
     noteSavedRange = null;
@@ -18525,6 +18795,7 @@
     try { document.execCommand('defaultParagraphSeparator', false, 'p'); } catch (e) { /* ignore */ }
     noteEditorBody.scrollTop = 0;
     applyNoteEditorAccess();
+    refreshNoteLiveChip();
     if (opts.focusTitle) noteTitleInput.focus();
     else noteDocEl.focus();
     refreshNoteTools();
@@ -18533,6 +18804,9 @@
   function closeNoteEditor() {
     if (!noteEditorOpen()) return;
     flushNoteSave();
+    closeNoteLive();
+    pushNoteOps();   // det siste man skrev skal ut med én gang, ikke ved neste runde
+    if (noteLiveEl) noteLiveEl.hidden = true;
     const back = noteReturn;
     const lukketId = noteOpenId;
     noteOpenId = null;
@@ -18569,15 +18843,25 @@
   /* ---- Autosave ---- */
   function scheduleNoteSave() {
     if (!noteOpenId || noteApplyingDoc) return;
+    scheduleNoteFlush();   // DOM → CRDT går raskere enn lagringen av projeksjonen
     setNoteStatus('notes.saving');
     clearTimeout(noteSaveTimer);
     noteSaveTimer = setTimeout(writeNoteNow, NOTE_SAVE_DEBOUNCE);
   }
   function flushNoteSave() {
+    if (noteFlushPending()) noteLiveFlush();
     if (!noteSaveTimer) return;
     clearTimeout(noteSaveTimer);
     writeNoteNow();
   }
+  /* DOM-ET LESES INN I CRDT-EN BARE NÅR EDITOREN HAR SAGT AT NOEN SKREV.
+     `noteFlushTimer` er nettopp det signalet — den settes av `scheduleNoteSave`,
+     som hver eneste inngang i editoren går gjennom. Uten vilkåret ville en
+     flush kunnet trigges av noe utenfor editoren som hadde rørt DOM-et (et
+     skript i en konsoll, en utvidelse), og da hadde vi skrevet DEN endringen
+     inn i dokumentet i stedet for brukerens. Trakten inn er editorens, ikke
+     DOM-ets. */
+  const noteFlushPending = () => !!noteFlushTimer;
   /* Er notatet redigerbart for MEG akkurat nå? Serverens capability er
      autoritativ; mangler den, følger anslaget den lokale låsen — aldri «alt er
      lov» (docs/rettigheter-og-deling.md del 3). */
@@ -18604,7 +18888,18 @@
         else el.setAttribute('tabindex', '0');
       });
     }
-    if (!on) setNoteStatus('notes.readOnly');
+    /* TITTELEN ER ET NAVN, og flettes som alle andre navn i appen (felt-LWW) —
+       ikke i CRDT-en. Da må feltet oppdateres når en annen enhet døper notatet
+       om mens editoren står åpen. To ting holder det tilbake, og begge er
+       nødvendige: at man står i feltet, og at en lagring fortsatt venter. Uten
+       den siste ville en synk-runde midt i skrivepausen rullet tilbake det man
+       nettopp skrev, siden `state` ennå ikke har fått det. */
+    if (noteTitleInput && n && !noteSaveTimer && document.activeElement !== noteTitleInput
+        && noteTitleInput.value !== (n.title || '')) {
+      noteTitleInput.value = n.title || '';
+    }
+    if (!on) { setNoteStatus('notes.readOnly'); return; }
+    refreshNoteSaveStatus();
   }
   /* Notatet kan forsvinne under editoren: slettet for alle, eller tilgangen
      trukket tilbake. En gammel lokal kopi skal aldri bli stående redigerbar,
@@ -18615,6 +18910,12 @@
     if (noteOpenId && findNoteById(noteOpenId)) { applyNoteEditorAccess(); return; }
     clearTimeout(noteSaveTimer);
     noteSaveTimer = null;
+    clearTimeout(noteFlushTimer);
+    noteFlushTimer = null;
+    // Notatet er borte for oss — slettet for alle, eller tilgangen trukket
+    // tilbake. Da skal verken samskrivingskøen eller den lokale kopien av
+    // innholdet bli liggende igjen i enhetens lagring.
+    if (noteOpenId) forgetNoteCollab(noteOpenId);
     noteOpenId = null;
     closeNoteEditor();
   }
@@ -18624,19 +18925,688 @@
     if (!n) return;
     if (!noteEditable(n)) return;   // låst for meg: serveren ville rullet den tilbake
     const title = noteTitleInput.value.trim();
-    const doc = noteDocFromEl(noteDocEl);
+    /* PROJEKSJONEN SKRIVES FRA CRDT-EN, ikke rett fra DOM-et: `body` skal alltid
+       være nøyaktig det samskrivingen er blitt enig om, aldri en halv utgave av
+       det. Flushen først, så dokumentet leses ut igjen. Uten en levende økt
+       (Yjs mangler) faller vi tilbake på DOM-et, som før. */
+    const live = noteLive && noteLive.id === noteOpenId ? noteLive : null;
+    if (live) noteLiveFlush();
+    const doc = live ? noteYDoc(live.ydoc) : noteDocFromEl(noteDocEl);
     // Ingen endring → ingen skriving. Ellers ville hvert tastetrykk som ikke
     // endret noe (piltaster, markering) stemplet raden på nytt og gitt synken
     // en runde uten innhold.
     if (n.title === title && JSON.stringify(n.doc) === JSON.stringify(doc)) {
-      setNoteStatus('notes.saved');
+      refreshNoteSaveStatus();
       return;
     }
     n.title = title;
     n.doc = doc;
     stampContent(n);
     save();
-    setNoteStatus('notes.saved');
+    refreshNoteSaveStatus();
+  }
+
+  /* ------------------------------------------------------------
+     SAMSKRIVINGSØKTEN — ETT ÅPENT NOTAT, FLERE SKRIVERE
+     ------------------------------------------------------------
+     Åpner man et notat, åpnes samtidig en LIVE-ØKT for det: et Yjs-dokument i
+     minnet, en logg av oppdateringer i databasen (`note_updates`), et
+     realtime-abonnement på den loggen og et lite sikkerhetsnett av et poll.
+
+     RETNINGENE ER TO, og de er strengt adskilt:
+
+       DOM → CRDT   `noteLiveFlush()` leser editoren med `noteDocFromEl()` —
+                    den samme trakten som før — og skriver BARE forskjellen
+                    inn i Yjs. Én rad legges i køen for hver slik endring.
+       CRDT → DOM   `noteLiveApply()` kjører først en flush (så ingen
+                    tastetrykk som ligger i DOM-et blir borte), fletter inn
+                    det som kom, og maler editoren på nytt med markøren
+                    flyttet dit den hører hjemme etterpå.
+
+     LOGGEN ER APPEND-ONLY. Ingen skriving overskriver en annen — verken i
+     databasen eller mellom to enheter — og en oppdatering kan brukes to
+     ganger uten virkning. Det er dét som gjør reconnect etter et nettbrudd
+     trygt: enheten sender bare køen sin, og fletter inn det den gikk glipp av.
+
+     `notes.body` skrives fortsatt, men er nå PROJEKSJONEN av CRDT-en:
+     søkeindeks, utdrag på kortet, utklippstavle og offline-kopi. Konflikten
+     avgjøres i loggen, ikke der. */
+  const NOTE_LIVE_FLUSH = 140;        // DOM → CRDT, kort nok til å føles direkte
+  const NOTE_LIVE_POLL = 2500;        // sikkerhetsnett ved siden av realtime
+  const NOTE_LIVE_OTHERS_MS = 9000;   // hvor lenge «andre redigerer» blir stående
+  const NOTE_LIVE_COMPACT_AT = 30;    // rader før loggen klappes sammen
+  const NOTE_LIVE_SNAP_DEBOUNCE = 3000;
+  const NOTE_OPS_MAX = 60;            // rader per push (en tømt offline-kø)
+  const NOTE_SNAP_MAX = 512 * 1024;   // største lokale øyeblikksbilde vi bufrer
+  const NOTE_SNAP_KEEP = 24;          // antall notater i den lokale bufferen
+
+  const noteOpsKey = () => 'hk-note-ops:' + (authUser ? authUser.id : '-');
+  const noteSnapKey = () => 'hk-note-crdt:' + (authUser ? authUser.id : '-');
+
+  let noteLive = null;        // den åpne øktens tilstand (se openNoteLive)
+  let noteOps = [];           // [{ id, note, u }] — ventende rader
+  let noteOpsChain = Promise.resolve();  // pushene går på rekke, aldri om hverandre
+  let noteOpsBlocked = false; // siste push nådde ikke fram / ble avvist
+  let noteOpsTimer = null;
+  let noteFlushTimer = null;
+
+  function readJsonStore(key, fallback) {
+    try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+    catch (e) { return fallback; }
+  }
+  function writeJsonStore(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+    catch (e) { return false; }
+  }
+
+  /* ---- Køen av rader som ennå ikke har nådd kontoen ----
+     Den ligger i enhetens lagring, ikke bare i minnet: skriver man offline og
+     lukker appen, skal tegnene fortsatt komme fram neste gang enheten er på
+     nett. Køen bæres av id-er klienten lager selv, så en push som ble sendt
+     uten at svaret kom fram kan sendes på nytt uten å lage dubletter. */
+  function loadNoteOps() {
+    const raw = readJsonStore(noteOpsKey(), []);
+    noteOps = Array.isArray(raw)
+      ? raw.filter((o) => o && o.id && o.note && typeof o.u === 'string') : [];
+  }
+  function saveNoteOps() { writeJsonStore(noteOpsKey(), noteOps); }
+  const noteOpsFor = (id) => noteOps.filter((o) => o.note === id);
+  function dropNoteOpsFor(id) {
+    if (!noteOps.some((o) => o.note === id)) return;
+    noteOps = noteOps.filter((o) => o.note !== id);
+    saveNoteOps();
+  }
+  function queueNoteOp(noteId, bytes) {
+    noteOps.push({ id: uid(), note: noteId, u: bytesB64url(bytes) });
+    saveNoteOps();
+    clearTimeout(noteOpsTimer);
+    noteOpsTimer = setTimeout(() => { noteOpsTimer = null; pushNoteOps(); }, 300);
+    refreshNoteSaveStatus();
+  }
+
+  /* Den lokale kopien av CRDT-en, per notat. Uten den ville en enhet som
+     åpner et notat UTEN nett vært nødt til å så det på nytt fra `body` — og et
+     nytt frø ved siden av et gammelt gir dobbelt innhold når de møtes. Med den
+     har enheten sin egen historikk å flette videre på. */
+  function readNoteSnap(id) {
+    const all = readJsonStore(noteSnapKey(), {});
+    const row = all && all[id];
+    if (!row || typeof row.u !== 'string') return null;
+    try { return b64urlBytes(row.u); } catch (e) { return null; }
+  }
+  function writeNoteSnap(id, bytes) {
+    if (!bytes || bytes.length > NOTE_SNAP_MAX) return;
+    const all = readJsonStore(noteSnapKey(), {}) || {};
+    all[id] = { u: bytesB64url(bytes), at: Date.now() };
+    const keys = Object.keys(all);
+    if (keys.length > NOTE_SNAP_KEEP) {
+      keys.sort((a, b) => (all[b].at || 0) - (all[a].at || 0))
+        .slice(NOTE_SNAP_KEEP).forEach((k) => { delete all[k]; });
+    }
+    writeJsonStore(noteSnapKey(), all);
+  }
+  function dropNoteSnap(id) {
+    const all = readJsonStore(noteSnapKey(), {});
+    if (!all || !all[id]) return;
+    delete all[id];
+    writeJsonStore(noteSnapKey(), all);
+  }
+  /* Ved utlogging skal INGEN del av forrige brukers notater bli liggende: både
+     køen og de lokale kopiene tilhører kontoen, ikke enheten. */
+  function clearNoteCollabStore() {
+    const opsKey = noteOpsKey(); const snapKey = noteSnapKey();
+    noteOps = []; noteOpsBlocked = false;
+    try { localStorage.removeItem(opsKey); localStorage.removeItem(snapKey); } catch (e) { /* ignore */ }
+  }
+
+  /* ---- Push: køen inn i loggen ----
+     Radene sendes PER NOTAT og i én RPC, slik at en tømt offline-kø enten
+     lander i sin helhet eller ikke i det hele tatt. Et nei fra serveren (42501)
+     er endelig — da har vi mistet skriveretten, og radene kan aldri leveres. */
+  const noteWriteDenied = (err) => !!err && (err.code === '42501'
+    || /skriverett|lesetilgang|permission denied/i.test(String(err.message || '')));
+  /* Pushene SERIALISERES i stedet for å avvises når en allerede er i gang. En
+     rad som blir køet midt i en push ville ellers måttet vente på neste
+     synk-runde — fem sekunder — selv om nettet var ledig. Kjeden gjør også
+     `await pushNoteOps()` til noe som betyr «min tur er over», som er dét
+     testene trenger for å kjøre runden deterministisk. */
+  function pushNoteOps() {
+    noteOpsChain = noteOpsChain.then(pushNoteOpsOnce, pushNoteOpsOnce);
+    return noteOpsChain;
+  }
+  async function pushNoteOpsOnce() {
+    if (!noteOps.length || !authUser) return;
+    const client = acli();
+    if (!client) return;
+    try {
+      while (noteOps.length) {
+        const noteId = noteOps[0].note;
+        const batch = noteOps.filter((o) => o.note === noteId).slice(0, NOTE_OPS_MAX);
+        const res = await client.rpc('note_crdt_push', {
+          p_note: noteId,
+          p_updates: batch.map((o) => ({ id: o.id, u: o.u })),
+        });
+        if (res && res.error) {
+          if (noteWriteDenied(res.error)) {
+            // Retten er borte. Radene kan aldri leveres; å beholde dem ville
+            // vært en evig retry OG en kopi av innhold vi ikke lenger har.
+            dropNoteOpsFor(noteId);
+            if (noteLive && noteLive.id === noteId) noteLiveDenied();
+            continue;
+          }
+          noteOpsBlocked = true;      // nett eller forbigående feil — prøv igjen
+          break;
+        }
+        const done = {};
+        batch.forEach((o) => { done[o.id] = 1; });
+        if (noteLive && noteLive.id === noteId) {
+          batch.forEach((o) => { noteLive.log.set(o.id, b64urlBytes(o.u)); });
+        }
+        noteOps = noteOps.filter((o) => !done[o.id]);
+        saveNoteOps();
+        noteOpsBlocked = false;
+      }
+    } catch (e) {
+      noteOpsBlocked = true;          // transporten sviktet; pollet prøver igjen
+    } finally {
+      // Tom kø er ingen blokkering: ellers ville en avvisning som ble ryddet
+      // bort latt statusen stå på «Lagret på denne enheten» for alltid.
+      if (!noteOps.length) noteOpsBlocked = false;
+      refreshNoteSaveStatus();
+      noteLiveCompactMaybe();
+    }
+  }
+
+  /* ---- Markøren gjennom en ommaling ----
+     En fjern endring maler editoren på nytt, og da må markøren finne tilbake.
+     Veien er tre trinn: DOM → et globalt tegn-forskyvning → blokk + posisjon i
+     CRDT-en. Yjs' RELATIVE posisjon gjør siste trinn riktig selv når den andre
+     har satt inn tekst FORAN markøren: den peker på tegnet, ikke på tallet. */
+  function noteCaretGlobal(root, node, offset) {
+    if (!node || !root.contains(node)) return null;
+    let g = 0, seen = false, atStart = true;
+    const walk = (n) => {
+      if (seen) return;
+      if (n === node && n.nodeType !== 3) {
+        // Et element-anker: alt før barn nr. `offset` er passert.
+        for (let i = 0; i < offset && i < n.childNodes.length; i++) walk(n.childNodes[i]);
+        seen = true; return;
+      }
+      if (n.nodeType === 3) {
+        if (n === node) { g += Math.min(offset, n.nodeValue.length); if (offset > 0) atStart = false; seen = true; return; }
+        if (n.nodeValue) { g += n.nodeValue.length; atStart = false; }
+        return;
+      }
+      if (n.nodeType !== 1) return;
+      if (n.tagName.toLowerCase() === 'br') { g += 1; atStart = false; return; }
+      Array.prototype.forEach.call(n.childNodes, walk);
+    };
+    Array.prototype.forEach.call(root.childNodes, walk);
+    return seen ? { g, atStart } : null;
+  }
+  // Globalt tegn-forskyvning → (blokk, posisjon i blokken).
+  function noteFlatPos(flat, g, preferNext) {
+    let left = Math.max(0, g);
+    for (let i = 0; i < flat.length; i++) {
+      const len = noteRunsText(flat[i].runs).length;
+      if (left < len || (left === len && !(preferNext && i + 1 < flat.length))) return { i, off: left };
+      left -= len;
+    }
+    const last = flat.length - 1;
+    return { i: Math.max(0, last), off: last >= 0 ? noteRunsText(flat[last].runs).length : 0 };
+  }
+  /* Blokkene i et NYMALT DOM, én node per flat blokk. Malingen kommer fra
+     `noteDocIntoEl`, så treet er rent: blokkene ligger rett under roten, og en
+     liste har bare direkte `li`-barn. */
+  function noteCleanUnits(root) {
+    const units = [];
+    Array.prototype.forEach.call(root.children, (el) => {
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'ul' || tag === 'ol') {
+        Array.prototype.forEach.call(el.children, (li) => {
+          if (li.tagName.toLowerCase() === 'li') units.push(li);
+        });
+        return;
+      }
+      units.push(el);
+    });
+    return units;
+  }
+  function noteSetCaret(root, fi, off) {
+    const units = noteCleanUnits(root);
+    const el = units[Math.max(0, Math.min(fi, units.length - 1))];
+    if (!el) return;
+    let left = Math.max(0, off);
+    let target = null;
+    const walk = (n) => {
+      if (target) return;
+      if (n.nodeType === 3) {
+        const len = n.nodeValue.length;
+        if (left <= len) { target = { node: n, offset: left }; return; }
+        left -= len; return;
+      }
+      if (n.nodeType !== 1) return;
+      if (n.tagName.toLowerCase() === 'br') {
+        // Et linjeskift er ETT tegn i modellen. Faller markøren på det, skal
+        // den stå RETT FØR `<br>`-en, ikke først i blokken.
+        if (left <= 0) {
+          const i = Array.prototype.indexOf.call(n.parentNode.childNodes, n);
+          target = { node: n.parentNode, offset: Math.max(0, i) };
+          return;
+        }
+        left -= 1; return;
+      }
+      Array.prototype.forEach.call(n.childNodes, walk);
+    };
+    Array.prototype.forEach.call(el.childNodes, walk);
+    const sel = window.getSelection();
+    if (!sel) return;
+    const r = document.createRange();
+    if (target) r.setStart(target.node, target.offset);
+    else r.setStart(el, 0);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
+
+  /* ---- Økten ---- */
+  function noteLiveSession(id, ydoc) {
+    return {
+      id,
+      ydoc,
+      undo: null,
+      chan: null,
+      poll: null,
+      pulling: false,
+      loaded: false,      // første henting fra serveren er unnagjort
+      pending: [],        // fjern-endringer som venter på at en komposisjon tar slutt
+      mark: null,
+      log: new Map(),      // radene i databasen vi har brukt: id → bytes
+      othersAt: 0,         // sist en fjern endring kom inn
+      compactTimer: null,
+      snapTimer: null,
+    };
+  }
+  /* Åpner økten SYNKRONT fra det enheten allerede har: den lokale kopien om
+     den finnes, ellers et deterministisk frø fra dokumentet. Serverens logg
+     kommer etterpå, og går inn den vanlige fjern-veien — så den kan aldri
+     komme i veien for det brukeren skriver mens den er underveis. */
+  function openNoteLive(note) {
+    closeNoteLive();
+    const Y = noteYLib();
+    if (!Y || !note) return null;
+    const snap = readNoteSnap(note.id);
+    let ydoc;
+    if (snap) {
+      ydoc = noteYEmpty();
+      try { Y.applyUpdate(ydoc, snap, 'remote'); } catch (e) { ydoc = null; }
+    }
+    if (!ydoc) ydoc = noteYSeed(note.doc);
+    if (!ydoc) return null;
+    // Køen fra forrige økt hører til dokumentet, ikke til serveren.
+    noteOpsFor(note.id).forEach((o) => {
+      try { Y.applyUpdate(ydoc, b64urlBytes(o.u), 'remote'); } catch (e) { /* ignore */ }
+    });
+    noteYRandomizeClient(ydoc);
+    const s = noteLiveSession(note.id, ydoc);
+    noteLive = s;
+    s.undo = new Y.UndoManager(noteYArr(ydoc), { trackedOrigins: new Set(['local']) });
+    /* HVER endring som ikke KOM utenfra skal ut til de andre — også en angring
+       og selve frøet. Frøet er med med vilje: det er slik et gammelt notat får
+       en historikk å samskrive på, og to identiske frø flettes til ett. */
+    ydoc.on('update', (update, origin) => {
+      if (origin === 'remote') return;
+      queueNoteOp(s.id, update);
+      s.snapTimer = s.snapTimer || setTimeout(() => {
+        s.snapTimer = null;
+        if (noteLive === s) writeNoteSnap(s.id, Y.encodeStateAsUpdate(s.ydoc));
+      }, NOTE_LIVE_SNAP_DEBOUNCE);
+    });
+    // Frøet skal ut til de andre — men bare fra en som har lov til å skrive.
+    if (!snap && noteEditable(note)) queueNoteOp(s.id, Y.encodeStateAsUpdate(ydoc));
+    noteLiveSubscribe(s);
+    noteLivePull();
+    return s;
+  }
+  function closeNoteLive() {
+    const s = noteLive;
+    if (!s) return;
+    noteLive = null;
+    clearTimeout(s.compactTimer);
+    clearTimeout(s.snapTimer);
+    clearInterval(s.poll);
+    if (s.chan) { const c = acli(); if (c) { try { c.removeChannel(s.chan); } catch (e) { /* ignore */ } } }
+    const Y = noteYLib();
+    if (Y) {
+      // En komposisjon som aldri ble avsluttet skal ikke ta de ventende
+      // fjern-endringene med seg i fallet: de flettes inn før bildet lagres.
+      s.pending.forEach((u) => { try { Y.applyUpdate(s.ydoc, u, 'remote'); } catch (e) { /* ignore */ } });
+      s.pending = [];
+      try { writeNoteSnap(s.id, Y.encodeStateAsUpdate(s.ydoc)); } catch (e) { /* ignore */ }
+    }
+    if (s.undo) { try { s.undo.destroy(); } catch (e) { /* ignore */ } }
+    try { s.ydoc.destroy(); } catch (e) { /* ignore */ }
+  }
+  /* Realtime er BARE et pikk på skulderen: hendelsen bærer ingen data (klienten
+     har ikke engang kolonne-rettigheten til `payload`), den ber oss hente. Da
+     spiller det ingen rolle om en hendelse blir borte i et nettbrudd — pollet
+     og neste hendelse henter det samme. */
+  function noteLiveSubscribe(s) {
+    const client = acli();
+    if (!client) return;
+    try {
+      s.chan = client.channel('hk-note-' + s.id);
+      s.chan.on('postgres_changes', {
+        event: 'INSERT', schema: 'public', table: 'note_updates',
+        filter: 'note_id=eq.' + s.id,
+      }, () => { if (noteLive === s) scheduleNoteLivePull(); });
+      s.chan.subscribe(() => {});
+    } catch (e) { s.chan = null; }
+    s.poll = setInterval(() => {
+      if (document.hidden || noteLive !== s) return;
+      noteLivePull();
+    }, NOTE_LIVE_POLL);
+  }
+
+  /* Hendelsene kommer i klynger — én per rad den andre skrev. Å hente for hver
+     av dem er både unødvendig og en vei inn i en løkke: hentingen er et kall,
+     og et kall kan i seg selv se ut som aktivitet for den som lytter. Én
+     bestilling om gangen, med et kort opphold, henter hele klyngen i ett. */
+  let noteLivePullTimer = null;
+  function scheduleNoteLivePull(ms) {
+    if (noteLivePullTimer) return;
+    noteLivePullTimer = setTimeout(() => {
+      noteLivePullTimer = null;
+      noteLivePull();
+    }, ms == null ? 180 : ms);
+  }
+  async function noteLivePull() {
+    const s = noteLive;
+    if (!s || s.pulling || !authUser) return;
+    const client = acli();
+    if (!client) return;
+    s.pulling = true;
+    try {
+      const res = s.mark
+        ? await client.rpc('note_crdt_since', { p_note: s.id, p_mark: s.mark })
+        : await client.rpc('note_crdt_load', { p_note: s.id });
+      if (!res || res.error || !res.data) {
+        if (res && res.error && noteWriteDenied(res.error) && noteLive === s) noteLiveDenied();
+        return;
+      }
+      if (noteLive !== s) return;
+      const data = res.data;
+      s.mark = data.mark || s.mark;
+      const fresh = [];
+      (data.updates || []).forEach((row) => {
+        if (!row || !row.id || typeof row.u !== 'string') return;
+        if (s.log.has(row.id)) return;
+        let bytes = null;
+        try { bytes = b64urlBytes(row.u); } catch (e) { return; }
+        s.log.set(row.id, bytes);
+        fresh.push(bytes);
+      });
+      if (fresh.length) noteLiveApply(s, fresh);
+      s.loaded = true;
+      noteLiveCompactMaybe();
+    } catch (e) {
+      /* nett — pollet og realtime prøver igjen */
+    } finally {
+      s.pulling = false;
+    }
+  }
+
+  /* Fletter inn det som kom, og maler editoren på nytt.
+     REKKEFØLGEN ER HELE POENGET: en flush FØRST, slik at tastetrykk som ennå
+     bare finnes i DOM-et er inne i CRDT-en før noe males om. Uten den ville en
+     fjern endring som kom midt i en skrivepause tatt de siste tegnene med seg. */
+  function noteLiveApply(s, updates) {
+    const Y = noteYLib();
+    if (!Y) return;
+    const mine = noteEditorOpen() && noteOpenId === s.id;
+    /* EN FJERN ENDRING SOM KOMMER MIDT I EN KOMPOSISJON VENTER — den flettes
+       ikke inn ennå. Å male om nå ville revet det halvferdige IME-ordet ut av
+       editoren; men å FLETTE INN uten å male ville vært verre: da sto DOM-et
+       igjen uten den andres tegn, og neste flush ville lest fraværet som en
+       SLETTING og fjernet dem for alle. CRDT-en får derfor ikke lov til å gå
+       foran DOM-et. `compositionend` flusher først, og kjører så disse
+       oppdateringene den vanlige veien. */
+    if (mine && noteComposing) {
+      updates.forEach((u) => s.pending.push(u));
+      return;
+    }
+    if (mine && noteFlushPending()) noteLiveFlush();
+    let anchor = null;
+    if (mine && noteDocEl) {
+      const sel = window.getSelection();
+      const r = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+      const at = r && noteDocEl.contains(r.startContainer)
+        ? noteCaretGlobal(noteDocEl, r.startContainer, r.startOffset) : null;
+      if (at) {
+        const pos = noteFlatPos(noteYReadFlat(s.ydoc), at.g, at.atStart);
+        const block = noteYArr(s.ydoc).get(pos.i);
+        const ytext = block && block.get ? block.get('x') : null;
+        if (ytext && ytext.toDelta) {
+          anchor = { block, rel: Y.createRelativePositionFromTypeIndex(ytext, pos.off), fi: pos.i, off: pos.off };
+        }
+      }
+    }
+    const before = JSON.stringify(noteYDoc(s.ydoc));
+    updates.forEach((u) => { try { Y.applyUpdate(s.ydoc, u, 'remote'); } catch (e) { /* ignore */ } });
+    const after = noteYDoc(s.ydoc);
+    const endret = JSON.stringify(after) !== before;
+    /* «Andre redigerer nå» krever tre ting, og alle tre er nødvendige: at det
+       KOM noe (kallet brukes også til å male om etter en komposisjon), at det
+       faktisk ENDRET dokumentet, og at øktens første lasting er unnagjort. Uten
+       den siste ville et notat man åpner igjen sagt at andre skriver — den
+       første hentingen gir jo tilbake alt man selv skrev sist. */
+    if (updates.length && endret && s.loaded) { s.othersAt = Date.now(); refreshNoteLiveChip(); }
+    if (!mine) return;
+    if (!endret) return;   // ingen synlig endring
+    noteApplyingDoc = true;
+    noteDocIntoEl(noteDocEl, after);
+    noteApplyIndent();
+    noteApplyingDoc = false;
+    if (anchor) {
+      let fi = noteYArr(s.ydoc).toArray().indexOf(anchor.block);
+      let off = anchor.off;
+      const abs = Y.createAbsolutePositionFromRelativePosition(anchor.rel, s.ydoc);
+      if (abs && typeof abs.index === 'number') off = abs.index;
+      if (fi === -1) fi = anchor.fi;
+      noteSetCaret(noteDocEl, fi, off);
+      noteTrackRange();
+    }
+    scheduleNoteSave();   // projeksjonen (`body`) tar igjen
+    refreshNoteTools();
+  }
+
+  /* DOM → CRDT. Kalles debouncet mens man skriver, og SYNKRONT rett før noe
+     annet rører dokumentet (en fjern endring, en angring, en lagring). */
+  function noteLiveFlush() {
+    clearTimeout(noteFlushTimer);
+    noteFlushTimer = null;
+    const s = noteLive;
+    if (!s || !noteEditorOpen() || noteOpenId !== s.id || noteApplyingDoc) return false;
+    /* MIDT I EN KOMPOSISJON leser vi ikke DOM-et. Et IME-ord (kinesisk,
+       japansk, eller bare et aksenttegn på macOS) står halvferdig i editoren
+       til komposisjonen er over, og både en flush og en ommaling ville brutt
+       den. Endringen kommer med i flushen `compositionend` bestiller. */
+    if (noteComposing) return false;
+    const n = findNoteById(s.id);
+    if (!noteEditable(n)) return false;   // lesemodus skriver ingenting
+    return noteYWriteFlat(s.ydoc, noteDocToFlat(noteDocFromEl(noteDocEl)), 'local');
+  }
+  function scheduleNoteFlush() {
+    if (!noteLive || noteApplyingDoc) return;
+    clearTimeout(noteFlushTimer);
+    noteFlushTimer = setTimeout(() => { noteFlushTimer = null; noteLiveFlush(); refreshNoteSaveStatus(); },
+      NOTE_LIVE_FLUSH);
+  }
+
+  /* ---- Angre / gjør om ----
+     Angringen er CRDT-ens egen, ikke nettleserens. To grunner, og begge er
+     krav: en fjern endring maler editoren på nytt og river dermed nettleserens
+     angre-stabel, OG en angring skal ta MINE endringer tilbake — ikke den
+     andres. `UndoManager` med `trackedOrigins: ['local']` gjør nøyaktig det. */
+  function noteUndoRedo(back) {
+    const s = noteLive;
+    if (!s || !s.undo) return false;
+    noteLiveFlush();
+    const before = JSON.stringify(noteYDoc(s.ydoc));
+    if (back) s.undo.undo(); else s.undo.redo();
+    const after = noteYDoc(s.ydoc);
+    if (JSON.stringify(after) === before) return true;
+    const sel = window.getSelection();
+    const r = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
+    const at = r && noteDocEl.contains(r.startContainer)
+      ? noteCaretGlobal(noteDocEl, r.startContainer, r.startOffset) : null;
+    noteApplyingDoc = true;
+    noteDocIntoEl(noteDocEl, after);
+    noteApplyIndent();
+    noteApplyingDoc = false;
+    if (at) {
+      const pos = noteFlatPos(noteDocToFlat(after), at.g, at.atStart);
+      noteSetCaret(noteDocEl, pos.i, pos.off);
+      noteTrackRange();
+    }
+    scheduleNoteSave();
+    return true;
+  }
+
+  /* ---- Komprimering ----
+     Loggen får én rad per skrivepause. Den klappes sammen ved å legge den
+     FLETTEDE tilstanden inn som én ny rad og slette nøyaktig de radene den
+     inneholder — i én transaksjon på serveren. Bildet regnes ut av `mergeUpdates`
+     over både dokumentets tilstand og de rå radene, slik at en rad som ennå
+     ikke er integrert (den venter på en annen) heller ikke kan bli borte. */
+  function noteLiveCompactMaybe() {
+    const s = noteLive;
+    if (!s || s.compactTimer || s.log.size < NOTE_LIVE_COMPACT_AT) return;
+    const n = findNoteById(s.id);
+    if (!noteEditable(n)) return;
+    s.compactTimer = setTimeout(() => { s.compactTimer = null; noteLiveCompact(s); }, 1500);
+  }
+  // Komprimer NÅ, uten å vente på terskelen. Brukes av testene, og er den ene
+  // veien inn til komprimeringen som ikke krever et øktobjekt utenfra.
+  function noteLiveCompactNow() { return noteLive ? noteLiveCompact(noteLive) : Promise.resolve(); }
+  async function noteLiveCompact(s) {
+    const Y = noteYLib();
+    const client = acli();
+    if (!Y || !client || noteLive !== s || noteOps.length) return;
+    const ids = [...s.log.keys()];
+    let snap;
+    try { snap = Y.mergeUpdates([Y.encodeStateAsUpdate(s.ydoc)].concat([...s.log.values()])); }
+    catch (e) { return; }
+    const rowId = uid();
+    const res = await client.rpc('note_crdt_compact', {
+      p_note: s.id, p_id: rowId, p_snapshot: bytesB64url(snap), p_ids: ids,
+    });
+    if (!res || res.error || noteLive !== s) return;
+    s.log = new Map([[rowId, snap]]);
+    if (res.data && res.data.mark) s.mark = res.data.mark;
+  }
+
+  /* Skriveretten er borte, men LESERETTEN kan være i behold — en lås som ble
+     satt gjør en redaktør til en ren leser. Klienten feiler LUKKET på
+     skrivingen: køen for notatet tømmes (radene kan aldri leveres) og bildet
+     blir skrivebeskyttet — men ØKTEN BLIR STÅENDE, så man fortsatt ser hva de
+     andre skriver. Er også LESERETTEN borte, forsvinner notatet fra `get_my_doc`
+     og `closeNoteEditorIfGone` rydder resten (`forgetNoteCollab`). */
+  function noteLiveDenied() {
+    const id = noteLive ? noteLive.id : noteOpenId;
+    if (id) dropNoteOpsFor(id);
+    applyNoteEditorAccess();
+    refreshNoteSaveStatus();
+  }
+  // Tilgangen til notatet er borte HELT: ingen spor av innholdet skal bli
+  // liggende igjen i enhetens lagring.
+  function forgetNoteCollab(id) {
+    if (noteLive && noteLive.id === id) closeNoteLive();
+    dropNoteOpsFor(id);
+    dropNoteSnap(id);
+  }
+  /* …og det gjelder de LUKKEDE notatene like mye. Et notat man leste i går, og
+     som eieren siden har trukket tilbake eller slettet, forsvinner fra
+     `get_my_doc` uten at noen editor er åpen — og uten dette ble innholdet
+     stående igjen i enhetens lagring til utlogging. Etter hver runde som
+     faktisk har fått svar fra serveren avstemmes derfor både køen og de lokale
+     kopiene mot notatene som fortsatt er lesbare.
+
+     Vilkåret `lastMy` er nødvendig: uten et serversvar vet vi ingenting om hva
+     som finnes, og en tom `state.notes` offline ville ryddet bort alt. */
+  function pruneNoteCollabStore() {
+    if (!authUser || !lastMy) return;
+    const finnes = new Set((state.notes || []).map((n) => n.id));
+    if (noteOps.some((o) => !finnes.has(o.note))) {
+      noteOps = noteOps.filter((o) => finnes.has(o.note));
+      saveNoteOps();
+    }
+    const alle = readJsonStore(noteSnapKey(), {}) || {};
+    const døde = Object.keys(alle).filter((id) => !finnes.has(id));
+    if (!døde.length) return;
+    døde.forEach((id) => { delete alle[id]; });
+    writeJsonStore(noteSnapKey(), alle);
+  }
+
+  /* ---- Å ERSTATTE HELE DOKUMENTET I ET NOTAT ----
+     Editoren skriver dokumentet tegn for tegn gjennom CRDT-en. Skal noe annet
+     bytte ut HELE dokumentet, må det gå den samme veien — ellers ville
+     projeksjonen (`body`) og CRDT-en sagt hver sin ting, og CRDT-en ville
+     vunnet ved neste åpning. Denne funksjonen er den veien: den skriver
+     forskjellen inn i CRDT-en (i den åpne økten, eller i den lokale kopien),
+     og setter projeksjonen etterpå.
+
+     Merk at en FJERN projeksjon aldri går her: `body` fra serveren er avledet,
+     og en enhet som skrev den har sine egne rader i loggen. Å lese den tilbake
+     inn i CRDT-en kunne slettet tegn loggen fortsatt holder. */
+  function setNoteDoc(id, doc) {
+    const n = findNoteById(id);
+    if (!n) return false;
+    const clean = sanitizeNoteDoc(doc);
+    const Y = noteYLib();
+    if (Y && noteLive && noteLive.id === id) {
+      noteYWriteFlat(noteLive.ydoc, noteDocToFlat(clean), 'local');
+    } else if (Y) {
+      const snap = readNoteSnap(id);
+      if (snap) {
+        const yd = noteYEmpty();
+        try { Y.applyUpdate(yd, snap, 'remote'); } catch (e) { /* ignore */ }
+        noteYRandomizeClient(yd);
+        yd.on('update', (u, origin) => { if (origin !== 'remote') queueNoteOp(id, u); });
+        noteYWriteFlat(yd, noteDocToFlat(clean), 'local');
+        try { writeNoteSnap(id, Y.encodeStateAsUpdate(yd)); } catch (e) { /* ignore */ }
+        yd.destroy();
+      }
+    }
+    n.doc = clean;
+    stampContent(n);
+    // Står notatet åpent, skal arket vise det nye med én gang: ellers ville
+    // neste flush lest den GAMLE teksten ut av DOM-et og skrevet den tilbake.
+    if (noteEditorOpen() && noteOpenId === id && noteDocEl) {
+      noteApplyingDoc = true;
+      noteDocIntoEl(noteDocEl, clean);
+      noteApplyIndent();
+      noteApplyingDoc = false;
+    }
+    save();
+    return true;
+  }
+
+  /* ---- «Andre redigerer nå» ----
+     Indikasjonen leses av selve samskrivingen: kommer det en endring vi ikke
+     har laget selv, er noen andre i gang. Ingen egen tilstedeværelseskanal, og
+     ingen identitet — hvem som skriver er mer enn lesetilgangen lover, og
+     `note_updates.author_id` når derfor aldri klienten. */
+  let noteComposing = false;
+  let noteLiveChipTimer = null;
+  function refreshNoteLiveChip() {
+    if (!noteLiveEl) return;
+    const s = noteLive;
+    const on = !!(s && noteEditorOpen() && noteOpenId === s.id
+                  && Date.now() - s.othersAt < NOTE_LIVE_OTHERS_MS);
+    noteLiveEl.hidden = !on;
+    clearTimeout(noteLiveChipTimer);
+    if (on) noteLiveChipTimer = setTimeout(refreshNoteLiveChip, NOTE_LIVE_OTHERS_MS);
   }
 
   /* ---- Verktøylinjen ---- */
@@ -18790,8 +19760,12 @@
       case 'ul': noteExec('insertUnorderedList'); break;
       case 'ol': noteExec('insertOrderedList'); break;
       case 'hr': noteExec('insertHorizontalRule'); break;
-      case 'undo': noteExec('undo'); break;
-      case 'redo': noteExec('redo'); break;
+      /* ANGRE/GJØR OM er CRDT-ens, ikke nettleserens: en fjern endring maler
+         editoren på nytt og river `execCommand`-stabelen, og en angring skal
+         uansett bare ta MINE endringer tilbake. Uten en levende økt (Yjs
+         mangler) faller vi tilbake på nettleserens egen. */
+      case 'undo': if (!noteUndoRedo(true)) noteExec('undo'); break;
+      case 'redo': if (!noteUndoRedo(false)) noteExec('redo'); break;
       case 'link': toggleNoteLinkPanel(); return;
       case 'symbol': toggleNoteSymbolPanel(); return;
       default: return;
@@ -19216,6 +20190,24 @@
       noteApplyIndent();
       scheduleNoteSave();
       refreshNoteTools();
+    });
+    /* IME-KOMPOSISJON. Et halvferdig ord (kinesisk, japansk — eller bare et
+       aksenttegn på macOS) står i editoren til `compositionend`. Verken en
+       flush eller en fjern ommaling får røre DOM-et mens det pågår; det som
+       kom inn i mellomtiden hentes fram igjen når komposisjonen er ferdig. */
+    noteDocEl.addEventListener('compositionstart', () => { noteComposing = true; });
+    noteDocEl.addEventListener('compositionend', () => {
+      noteComposing = false;
+      /* REKKEFØLGEN ER HELE POENGET, som ellers: det komponerte ordet leses inn
+         i CRDT-en FØRST, og deretter flettes det som kom mens man skrev. Motsatt
+         vei ville den ene av de to blitt lest som en sletting. */
+      noteLiveFlush();
+      if (noteLive && noteLive.pending.length) {
+        const venter = noteLive.pending;
+        noteLive.pending = [];
+        noteLiveApply(noteLive, venter);
+      }
+      scheduleNoteSave();
     });
     noteDocEl.addEventListener('keydown', noteKeydown);
     noteDocEl.addEventListener('paste', noteOnPaste);
@@ -21461,6 +22453,9 @@
       // Editoren holder ETT notat åpent i fullskjerm: er det borte, eller er
       // låsen endret under føttene, må bildet følge etter.
       closeNoteEditorIfGone();
+      // …og de LUKKEDE notatene ryddes med: en lokal kopi av et notat vi ikke
+      // lenger kan lese skal ikke bli stående på enheten.
+      pruneNoteCollabStore();
       render();
     } finally {
       applyingRemote = false;
@@ -22372,6 +23367,11 @@
        brukerens egne objekter dukket opp midt i demoen. Runden tas igjen når
        demoen er ferdig (endDemo kaller scheduleCloud). */
     if (demoActive) return;
+    /* Samskrivingskøen rir på den SAMME runden som resten av synken, men går
+       ikke gjennom fletteren: loggen er append-only og har ingenting å flette.
+       Å henge den på her gir den pollets kadens og reconnect-en gratis — en
+       kø som ble stående etter et nettbrudd tømmes ved første runde etterpå. */
+    pushNoteOps();
     if (cloudRunning) { cloudAgain = true; return; }
     cloudRunning = true;
     syncStatus.refresh();
@@ -24137,6 +25137,7 @@
       resetNotifications();
       resetLocalSync();
       loadCache();
+      loadNoteOps();   // samskrivingskøen er per konto, som resten av bufferen
       render();
     }
     // Sikkerhetsnett for readiness-punktet: `initAccounts()` har normalt satt
@@ -24201,6 +25202,10 @@
     // ikke stå igjen og påstå noe om en konto som ikke er logget inn lenger.
     schemaMismatchLogged.clear();
     rejectCounts.clear();
+    // Samskrivingen tilhørte den utloggede kontoen: økten stenges, og både køen
+    // og de lokale kopiene av notatinnholdet fjernes fra enhetens lagring.
+    closeNoteLive();
+    clearNoteCollabStore();
     syncStatus.stop();
     /* Demoen tilhørte den utloggede kontoen. Uten dette blir laget, tidsuret og
        `body.tour-demo` stående for NESTE konto som logger inn — og verre:
@@ -25957,6 +26962,27 @@
     addNoteProject, addNoteFolder, addNote,
     setActiveProject, setActiveNoteFolder,
     openNoteEditor, closeNoteEditor, flushNoteSave, runNoteCommand,
+    /* SANNTIDS SAMSKRIVING (docs/notater-plan.md). Broen mellom
+       dokumentmodellen og CRDT-en, og selve økten. Testene bruker dem til å
+       kjøre runden deterministisk — flush, hent, komprimer — i stedet for å
+       vente ut debouncene, og til å lese køen som er det statusen «Lagret»
+       hviler på. */
+    noteDocToFlat, noteFlatToDoc, noteYSeed, noteYDoc, noteYWriteFlat, noteYReadFlat,
+    noteLiveFlush, noteLivePull, noteLiveCompactNow, pushNoteOps, noteUndoRedo,
+    setNoteDoc,
+    get noteLiveInfo() {
+      const s = noteLive;
+      return {
+        id: s ? s.id : null,
+        rows: s ? s.log.size : 0,
+        mark: s ? s.mark : null,
+        others: s ? s.othersAt : 0,
+        ops: noteOps.length,
+        opsBlocked: noteOpsBlocked,
+        text: s ? noteDocText(noteYDoc(s.ydoc)) : '',
+        doc: s ? noteYDoc(s.ydoc) : null,
+      };
+    },
     notesIn, noteDocText, noteExcerpt, noteDisplayTitle,
     sanitizeNoteDoc, safeNoteUrl, noteDocFromEl, noteDocIntoEl, emptyNoteDoc,
     /* UTKLIPPSTAVLEN (docs/notater-plan.md). Konverteringene eksponeres hver

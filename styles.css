@@ -5885,6 +5885,47 @@ body.note-editing .corner-controls { display: none; }
   min-width: 5.5em;
   text-align: right;
 }
+/* «Andre redigerer nå» (docs/notater-plan.md). Diskret med vilje: den skal
+   fortelle at man ikke er alene, ikke ta oppmerksomhet fra det man skriver.
+   Prikken bruker den samme grønnfargen som resten av appens «i orden», og
+   pulsen slås av for den som har bedt om mindre bevegelse. */
+/* `display` slår `[hidden]` fra nettleserens eget stilark, så den må settes
+   tilbake eksplisitt — ellers står chipen synlig hele tiden og tar plass i en
+   verktøylinje som allerede er trang. */
+.note-live[hidden] { display: none; }
+.note-live {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  color: var(--ink-soft);
+  white-space: nowrap;
+}
+.note-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: note-live-pulse 1.8s ease-in-out infinite;
+}
+@keyframes note-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .note-live-dot { animation: none; }
+}
+/* På en smal skjerm er verktøylinjen allerede trang: da holder prikken, og
+   teksten står igjen i hjelpeteksten for skjermleseren. */
+@media (max-width: 560px) {
+  .note-live span:not(.note-live-dot) {
+    position: absolute;
+    width: 1px; height: 1px;
+    margin: -1px; padding: 0; border: 0;
+    overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+  }
+}
 
 /* PANELENE (lenke og spesialtegn) FORANKRES UNDER KNAPPEN SIN. Posisjonen
    settes i JS (placeNotePanel), som også klemmer panelet innenfor det synlige

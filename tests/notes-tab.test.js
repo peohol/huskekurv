@@ -581,7 +581,7 @@ async function run(navn, viewport, touch) {
     const H = window.__huskis;
     const n = H.state.notes.find((x) => x.title === 'Utvalg');
     window.__hkDoc = n.doc;
-    n.doc = H.emptyNoteDoc();
+    H.setNoteDoc(n.id, H.emptyNoteDoc());
     H.renderNotes();
     const el = document.querySelector('#notes-board .note-card');
     const b2 = el.querySelector('.note-card-body');
@@ -598,7 +598,7 @@ async function run(navn, viewport, touch) {
   await p.evaluate(() => {
     const H = window.__huskis;
     const n = H.state.notes.find((x) => x.title === 'Utvalg');
-    n.doc = window.__hkDoc;
+    H.setNoteDoc(n.id, window.__hkDoc);
     delete window.__hkDoc;
     H.renderNotes();
   });
@@ -885,12 +885,12 @@ async function run(navn, viewport, touch) {
     const n = H.notesIn(H.state.activeProject, H.state.activeFolder)[0];
     const T = (t, s) => ({ t, c: [{ s }] });
     H.closeNoteEditor();   // FØR doc settes: lukkingen skyller editorens DOM tilbake
-    n.doc = { v: 1, blocks: [
+    H.setNoteDoc(n.id, { v: 1, blocks: [
       T('h1', 'Én'), T('p', 'under én'),
       T('h2', 'To'), T('p', 'under to'),
       T('h3', 'Tre'), T('p', 'under tre'),
       T('h2', 'To igjen'), T('p', 'under to igjen'),
-    ] };
+    ] });
     H.openNoteEditor(n.id);
   });
   await editorÅpen(p);
@@ -915,7 +915,7 @@ async function run(navn, viewport, touch) {
     const H = window.__huskis;
     const n = H.notesIn(H.state.activeProject, H.state.activeFolder)[0];
     H.closeNoteEditor();   // FØR doc settes: lukkingen skyller editorens DOM tilbake
-    n.doc = { v: 1, blocks: [{ t: 'p', c: [] }] };
+    H.setNoteDoc(n.id, { v: 1, blocks: [{ t: 'p', c: [] }] });
     H.openNoteEditor(n.id);
   });
   await editorÅpen(p);
@@ -945,7 +945,7 @@ async function run(navn, viewport, touch) {
     const H = window.__huskis;
     const n = H.notesIn(H.state.activeProject, H.state.activeFolder)[0];
     H.closeNoteEditor();   // FØR doc settes: lukkingen skyller editorens DOM tilbake
-    n.doc = { v: 1, blocks: [{ t: 'p', c: [] }] };
+    H.setNoteDoc(n.id, { v: 1, blocks: [{ t: 'p', c: [] }] });
     H.openNoteEditor(n.id);
   });
   await editorÅpen(p);
@@ -1262,9 +1262,9 @@ async function run(navn, viewport, touch) {
     await p.evaluate((id) => {
       const H = window.__huskis;
       const n = H.state.notes.find((x) => x.id === id);
-      n.doc = { v: 1, blocks: Array.from({ length: 60 }, (_, i) =>
-        ({ t: 'p', c: [{ s: 'Avsnitt ' + i + ' med litt tekst som fyller linjen.' }] })) };
       H.closeNoteEditor();
+      H.setNoteDoc(n.id, { v: 1, blocks: Array.from({ length: 60 }, (_, i) =>
+        ({ t: 'p', c: [{ s: 'Avsnitt ' + i + ' med litt tekst som fyller linjen.' }] })) });
       H.openNoteEditor(id);
     }, førsteKort);
     await editorÅpen(p);

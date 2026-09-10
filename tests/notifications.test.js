@@ -135,9 +135,14 @@ async function seed(p, db, uid) {
     }));
   }, { db, uid });
   await p.goto(BASE + '/?mock=1');
+  /* `lastMy` alene er ikke nok her. Preferanseraden lages av den FØRSTE
+     genereringen (`notify_record`), så det aller første `get_my_doc` svarer med
+     `notify_prefs: null` — helt riktig, men en tilstand ingen av sjekkene i
+     denne filen handler om. Ventingen går derfor på selve preferansene, som er
+     signalet på at varselveien har vært hele runden gjennom. */
   await p.waitForFunction(() => {
     const H = window.__huskis;
-    return H && H.authUser && H.lastMy && H.state.universes.length > 0;
+    return H && H.authUser && H.lastMy && H.state.universes.length > 0 && !!H.notifPrefs;
   }, null, { timeout: 15000, polling: 200 });
 }
 
@@ -156,10 +161,12 @@ async function cycle(p) {
    en markør «N døgn tilbake» ville derfor blitt meningsløs etter hvert som
    kalenderen går videre. `1` er så langt tilbake som det går. */
 async function setCursor(p, at) {
-  await p.evaluate((v) => {
-    const db = window.HK_MOCK._loadDB();
-    db.notification_prefs.forEach((r) => { r.cursor_at = v; });
-    window.HK_MOCK._saveDB(db);
+  // `_edit` og ikke `_loadDB`+`_saveDB`: del 10 har to faner oppe samtidig, og
+  // en runde derfra imellom de to skrittene ville skrevet markøren tilbake.
+  await p.evaluate(async (v) => {
+    await window.HK_MOCK._edit((db) => {
+      db.notification_prefs.forEach((r) => { r.cursor_at = v; });
+    });
   }, at);
 }
 

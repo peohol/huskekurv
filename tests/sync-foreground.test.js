@@ -137,6 +137,21 @@ function probeSnippet() {
 }
 
 const pulls = (page) => page.evaluate(() => window.__pulls);
+/* «Ingen runde startet» kan bare måles fra en app som ALLEREDE står stille.
+   `sync-status: saved` sier at ingenting venter på å bli lagret, ikke at en
+   runde som alt er bestilt har fyrt ferdig — oppstarten bestiller én når
+   realtime melder seg klar. Her ventes det derfor på selve telleren: er den
+   uendret over et helt vindu, er det ingenting i kø. */
+async function iRo(page) {
+  let n = await pulls(page);
+  for (let i = 0; i < 25; i++) {
+    await page.waitForTimeout(200);
+    const m = await pulls(page);
+    if (m === n) return n;
+    n = m;
+  }
+  return n;
+}
 const hasCard = (page, id) => page.evaluate((id) => {
   const h = window.__huskis;
   for (const u of h.state.universes) for (const g of (u.groups || [])) for (const c of (g.cards || [])) if (c.id === id) return true;
@@ -159,7 +174,7 @@ async function scenario(page) {
     check('oppsett: synk-pollet (5 s) er slått av for denne runden', kuttet >= 1, kuttet);
 
     // 1) Inn i bakgrunnen: ingen runde skal starte av det.
-    const førSkjult = await pulls(page);
+    const førSkjult = await iRo(page);
     await setVisible(page, false);
     await page.waitForTimeout(600); // fraværsbevis: en runde ville rukket å starte
     check('skjult: gjenopptakelses-lytteren fyrer ikke på vei INN i bakgrunnen',
