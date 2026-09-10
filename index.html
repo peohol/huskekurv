@@ -791,10 +791,12 @@
       </header>
       <!-- Tidshorisonten hører til hodet, ikke kroppen: valget skal stå fast
            mens listen ruller under det (docs/kommende-hendelser.md).
-           Posisjonene bygges av app.js fra EVENT_HORIZONS. -->
+           Posisjonene bygges av app.js fra EVENT_HORIZONS, og bryteren ER
+           appens segmenterte kontroll (`.seg`) — samme grønne flate som glir,
+           og den samme dra-gesten. -->
       <div class="events-horizon-panel">
         <h3 class="events-horizon-title" id="events-horizon-title" data-i18n="events.horizonTitle">Tidshorisont</h3>
-        <div class="events-horizon" id="events-horizon" role="radiogroup" aria-labelledby="events-horizon-title"></div>
+        <div class="events-horizon seg" id="events-horizon" role="radiogroup" aria-labelledby="events-horizon-title"></div>
       </div>
       <div class="modal-body events-body" id="events-body"></div>
       <!-- Antallet leses opp ved åpning; gruppene har sine egne navn. -->

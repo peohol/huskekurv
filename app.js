@@ -10669,15 +10669,21 @@
     ev.preventDefault();
   }, true);
 
+  /* Bryteren har to gyldige semantikker, og hvilken det er avgjøres av rollen
+     bruksstedet satte: en fane-rekke (`tablist`) melder `aria-selected`, en
+     innstilling med n stillinger (`radiogroup`, tidshorisonten) melder
+     `aria-checked`. Formen, bevegelsen og gesten er den samme — det er bare
+     hva valget BETYR som skiller dem (docs/tilgjengelighet.md). */
   function paintSeg(el, sel, erAktiv) {
     if (!el) return;
+    const attr = el.getAttribute('role') === 'radiogroup' ? 'aria-checked' : 'aria-selected';
     const btns = [...el.querySelectorAll(sel)];
     el.style.setProperty('--seg-n', btns.length || 1);
     btns.forEach((b, i) => {
       const on = !!erAktiv(b);
       if (on) el.style.setProperty('--seg-i', i);
       b.classList.toggle('is-active', on);
-      b.setAttribute('aria-selected', on ? 'true' : 'false');
+      b.setAttribute(attr, on ? 'true' : 'false');
       b.tabIndex = on ? 0 : -1;
     });
   }
@@ -11190,10 +11196,18 @@
   /* Bryteren med tre posisjoner. Knappene bygges ÉN gang fra EVENT_HORIZONS —
      en fjerde posisjon skal ikke kreve ny markup — og males om ved hvert bytte.
 
+     DEN ER APPENS SEGMENTERTE BRYTER (`.seg`), ikke en egen kontroll som ser
+     omtrent slik ut: samme grønne flate som GLIR mellom stillingene, og samme
+     dra-gest som hovedbryteren og søkets scopevelger — den delegerte
+     pekerlytteren (`attachToggleDrag`-blokken) finner den på `.seg`-klassen
+     alene. En bryter som så ut som de andre, men verken bar den grønne
+     markeringen eller lot seg dra, leste som den samme kontrollen i ustand.
+
      `role="radiogroup"` med rullende tabindex: bare den valgte posisjonen er i
      tabbrekkefølgen, og piltastene flytter valget innad. Det er
      radiogruppe-mønsteret, og det er også den korteste veien til at bryteren
-     kan brukes uten mus (docs/tilgjengelighet.md). */
+     kan brukes uten mus (docs/tilgjengelighet.md). `paintSeg` melder
+     `aria-checked` når rollen er `radiogroup`. */
   function paintEventsHorizon() {
     if (!eventsHorizonEl) return;
     const valgt = eventsHorizon();
@@ -11201,7 +11215,7 @@
       EVENT_HORIZONS.forEach((h) => {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'events-horizon-btn';
+        b.className = 'events-horizon-btn seg-btn';
         b.setAttribute('role', 'radio');
         b.dataset.horizon = h.key;
         b.dataset.i18n = h.label;
@@ -11211,12 +11225,7 @@
       });
       eventsHorizonEl.addEventListener('keydown', onEventsHorizonKey);
     }
-    [].slice.call(eventsHorizonEl.children).forEach((b) => {
-      const på = b.dataset.horizon === valgt;
-      b.setAttribute('aria-checked', på ? 'true' : 'false');
-      b.classList.toggle('is-on', på);
-      b.tabIndex = på ? 0 : -1;
-    });
+    paintSeg(eventsHorizonEl, '.seg-btn', (b) => b.dataset.horizon === valgt);
   }
   function onEventsHorizonKey(ev) {
     const steg = ev.key === 'ArrowRight' || ev.key === 'ArrowDown' ? 1
@@ -14270,6 +14279,17 @@
     tx.className = 'obj-menu-label';
     tx.textContent = label;
     b.append(ic, tx);
+    // Telleren står INNE i raden, etter etiketten — den endrer ikke radhøyden.
+    if (opts.count) {
+      const c = document.createElement('span');
+      c.className = 'obj-menu-count';
+      c.textContent = String(opts.count);
+      b.appendChild(c);
+    }
+    /* Hintet er en FORKLARING på en egen linje under etiketten, og gjør raden
+       to linjer høy. Det er forbeholdt rader der handlingen trenger en setning
+       for å forstås (låsen); et tall eller en gjentakelse av etiketten hører
+       ikke hjemme her. */
     if (opts.hint) {
       const h = document.createElement('span');
       h.className = 'obj-menu-hint';
@@ -14521,7 +14541,7 @@
       list.appendChild(objMenuRow(r.icon, r.label, () => {
         if (r.keepOpen) { r.fn(); repaintObjMenu(); return; }
         closeObjMenuThen(r.fn);
-      }, { hint: r.hint }));
+      }, { hint: r.hint, count: r.count }));
     });
 
     /* 8) Sletting sist, bak en skillelinje og i rødt: den er den eneste raden
@@ -17450,7 +17470,6 @@
         canEdit ? {
           icon: ICONS.archive,
           label: tr(obj && obj.archived ? 'notes.unarchive' : 'notes.archive'),
-          hint: tr('notes.archiveHint'),
           fn: () => setNoteArchived(kind, id, !(cfg.find(id) || {}).archived),
         } : null,
       ],
@@ -17863,7 +17882,12 @@
     return {
       icon: ICONS.link,
       label: tr('links.menuRow'),
-      hint: n ? String(n) : '',
+      /* Antallet er en TELLER, ikke en forklaring, og står derfor INNE i raden
+         ved siden av etiketten. Som hint la det seg på en egen linje under, og
+         da ble «Koblinger» halvannen gang så høy som naboradene sine — én rad i
+         menyen med en helt annen polstring enn resten, for et ettsifret tall
+         (docs/menus.md, «Radene»). */
+      count: n || 0,
       fn: () => openLinksModal(kind, id),
     };
   }
@@ -23538,9 +23562,21 @@
     msg.className = 'share-msg'; msg.hidden = true;
     let sentEmail = null; // e-posten kvitteringen i `msg` gjelder, mens den venter
 
+    /* SEKSJON 1: å slippe noen inn. Feltet, policyen og kvitteringen er ÉN
+       tanke og står i én blokk — modalen skilles i seksjoner med luft og en
+       hårfin linje (`.share-sec` i styles.css), ellers rant invitasjonen,
+       medlemslisten, låsen og de endelige knappene sammen til én vegg av
+       kontroller, verst på mobil der alt står under hverandre. Blokken bærer
+       også skjulingen: er det ingenting man kan invitere med, skal ikke
+       seksjonens linje og luft bli stående igjen etter innholdet. */
+    const inviteSec = document.createElement('div');
+    inviteSec.className = 'share-sec share-invite-sec';
+    inviteSec.append(form, policyRow, msg);
+
     let inviteEffective = (obj._invitePolicy || 'inherit') !== 'deny';
     function applyPerm() {
       form.hidden = !(caps.invite || caps.inviteOwner);
+      inviteSec.hidden = form.hidden;
       roleSel.hidden = !caps.inviteOwner;
       if (!caps.inviteOwner) roleSel.value = 'member';
       policyRow.hidden = !(caps.invite || caps.inviteOwner);
@@ -23618,6 +23654,12 @@
       lockBtn.hidden = !caps.lockException;
     };
     lockRow.appendChild(lockBtn);
+    // Låsraden har sin egen tonede plate og sin egen polstring, så seksjonen
+    // legges UTENPÅ den i stedet for på den: to polstringer på samme boks blir
+    // en boks med dobbel luft på den ene siden.
+    const lockSec = document.createElement('div');
+    lockSec.className = 'share-sec share-lock-sec';
+    lockSec.appendChild(lockRow);
     lockBtn.addEventListener('click', () => {
       toggleObjLock(type, id, obj, !!effInheritedLock(),
         () => { if (lockBtn.isConnected) paintLock(); });
@@ -23625,10 +23667,10 @@
 
     /* --- Medlemsliste + ventende invitasjoner --- */
     const membersWrap = document.createElement('div');
-    membersWrap.className = 'share-members';
+    membersWrap.className = 'share-members share-sec';
     const optimisticRows = new Set(); // «Venter på svar» mens invitasjonen ligger i køen
     const actionsWrap = document.createElement('div');
-    actionsWrap.className = 'share-actions';
+    actionsWrap.className = 'share-actions share-sec';
 
     // Signaturen av det serversvaret radene sist ble tegnet fra (se
     // refreshMembers). Enhver OPTIMISTISK endring — en rad fjernet, en knapp
@@ -23973,7 +24015,7 @@
       });
     });
 
-    body.append(form, policyRow, msg, membersWrap, lockRow, actionsWrap);
+    body.append(inviteSec, membersWrap, lockSec, actionsWrap);
     applyPerm();
     paintLock();
     renderMembers(mySelfInfo(type, id, obj)); // deg selv vises straks

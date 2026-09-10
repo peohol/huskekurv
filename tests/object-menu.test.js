@@ -14,8 +14,10 @@
     5. «Endre navn» åpner navneredigereren på plassen — på alle nivåer.
     6. Klikk på navnet: listepunkt/kategori omdøper fortsatt, mens område/
        liste kollapser og mappe navigerer (konflikten som ble fjernet).
-    7. Skillelinjer rundt trekkspill-skuffene — og at de er FLATE (en linje
-       tegnet som `border-top` på en avrundet rad buer i endene).
+    7. Skillelinjer MELLOM alle radene — også der det ikke står en skuff — og
+       at de er FLATE (en linje tegnet som `border-top` på en avrundet rad buer
+       i endene). Alle radene deler dessuten ÉN polstring, hentet fra
+       `--menu-row-pad-*`, og rader uten hint er like høye.
     9. Escape lukker menyen og fokus går tilbake til menyknappen.
    10. «Endre navn» overlever at board-et rendres mens menyen står åpen
        (callbacken må slå opp tittelen på nytt, ikke holde på den gamle noden).
@@ -383,6 +385,46 @@ async function run(label, viewport, touchMode) {
   log(label + ' 7: alle skillelinjene er flate — ingen arver radenes avrundede hjørner',
     seps.concat(uniSeps).every((r) => r.buet === false),
     JSON.stringify(seps.concat(uniSeps).filter((r) => r.buet)));
+  /* HVER rad er skilt fra naboen over seg, ikke bare de som tilfeldigvis står
+     ved en skuff. Linjene fulgte tidligere bare skuffene, og da rant rader
+     uten skuff mellom seg sammen til én blokk (docs/menus.md). Unntakene er
+     nøyaktig to: den første raden (hodet har sin egen linje under seg) og
+     `.obj-menu-sep`, som ER en linje — og raden rett etter den, som allerede
+     er skilt av den. */
+  const alleSkilt = (rader) => rader.every((r, i) => {
+    if (i === 0 || r.type === 'linje' || rader[i - 1].type === 'linje') return true;
+    return r.linjeOver === true;
+  });
+  /* ALLE MENYRADER HAR DEN SAMME POLSTRINGEN, og den kommer fra ETT token
+     (`--menu-row-pad-*`) i stedet for å være skrevet om igjen i hver meny.
+     Ansvarlig-velgerens rader er med: de står i det samme popover-skallet og
+     hadde 7 px der objektmenyen hadde 8 — lite nok til at ingen meny så gal ut
+     alene, nok til at to menyer ved siden av hverandre ikke leste likt. */
+  const polstring = await p.evaluate(() => {
+    const rader = [...document.querySelectorAll('#obj-menu-panel .obj-menu-row')];
+    const token = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    return {
+      token: { y: token('--menu-row-pad-y'), x: token('--menu-row-pad-x') },
+      ulike: [...new Set(rader.map((r) => getComputedStyle(r).padding))],
+      // … og rader UTEN hint er alle like høye: en teller eller et ikon skal
+      // ikke dytte én rad ut av takt med naboene.
+      høyder: [...new Set(rader.filter((r) => !r.querySelector('.obj-menu-hint'))
+        .map((r) => Math.round(r.getBoundingClientRect().height)))],
+    };
+  });
+  log(label + ' 7: alle menyrader deler ÉN polstring, fra tokenet',
+    polstring.ulike.length === 1 &&
+    polstring.ulike[0] === polstring.token.y + ' ' + polstring.token.x,
+    JSON.stringify(polstring));
+  log(label + ' 7: … og radene uten hint er alle like høye',
+    polstring.høyder.length === 1, JSON.stringify(polstring.høyder));
+
+  log(label + ' 7: hver rad er skilt fra naboen over seg',
+    alleSkilt(seps) && alleSkilt(uniSeps),
+    JSON.stringify([seps.filter((r, i) => i > 0 && r.type !== 'linje'
+      && seps[i - 1].type !== 'linje' && !r.linjeOver),
+    uniSeps.filter((r, i) => i > 0 && r.type !== 'linje'
+      && uniSeps[i - 1].type !== 'linje' && !r.linjeOver)]));
   await closeMenu(p);
   await p.evaluate(() => { const m = document.getElementById('nav-modal'); if (m) m.hidden = true; });
   await p.waitForTimeout(200);

@@ -70,9 +70,44 @@ knappene brukte, og feiler LUKKET — se `docs/rettigheter-og-deling.md`.
 | 7 | **Forlat …** | delt område, delt mappe | `leave` |
 | 8 | **Slett …** / **Løs opp …** | alle man kan fjerne | `delete` / `!frozen` |
 
+**Hver rad er skilt fra naboen over seg med en hårfin linje.** Skillet gjelder
+MELLOM valgene, ikke rundt skuffene: linjene fulgte tidligere bare skuffene, og
+da fikk en meny linjer der det tilfeldigvis sto en skuff og ingen der det ikke
+gjorde det — på notatsiden rant «Deling og medlemmer», «Lås», «Koblinger» og
+«Arkiver» sammen til én blokk mens radene over dem sto hver for seg. Linjen er
+det samme flate strøket i `::before` som raden under en skuff får, og av den
+samme grunnen: radene er avrundet, og en `border-top` på dem ville buet i
+endene. Alle skillelinjene i menyen skal være flate. Radene INNE i en skuff
+(«Flytt opp/ned», ansvarlig-radene) har den ikke — de er ett trinn ned og hører
+sammen.
+
+**Alle radene har den SAMME polstringen, og den kommer fra ETT sted.**
+`--menu-row-pad-y`/`-x` i `styles.css` gjelder hele popover-familien —
+objektmenyens rader, menyhodet og ansvarlig-velgerens rader, som står i det
+samme `.switcher-panel`-skallet. Verdiene var tidligere skrevet om igjen i hver
+meny (8/9 her, 7/9 der): små nok forskjeller til at ingen enkeltmeny så gal ut,
+store nok til at to menyer ved siden av hverandre ikke leste likt. Skuffenes
+innrykk og hintets venstrekant regnes ut FRA tokenet, så de ikke kan komme i
+utakt med raden de skal flukte med.
+
+To ting hører derfor ikke hjemme som HINT, for hintet legger en linje til under
+etiketten og gjør raden halvannen gang så høy som naboene sine:
+
+- **et tall** — «Koblinger» viser antallet som en dempet teller
+  (`.obj-menu-count`) i ENDEN av raden, på samme linje som etiketten;
+- **en gjentakelse av etiketten** — «Arkiver» sa «Legges til side, ikke
+  slettet», som er det ordet allerede betyr.
+
+Hintet er forbeholdt rader der handlingen trenger en SETNING for å forstås:
+låseraden, som må si hva låsen gjør med de andres tilgang, og de to
+kopieringsradene, som skiller to utfall med nesten samme navn. Prøven er om
+teksten sier noe etiketten ikke alt sier.
+
 **Sletting står SIST**, bak en skillelinje og i rødt (`.obj-menu-row.is-danger`).
 Den er den eneste raden som fjerner noe, og den skal ikke ligge der fingeren
-treffer først når menyen åpner seg.
+treffer først når menyen åpner seg. Den linjen er `.obj-menu-sep` — en egen,
+tydeligere pause med luft rundt, ikke nok en radgrense: det som fjerner noe
+skal skilles fra alt annet, ikke bare fra raden over.
 
 **Bare område og mappe har delingsraden.** Det er de to nivåene som kan deles;
 lister, listepunkter og kategorier arver tilgangen og har ingen egen
@@ -89,13 +124,10 @@ den forrige, begge med animert høyde (`slideSub`, 180 ms; samme funksjon driver
 konto-modalens skuffer). Uten det ville menyen blitt lengre enn skjermen på
 mobil.
 
-Skuffene er skilt med hårfine linjer — fra hverandre og fra de vanlige radene
-over og under. En fane som kan folde seg ut er en egen blokk, ikke nok en rad i
-rekka. Linjene ligger som `border-top` på selve gruppen (ikke som egne
-elementer), så nabo-faner deler én linje og ingen ekstra luft snik-legges inn.
-Raden UNDER en skuff får linjen som et eget strøk i `::before` i stedet: radene
-er avrundet, og en `border-top` på dem buer i endene. Alle skillelinjene i
-menyen skal være flate.
+Skuffene bærer den samme hårfine linjen som radene, men på en annen måte: den
+ligger som `border-top` på selve gruppen (ikke som et eget element), så
+nabo-faner deler én linje og ingen ekstra luft snik-legges inn mellom dem. En
+fane som kan folde seg ut er en egen blokk, ikke nok en rad i rekka.
 
 Innholdet i en skuff er rykket inn, så nivåene leses uten egne rammer. Radene
 («Flytt opp», ansvarlig-radene) har sin egen polstring og får innrykket gratis;
@@ -431,7 +463,7 @@ appen (`.obj-menu-btn` → `#obj-menu`), med de radene notatsiden faktisk har:
 | 3 | **Deling og medlemmer** | alle tre — åpner den SAMME `#share-modal` som områder og mapper |
 | 4 | **Lås for redigering** / **Gjør unntak** | alle tre, når objektet er delt og man kan styre låsen |
 | 5 | **Forlat …** | alle tre, når man kan forlate ([`rettigheter-og-deling.md`](rettigheter-og-deling.md) del 14) |
-| 6 | **Koblinger** | alle tre — åpner koblingsmodalen, med antallet som hint |
+| 6 | **Koblinger** | alle tre — åpner koblingsmodalen, med antallet som teller i raden |
 | 7 | **Kopier alt** | bare notatet — hele notatet til utklippstavlen, med formatering |
 | 8 | **Kopier som Markdown** | bare notatet — hele notatet som Markdown |
 | 9 | **Arkiver** / **Hent ut av arkivet** | alle tre, ved redigeringsrett |

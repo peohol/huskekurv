@@ -3,7 +3,8 @@
 
   Begge bryterformene er den samme kontrollen sett to ganger — én akse med n
   gyldige stopp og én flate som står på et av dem. Den segmenterte (`.seg`,
-  hovedbryteren Lister ↔ Notater og søkets scopevelger) har n segmenter;
+  hovedbryteren Lister ↔ Notater, søkets scopevelger og tidshorisonten i
+  «Kommende hendelser») har n segmenter;
   av/på-bryteren (`.toggle-switch`, varseltypene) har to. Gesten er derfor delt:
   ta tak, følg fingeren, slipp, snap til nærmeste stopp.
 
@@ -20,6 +21,17 @@
     6. Et drag teller ÉN gang: det etterfølgende ekte klikket svelges, så
        bryteren ikke slår tilbake igjen med det samme.
     7. TASTATUR er urørt.
+    8. TIDSHORISONTEN i «Kommende hendelser» er den SAMME bryteren: `.seg` med
+       den grønne, glidende flaten og den samme gesten — men fortsatt med
+       radiogruppens `aria-checked`, ikke fane-rekkens `aria-selected`.
+    8b. Etiketten på det AKTIVE segmentet er hvit med svart kontur og skygge —
+       appens egen oppskrift for hvit skrift på en farget flate. Mørkt blekk på
+       den lyse grønne var matt akkurat der valget skal være tydeligst.
+    9. SEGMENTENE ER LIKE BREDE HELT NED I BREDDEN (320, 280 og 200 px), og
+       bryteren renner ikke ut av sin egen boks — både den glidende flaten og
+       dragets geometri regner `100% / n`, så ulike spor gjør begge feil. Og
+       tidshorisontens etikett beholder luften inn til segmentkanten i stedet
+       for å legge seg kant i kant med naboen.
 
   Kjøres på BÅDE desktop- og mobil-viewport (mus og finger er den samme
   pekerkoden, men terskelen og `touch-action` er ikke det).
@@ -177,6 +189,134 @@ async function run(label, viewport, mobile) {
   await p.waitForTimeout(500);
   const klikket = await p.evaluate((s) => document.querySelector(s).getAttribute('aria-checked'), bryter);
   log(label + ' 5: et vanlig klikk slår bryteren på igjen', klikket === 'true', String(klikket));
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(300);
+
+  /* ---------- 8) Tidshorisonten er den SAMME bryteren ----------
+     «Kommende hendelser» hadde sin egen kontroll som lignet: grå markering i
+     stedet for den grønne flaten, og ingen gest. En bryter som ser ut som de
+     andre, men verken bærer markeringen eller lar seg dra, leser som den samme
+     kontrollen i ustand. Den er nå `.seg`, og arver derfor begge deler
+     (docs/kommende-hendelser.md). Semantikken er fortsatt radiogruppens:
+     `paintSeg` melder `aria-checked` her, `aria-selected` der bruksstedet er en
+     fane-rekke. */
+  await p.evaluate(() => window.__huskis.openEventsModal());
+  await p.waitForSelector('#events-modal:not([hidden])');
+  await p.waitForTimeout(300);
+  const horisontFør = await p.evaluate(() => window.__huskis.eventsHorizon());
+  const form = await p.evaluate(() => {
+    const el = document.getElementById('events-horizon');
+    const på = el.querySelector('.events-horizon-btn[aria-checked="true"]');
+    return {
+      seg: el.classList.contains('seg'),
+      segBtn: [...el.children].every((b) => b.classList.contains('seg-btn')),
+      // Markeringen er ÉN flate på beholderen, og den er den grønne.
+      flate: getComputedStyle(el, '::before').backgroundImage,
+      // Radiogruppen melder `aria-checked`, ikke `aria-selected`.
+      aria: !!på && !på.hasAttribute('aria-selected'),
+      aktiv: !!på && på.classList.contains('is-active'),
+    };
+  });
+  log(label + ' 8: tidshorisonten er `.seg` med den grønne, glidende flaten',
+    form.seg && form.segBtn && /gradient/.test(form.flate) && form.aktiv,
+    JSON.stringify(form));
+  log(label + ' 8: … og melder fortsatt radiogruppens `aria-checked`', form.aria,
+    JSON.stringify(form));
+
+  /* ETIKETTEN PÅ DET AKTIVE SEGMENTET ER HVIT MED KONTUR. Mørkt blekk på den
+     lyse grønne ga en matt etikett akkurat der valget skal være tydeligst, og
+     appen har allerede ett svar på hvit skrift mot en vilkårlig farget flate:
+     skygge pluss full svart kontur, det samme korttitlene bruker. Måles på
+     BEGGE bryterne — de deler `.seg-btn`, og en av dem kan ikke ha sin egen
+     variant. */
+  const aktivBlekk = await p.evaluate(() => {
+    const les = (sel) => {
+      const b = document.querySelector(sel + ' .seg-btn.is-active');
+      if (!b) return null;
+      const cs = getComputedStyle(b);
+      return { farge: cs.color, strek: cs.webkitTextStrokeColor,
+        bredde: cs.webkitTextStrokeWidth, skygge: cs.textShadow };
+    };
+    return { horisont: les('#events-horizon'), faner: les('#main-tabs') };
+  });
+  const hvitMedKontur = (x) => !!x && x.farge === 'rgb(255, 255, 255)'
+    && parseFloat(x.bredde) > 0 && /^rgb\(0, 0, 0\)/.test(x.strek) && /rgb/.test(x.skygge || '');
+  log(label + ' 8: det aktive segmentet har hvitt blekk med svart kontur og skygge',
+    hvitMedKontur(aktivBlekk.horisont) && hvitMedKontur(aktivBlekk.faner),
+    JSON.stringify(aktivBlekk));
+  const midtH = await dragToggle(p, '#events-horizon', 0.85, 0.16, { midtveisVar: '--seg-drag' });
+  const horisontEtter = await p.evaluate(() => ({
+    valgt: window.__huskis.eventsHorizon(),
+    aria: [...document.querySelectorAll('.events-horizon-btn')]
+      .map((b) => b.dataset.horizon + '=' + b.getAttribute('aria-checked')),
+    drag: document.getElementById('events-horizon').style.getPropertyValue('--seg-drag').trim(),
+  }));
+  const brøkH = parseFloat(midtH && midtH.verdi);
+  log(label + ' 8: et drag bytter tidshorisont, og flaten følger fingeren underveis',
+    horisontFør === 'all' && horisontEtter.valgt === 'week' &&
+    !!midtH && midtH.klasse === true && brøkH > 0 && brøkH < 2.001,
+    JSON.stringify({ før: horisontFør, etter: horisontEtter, midtveis: midtH }));
+  log(label + ' 8: … og overstyringen er borte ved slipp, med `aria-checked` flyttet',
+    horisontEtter.drag === '' &&
+    horisontEtter.aria.join(',') === 'week=true,month=false,all=false',
+    JSON.stringify(horisontEtter));
+
+  /* 9) LIKE BREDE SEGMENTER ER SELVE FORUTSETNINGEN, helt ned i bredden.
+     Flaten som glir er `100% / --seg-n` bred, og dragets geometri regner den
+     SAMME brøken (`togGeometry`) — begge er feil i det øyeblikket sporene
+     slutter å være like. Rutenett-elementer har `min-width: auto` og nekter å
+     krympe under innholdet sitt, så uten `min-width: 0` på `.seg-btn` sprikte
+     segmentene på en smal nok skjerm og bryteren rant ut av sin egen boks
+     (MÅLT: 37/57/38 i en 120 px bred bryter). Måles på BEGGE bryterne, siden
+     de deler regelen, og helt ned: invarianten er kontrollens, ikke en bestemt
+     skjerms. Modalen klipper (`overflow: hidden`), så det som renner ut, er
+     borte. */
+  for (const bredde of [320, 280, 200]) {
+    await p.setViewportSize({ width: bredde, height: 780 });
+    await p.waitForTimeout(250);
+    const smal = await p.evaluate(() => {
+      const mål = (el) => {
+        if (!el) return null;
+        const b = [...el.children].map((k) => Math.round(k.getBoundingClientRect().width));
+        return { b, likeBrede: Math.max(...b) - Math.min(...b) <= 1,
+          renner: el.scrollWidth > Math.ceil(el.getBoundingClientRect().width) };
+      };
+      return { horisont: mål(document.getElementById('events-horizon')),
+        faner: mål(document.getElementById('main-tabs')) };
+    });
+    log(label + ' 9 @' + bredde + 'px: segmentene er fortsatt like brede, og bryteren renner ikke ut',
+      !!smal.horisont && smal.horisont.likeBrede && !smal.horisont.renner &&
+      !!smal.faner && smal.faner.likeBrede && !smal.faner.renner,
+      JSON.stringify(smal));
+
+    /* … OG ETIKETTEN BEHOLDER LUFTEN SIN. Like brede spor er bare halve
+       svaret: teksten må fortsatt få plass INNENFOR sitt eget segment. Med
+       `white-space: nowrap` gjorde den ikke det — den ble ikke kappet, men
+       spiste hele polstringen og la seg kant i kant med nabosegmentet, så
+       «1 måned» endte under den grønne markeringen til «Alle» (MÅLT på
+       280 px: tekst 65 px i et 65 px spor, 0 igjen på hver side). Med
+       brekkingen står den på to linjer med luften i behold. Måles bare på de
+       ekte telefonbreddene: på 200 px er det lengste ORDET bredere enn
+       sporet uansett, og da finnes det ingen luft å kreve. */
+    if (bredde >= 280) {
+      const luft = await p.evaluate(() => [...document.querySelectorAll('#events-horizon .seg-btn')]
+        .map((b) => {
+          const r = b.getBoundingClientRect();
+          // Ekte glyfbredde, ikke boksens: et Range ser hva teksten krever.
+          const rng = document.createRange(); rng.selectNodeContents(b);
+          const t = rng.getBoundingClientRect();
+          return { t: b.textContent, venstre: Math.round(t.left - r.left),
+            høyre: Math.round(r.right - t.right) };
+        }));
+      log(label + ' 9 @' + bredde + 'px: … og etiketten står med luft inn til segmentkanten',
+        luft.length === 3 && luft.every((x) => x.venstre >= 4 && x.høyre >= 4),
+        JSON.stringify(luft));
+    }
+  }
+  await p.setViewportSize(viewport);
+  await p.waitForTimeout(250);
+  await p.evaluate(() => window.__huskis.closeEventsModal());
+  await p.waitForTimeout(250);
 
   log(label + ': ingen JS-feil', errs.length === 0, errs.slice(0, 3).join(' | '));
   await browser.close();

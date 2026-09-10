@@ -378,8 +378,9 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   fjerde linjen stå synlig i bunnpolstringen. Hele kortet er klikkflate og
   dra-sone, så det har pekehånd og `:focus-visible`-ring.
 - `.seg` + `.seg-btn`: den GENERELLE segmenterte bryteren — hovedbryteren
-  (`.main-tabs`) og søkets scopevelger (`Alt | Lister | Notater`) er den samme
-  kontrollen i to størrelser. Den er en EKTE bryter: markeringen er ÉN flate
+  (`.main-tabs`), søkets scopevelger (`Alt | Lister | Notater`) og
+  tidshorisonten i «Kommende hendelser» (`1 uke | 1 måned | Alle`) er den samme
+  kontrollen i tre bruk. Den er en EKTE bryter: markeringen er ÉN flate
   som GLIR mellom segmentene (`::before` på beholderen), ikke en bakgrunn som
   tones inn på det ene og ut på det andre — da ville den lest som to knapper
   som blinker. Flaten flyttes med `transform` i den samme timingen som knotten
@@ -389,10 +390,33 @@ Størrelse/form kommer fra egne klasser: `.btn` (modaler), `.btn-small`,
   Segmentene er LIKE BREDE (`display: inline-grid` + `grid-auto-columns: 1fr`),
   og det er dét som gjør reisen til ren regning: flaten er `100% / --seg-n` bred
   og står `--seg-i * 100%` inn. De to tallene settes fra JS (`paintSeg`), som
-  også setter `aria-selected` og den rullende `tabIndex`-en — ett sted for
-  begge bryterne, så en tredje fane ville virket uten en ny utregning. (Grid og
-  ikke flex: med `flex: 1 1 0` blir beholderen bare like bred som innholdet, og
-  `min-width: auto` klemmer det lengste segmentet ut av takt.)
+  også setter valgt-attributtet og den rullende `tabIndex`-en — ett sted for
+  alle bruksstedene, så en tredje fane ville virket uten en ny utregning. (Grid
+  og ikke flex: med `flex: 1 1 0` blir beholderen bare like bred som innholdet,
+  og `min-width: auto` klemmer det lengste segmentet ut av takt.)
+
+  **Like brede er en INVARIANT, og den må håndheves helt ned i bredden.**
+  Rutenett-elementer har `min-width: auto` og nekter å krympe under sitt eget
+  innhold, så på en smal nok skjerm sluttet sporene å være like — og da traff
+  verken den glidende flaten eller dragets geometri segmentene lenger, siden
+  begge regner den samme brøken. `.seg-btn` setter derfor `min-width: 0`.
+  Teksten må da gi etter for noe, og hvert bruksted velger selv hvordan: en
+  bryter på en linje som koster høyde lar etiketten fylle sporet, mens
+  tidshorisonten — som står i en modal med plass nedover — lar den BREKKE
+  (se [`kommende-hendelser.md`](kommende-hendelser.md)).
+
+  **Det aktive segmentet bærer HVITT blekk med kontur**, ikke mørkt: skygge
+  pluss full svart kontur, den samme oppskriften korttitlene bruker for hvit
+  skrift på en vilkårlig farget flate. Mørkt blekk på den lyse grønne ga en
+  matt, lavkontrasts etikett akkurat der valget skal være tydeligst. Ikonene
+  pinnes fortsatt som på `.btn-solid` — gradienten er den samme i begge
+  drakter, så streken oppå skal stå stille.
+
+  Hvilket attributt det er, avgjøres av ROLLEN bruksstedet satte: en fane-rekke
+  (`role="tablist"`) melder `aria-selected`, en innstilling med n stillinger
+  (`role="radiogroup"`, tidshorisonten) melder `aria-checked`. Formen,
+  bevegelsen og gesten er den samme — det er bare hva valget BETYR som skiller
+  dem, og derfor er det ÉN maler og ikke to.
 
   **Bryteren kan DRAS, ikke bare klikkes.** Ta tak i den glidende flaten, før
   den langs aksen og slipp: ved slipp snapper den til nærmeste segment. Under
@@ -746,6 +770,36 @@ grå kortfarge og ingen del-/slett-/＋-kontroller. Se `docs/menus.md`.
 
 ## Del-modalen: én visning, capability-gatede kontroller
 
+**Kroppen er FIRE seksjoner, ikke én ramse** (`.share-sec`): slippe noen inn
+(feltet, rollevelgeren, invitasjonspolicyen og kvitteringen), hvem som er inne,
+låsen, og de to endelige knappene. De lå tidligere rett etter hverandre med det
+samme lille gapet som skiller to felt INNE i en seksjon, og da var det
+ingenting som sa hvor den ene sluttet og den neste begynte.
+
+Grensen er ÉN luft-verdi (`--share-sec-gap`) på hver side av den samme hårfine
+linjen modalhodet bruker; luften INNE i en seksjon er det halve, så nivåene
+leses på avstanden alene og streken bare bekrefter dem. På telefon i portrett
+er verdien større — der er seksjonene høye, alt ligger i én kolonne, og luften
+er det eneste som holder dem fra hverandre. Samme sted brekker invitasjonsraden:
+e-postfeltet tar hele linjen, og rollevelgeren deler den neste med
+«Inviter»-knappen (tre felt på 390 px ga «E-post å» og «Som m»).
+
+**Seksjonens polstring er HELE luften.** Boksavstanden var symmetrisk fra
+starten, men luften slik den SES var det ikke: bolk-overskriftens halve
+linjeavstand og siste medlemsrads bunnpolstring la seg oppå seksjonsgapet, så
+det ble 25 px under linja mot 18 over. En boks helt ytterst i en seksjon skal
+derfor ikke legge til egen høyde — overskriften har `line-height: 1` og klemmer
+rundt teksten, og siste medlemsrad har ingen bunnpolstring. Har boksen en EGEN
+flate (låsraden, sletteknappen), er kanten dens blekk og ikke luft, og da
+gjelder regelen ikke.
+
+Den første SYNLIGE seksjonen har ingen linje over seg — hodets egen ligger der
+allerede. Invitasjonsseksjonen er den eneste som kan skjules i sin helhet (den
+som ikke kan invitere, har ingenting der), og den står alltid først;
+handlingsseksjonen faller ut når den er tom. Medlemslisten arver ikke
+seksjonsgapet: radene bærer allerede hver sin hårstrek, og et gap ville løsnet
+streken fra raden under den.
+
 Del-modalen har ikke lenger et eier/mottaker-skille. Medlemslisten vises for
 alle med tilgang, gruppert etter rollekategori med `.share-section-title`;
 `.member-hint` forklarer hvorfor en rad ikke kan fjernes her. Rollevelgeren ved
@@ -801,6 +855,24 @@ den er notatets NAVN, ikke dokumentets første overskrift. Verktøylinjen står 
   `--note-indent` inn (litt mindre på telefon). Nivået er en AVLEDET VISNING —
   `noteApplyIndent()` regner det ut av blokkrekkefølgen og skriver `data-lvl`;
   dokumentmodellen lagrer det ikke.
+
+## Radenes polstring: to familier, to tokens
+
+Appen har to slag klikkbare rader, og hver har ETT tall som gjelder hele
+familien — ikke ett per meny:
+
+| Token | Familie | Bruk |
+|---|---|---|
+| `--menu-row-pad-y` / `-x` | MENYRAD i en popover | objektmenyens rader og hode, ansvarlig-velgeren |
+| `--list-row-pad-y` / `-x` | LISTERAD i en rullende modalkropp | hendelser, varsler, søketreff |
+
+Menyraden er trangere fordi panelet selv er smalt og har sin egen 8 px kant;
+listeraden er romsligere fordi den står på hele modalens bredde og skal kunne
+bære to linjer. Verdiene var tidligere skrevet om igjen på hvert bruksted, med
+små avvik (8/9 mot 7/9) som ingen enkeltmeny led av, men som gjorde at to
+menyer ved siden av hverandre ikke leste likt. Alt som regnes ut FRA en rad —
+skuffenes innrykk, hintets venstrekant — leser tokenet i stedet for å gjenta
+tallet.
 
 ## Flate-mønsteret
 

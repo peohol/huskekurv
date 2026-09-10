@@ -155,6 +155,13 @@ mellom halvdelene; bevegelsen er slått av under `prefers-reduced-motion`, og
 den bærer ingen informasjon alene (`aria-selected` sier hva som er valgt).
 Søkets scopevelger er den samme kontrollen med de samme reglene.
 
+Tidshorisonten i «Kommende hendelser» er den samme kontrollen med en ANNEN
+semantikk: den velger ikke en visning man går inn i, den stiller en
+innstilling, og er derfor en `role="radiogroup"` med `role="radio"` og
+`aria-checked`. Formen, bevegelsen og dra-gesten er de samme, og `paintSeg`
+velger attributtet ut fra rollen på beholderen — ett sted, ikke to malere som
+kan gli fra hverandre.
+
 **Notatene har de samme snarveiene som alt annet.** `Alt`+pil flytter et
 notatkort, en notatbok eller en bokhylle ett hakk (`canReorderObj` svarer
 alltid ja der: notatene er kontoens egne, det finnes ingen lås å spørre om).

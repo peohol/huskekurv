@@ -252,6 +252,25 @@
   /* Skygge bak hvit skrift så den er lesbar også på lyse kort-/mappefarger. */
   --text-shadow: 0 1px 2px rgba(0, 0, 0, 0.42);
 
+  /* RADENES POLSTRING, ETT STED FOR HVER FAMILIE. Appen har to slag klikkbare
+     rader, og de var tidligere skrevet om igjen med litt ulike tall i hver
+     meny (8/9 her, 7/9 der) — små nok forskjeller til at ingen enkeltmeny så
+     gal ut, store nok til at to menyer ved siden av hverandre ikke leste likt.
+     Tallet bor derfor her, og bruksstedene peker på det:
+
+       • MENYRAD (`--menu-row-pad-*`) — en rad i en popover: objektmenyen og
+         ansvarlig-velgeren, som deler `.switcher-panel`-skallet. Trangere enn
+         listeraden, fordi panelet selv er smalt og har sin egen 8 px kant.
+       • LISTERAD (`--list-row-pad-*`) — en rad i en rullende modalkropp:
+         hendelser, varsler og søketreff. Romsligere, fordi den står på hele
+         modalens bredde og skal kunne bære to linjer tekst.
+
+     Endrer du et tall, endrer du det for hele familien. Det er poenget. */
+  --menu-row-pad-y: 8px;
+  --menu-row-pad-x: 9px;
+  --list-row-pad-y: 9px;
+  --list-row-pad-x: 12px;
+
   /* Samme linjetykkelse som ikonsettets strek (se icons.js/index.html), for
      CSS-tegnede streker (f.eks. sveipefeltets pil) som skal matche ikonene.
      Ikonstreken er nå 1 px i ALLE størrelser (non-scaling-stroke, se «ÉN
@@ -2590,6 +2609,17 @@ body.is-dragging * {
    overstyringen var en vakt som ikke voktet noe (MÅLT: et grønt kort leste
    fortsatt grønt over søppelkassen).
 
+   HELE IKONTRIOEN PINNES, ikke bare streken — og den pinnes til den LYSE
+   verdien i BEGGE drakter, som `.btn-solid` og `.icon-pin-light` gjør. Ikonene
+   er fargelagte: papiret i et notat-, liste- eller kalenderikon males av
+   `--icon-paper`, og den snur ellers med drakten (hvit i lys, nesten svart i
+   mørk). Sto den igjen mens flaten skiftet til målfargen, ble et notat som ble
+   dratt over arkivet et sort hull på det lyse tanet (MÅLT: `#262c36` på
+   `#e6c896`). Men målfargen er den SAMME i begge drakter, akkurat som
+   gradienten på en massiv knapp — så ikonet oppå den skal også stå stille:
+   svart strek på hvitt papir, lyst som mørkt. Motivet er da det samme her som
+   overalt ellers i appen, bare på en rød eller gul flate.
+
    `to-trash`/`to-archive` settes fra JS (`setDragTrashTarget` /
    `setDragArchiveTarget`). `dnd-drop-colour.test.js` måler den FAKTISKE malte
    fargen, ikke tokenet. */
@@ -2602,24 +2632,34 @@ body.is-dragging * {
   --plate: var(--drag-danger-face) !important;
   --ink: var(--drag-danger-ink) !important;
   --ink-soft: var(--drag-danger-ink) !important;
-  --icon-ink: var(--drag-danger-ink) !important;
+  --icon-ink: #111111 !important;
+  --icon-paper: #ffffff !important;
+  --icon-grey: #c0c4c9 !important;
 }
 /* Sikter man på ARKIVET, skifter objektet til arkivfargen på nøyaktig samme
    måte — samme lag, samme grunn, bare en annen betydning. */
-/* Tittelen er hvit-med-skygge PÅ KORTFARGEN (`.card-title`), en kontrakt som
-   er valgt for paletten — ikke for disse to flatene. Hvit på arkivets gule ga
-   2,5:1 (MÅLT). Blekket er derfor det semantiske, og skyggen og streken faller
-   bort: de finnes for å bære hvit tekst mot en vilkårlig kortfarge, og her er
-   flaten kjent. */
+/* NAVNET BÆRES AV KONTUREN, ikke av flaten under det. Målfargen er den samme
+   i begge drakter, så teksten oppå skal også stå stille — og da er svaret det
+   appen allerede bruker for hvit skrift på en vilkårlig kortfarge: hvitt blekk
+   med skygge og full svart kontur (`.hvit-på-farge`, samme oppskrift som
+   `.card-title`). Hvit rett på arkivets gule er 2,5:1, og det er nettopp det
+   konturen kompenserer for — samme regnestykke som lys drakt gjør for hele
+   palettens korttitler (docs/tilgjengelighet.md).
+
+   Listepunktets tekst har konturen bare i mørk drakt til vanlig
+   (`--item-text-stroke`); her får den den i begge, av den samme grunnen. */
+/* Notatkortets tittel bærer BEGGE klassene (`card-title note-card-title`), så
+   den er dekket av den første selektoren — den trenger ingen egen. */
 .dnd-surface [data-dnd-dragging].to-trash .card-title,
 .dnd-surface [data-dnd-dragging].to-trash .item-text,
 .dnd-surface [data-dnd-dragging].to-trash .cat-title,
 .dnd-surface [data-dnd-dragging].to-archive .card-title,
 .dnd-surface [data-dnd-dragging].to-archive .item-text,
 .dnd-surface [data-dnd-dragging].to-archive .cat-title {
-  color: var(--ink);
-  text-shadow: none;
-  -webkit-text-stroke: none;
+  color: #fff;
+  text-shadow: var(--text-shadow);
+  -webkit-text-stroke: 1px #000;
+  paint-order: stroke fill;
 }
 .dnd-surface [data-dnd-dragging].to-archive {
   --card-bg: var(--drag-archive-face) !important;
@@ -2630,7 +2670,9 @@ body.is-dragging * {
   --plate: var(--drag-archive-face) !important;
   --ink: var(--drag-archive-ink) !important;
   --ink-soft: var(--drag-archive-ink) !important;
-  --icon-ink: var(--drag-archive-ink) !important;
+  --icon-ink: #111111 !important;
+  --icon-paper: #ffffff !important;
+  --icon-grey: #c0c4c9 !important;
 }
 /* … OG DEN SIER HVA SOM SKJER. En fargeendring alene er et svakt signal — den
    forutsetter at man kjenner fargen fra før — så det løftede objektet får i
@@ -2963,7 +3005,7 @@ body.modal-open { overflow: hidden; }
   gap: 10px;
   flex: 0 0 auto;
   width: 100%;
-  padding: 7px 9px;
+  padding: var(--menu-row-pad-y) var(--menu-row-pad-x);
   border-radius: var(--control-radius);
   background: transparent;
   color: var(--ink);
@@ -4136,12 +4178,51 @@ body.no-auth .corner-controls { display: none; }
   vertical-align: -0.13em;
   margin-right: 6px;
 }
-.share-body { display: flex; flex-direction: column; gap: 10px; }
+/* MODALEN ER FIRE SEKSJONER, IKKE ÉN RAMSE: slippe noen inn, hvem som er
+   inne, låsen, og de to endelige knappene. De ble tidligere lagt rett etter
+   hverandre med det samme lille gapet (10 px) som skiller to felt INNE i en
+   seksjon, og da var det ingenting som sa hvor den ene sluttet og den neste
+   begynte — verst på mobil, der alt står under hverandre og skjermen er full.
+
+   Grensen er ÉN luft-verdi (`--share-sec-gap`) på hver side av en hårfin
+   linje, den samme linjen som modalhodet bruker. Luften INNE i en seksjon er
+   det halve, så nivåene leses på avstanden alene og streken bare bekrefter
+   dem. På mobil er verdien større: der er seksjonene høye, og luften er det
+   eneste som holder dem fra hverandre når alt ligger i én kolonne.
+
+   Første SYNLIGE seksjon har ingen linje over seg — hodets egen ligger der
+   allerede. Invitasjonsseksjonen er den eneste som kan skjules i sin helhet
+   (den som ikke kan invitere, har ingenting der), og den er alltid først, så
+   ett unntak for `[hidden] + *` dekker det. En seksjon uten innhold i det hele
+   tatt (ingen «Forlat», ingen «Slett») faller ut på samme vis. */
+.share-body {
+  --share-sec-gap: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.share-sec {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--share-sec-gap) / 2);
+  margin-top: var(--share-sec-gap);
+  padding-top: var(--share-sec-gap);
+  border-top: 1px solid var(--line);
+}
+.share-body > .share-sec:first-child,
+.share-body > [hidden] + .share-sec {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.share-actions:empty { display: none; }
 .share-invite-form { display: flex; gap: 8px; }
 .share-invite-form .field { flex: 1; min-width: 0; }
 /* Invitasjonspolicy-avmerking (under e-postfeltet): la andre invitere folk.
-   Interaktiv kun for autoriserte; ellers lesbar status via .share-policy-note. */
-.share-policy-row { margin: 2px 0 2px; }
+   Interaktiv kun for autoriserte; ellers lesbar status via .share-policy-note.
+   Ingen egen marg: seksjonen har ÉN luft-verdi, og en marg oppå den ville lagt
+   et fjerde tall inn i en rytme som er bygget av to. */
+.share-policy-row { margin: 0; }
 .share-policy-label { display: flex; align-items: center; gap: 8px; cursor: pointer;
   font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
 .share-policy-label input[type="checkbox"] { flex: none; }
@@ -4150,15 +4231,35 @@ body.no-auth .corner-controls { display: none; }
 /* Rollevelgeren ved siden av e-postfeltet (medlem vs. medeier). Vises kun for
    den som faktisk kan invitere til eierskap. */
 .share-role-select { flex: none; width: auto; padding-right: 26px; }
-.share-members { display: flex; flex-direction: column; }
+/* Medlemslisten har sin EGEN inndeling inni seksjonen (Eier, Medlemmer,
+   Ventende invitasjoner), og radene bærer allerede hver sin hårstrek. Den
+   arver derfor ikke seksjonsgapet — det ville lagt luft mellom radene og
+   løsnet streken fra raden under den. I stedet får hver bolk-overskrift som
+   har noe over seg sin egen pause: mindre enn mellom to seksjoner, mer enn
+   mellom to rader, så nivåene står i rekkefølge. */
+.share-members { display: flex; flex-direction: column; gap: 0; }
+.share-members > * + .share-section-title { margin-top: calc(var(--share-sec-gap) / 2); }
 /* Forklaringen under navnet når en bruker ikke kan fjernes her (arvet fra
    området) eller er siste eier. */
 .member-hint { display: block; font-size: var(--fs-xs); color: var(--ink-soft); font-weight: 500; font-style: italic; }
 /* «Forlat» og «Slett for alle» står sammen nederst: begge kan være aktuelle
    samtidig (en medeier kan både forlate og slette). */
-.share-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.share-actions {
+  display: flex;
+  /* Seksjonsskallet stabler; de to knappene står ved SIDEN av hverandre og
+     brekker bare når linjen ikke rekker. */
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
 .share-leave .icon { vertical-align: -0.15em; margin-right: 2px; }
-.share-section-title { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); margin: 2px 0; }
+/* `line-height: 1` er ikke pynt: overskriften er det FØRSTE blekket under en
+   seksjonslinje, og med vanlig linjehøyde la halve linjeavstanden seg oppå
+   seksjonens polstring. Luften over linja ble da 18 px og under 25 (MÅLT), på
+   en linje som skal ha like mye på hver side. Boksen klemmes derfor rundt
+   teksten, og polstringen er den eneste luften som teller. */
+.share-section-title { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-soft); margin: 0 0 4px; line-height: 1; }
 /* Raden har navn + inntil to rollehandlinger. Blir det for trangt (mobil), skal
    knappene falle ned på egen linje — ikke presse navnet ned til én bokstav per
    linje. Derfor: navnet får lov å ta plassen den trenger (flex-basis), knappene
@@ -4166,12 +4267,19 @@ body.no-auth .corner-controls { display: none; }
 .member-row {
   display: flex; align-items: center; gap: 10px;
   flex-wrap: wrap;
-  padding: 10px 4px;
+  /* Ingen sidepolstring: raden har ingen egen flate å polstre, og de 4 px den
+     hadde skjøv avataren inn fra bolk-overskriften og knappene inn fra
+     «Inviter» rett over. Modalens egen polstring er venstrekanten for alt i
+     kroppen. */
+  padding: 10px 0;
   border-bottom: 1px solid var(--line);
 }
 .member-row > button { flex: none; }
 .member-row > button:nth-of-type(1) { margin-left: auto; }
-.member-row:last-child { border-bottom: none; }
+/* Siste rad i en bolk har ingen strek å polstre ned mot, og polstringen ville
+   i stedet lagt seg oppå seksjonens egen luft (10 + 18 = 28 px mot 18 over
+   linja). Den faller derfor bort, så seksjonsgapet er hele avstanden. */
+.member-row:last-child { border-bottom: none; padding-bottom: 0; }
 /* Medlems-avatar: felles form fra .account-avatar, .member-avatar over; her kun
    størrelse + grå standard-gradient (eier får den grønne igjen). */
 .member-avatar {
@@ -4182,7 +4290,11 @@ body.no-auth .corner-controls { display: none; }
 .member-avatar.owner { background: var(--grad-accent); }
 .member-info { flex: 1 1 9em; min-width: 0; }
 .member-name { font-weight: 600; font-size: var(--fs-md); color: var(--ink); word-break: break-word; }
-.member-role { display: block; font-size: var(--fs-xs); color: var(--ink-soft); font-weight: 500; }
+/* Tett linjehøyde: rollen er den SISTE tekstlinjen i medlemsbolken, og med
+   vanlig linjeavstand la halve avstanden seg som usynlig luft oppå
+   seksjonsgapet under den. Navnet og rollen er dessuten ett par, ikke to
+   avsnitt. */
+.member-role { display: block; font-size: var(--fs-xs); color: var(--ink-soft); font-weight: 500; line-height: 1.25; }
 .member-pending .member-name { color: var(--ink-soft); font-style: italic; }
 .share-msg { margin: 0; font-size: var(--fs-sm); font-weight: 600; min-height: 20px; color: var(--danger-ink); }
 .share-msg.ok { color: var(--primary-ink); }
@@ -4202,6 +4314,24 @@ body.no-auth .corner-controls { display: none; }
 /* Arvet medlem (tilgang via området): svakere, og uten «Fjern» her. */
 .member-row.is-inherited { opacity: 0.85; }
 .member-row.is-inherited .member-avatar { background: linear-gradient(180deg, #b0bcc7, #8a97a3); }
+
+/* Telefon i portrett (samme grense som board-ets én-kolonne-grense). To ting
+   må gi etter når bredden forsvinner:
+
+   1. Seksjonene får MER luft, ikke mindre. Alt ligger i én kolonne her, og en
+      skjerm full av kontroller uten pauser er nøyaktig det som leste som
+      «crowded». Luften er det eneste som skiller dem når bredden ikke gjør det.
+   2. Invitasjonsraden brekker. Tre felt på én linje ga 130 px til e-postfeltet
+      og 110 til rollevelgeren — «E-post å» og «Som m» (MÅLT på 390 px). Feltet
+      tar derfor hele linjen, og rollevelgeren deler den neste med knappen: det
+      er den ene raden der man skriver, og den skal kunne leses mens man gjør
+      det. */
+@media (max-width: 560px) {
+  .share-body { --share-sec-gap: 22px; }
+  .share-invite-form { flex-wrap: wrap; }
+  .share-invite-form > .field:not(.share-role-select) { flex: 1 0 100%; }
+  .share-role-select { flex: 1 1 auto; width: auto; min-width: 0; }
+}
 
 /* ---------------- Plasserings-modal ---------------- */
 #place-body { display: flex; flex-direction: column; gap: 8px; }
@@ -4250,7 +4380,7 @@ body.no-auth .corner-controls { display: none; }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
+  padding: var(--list-row-pad-y) var(--list-row-pad-x);
   border: 1.5px solid transparent;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
@@ -4324,38 +4454,34 @@ body.no-auth .corner-controls { display: none; }
   font-weight: 700;
   color: var(--ink);
 }
-/* Bryteren med tre posisjoner: ett spor, tre like brede segmenter, og den
-   valgte løftet opp på modalflaten. Ingen egen farge — valget er en visning,
-   ikke en status, og fargene i denne modalen betyr noe annet. */
-.events-horizon {
-  display: flex;
-  gap: 4px;
-  padding: 3px;
-  border-radius: 999px;
-  background: var(--wash);
+/* Bryteren med tre posisjoner ER appens segmenterte bryter (`.seg`, se
+   «SEGMENTERT BRYTER» lenger ned): ett spor, tre like brede segmenter, og ÉN
+   grønn flate som glir mellom dem. Formen, fargen og dra-gesten kommer derfra
+   og står ikke her — en bryter med sin egen markeringsfarge og uten gesten
+   leste som den samme kontrollen i ustand.
+
+   Det eneste bruksstedet legger til er bredden: `.seg` er `inline-grid` og
+   sentrerer seg selv, mens denne skal fylle panelet sitt som før — en sentrert
+   pille under en venstrestilt overskrift står ikke på noen linje. Panelet står
+   i selektoren fordi `.seg` kommer SENERE i fila og ellers vinner på likt. */
+.events-horizon-panel .events-horizon { align-self: stretch; }
+/* … og HVORDAN etiketten gir etter når sporet krymper. Segmentene holder seg
+   like brede uansett (`min-width: 0` på `.seg-btn`), men da må teksten vike
+   for noe. Her er etiketten ren tekst i en modal med plass NEDOVER, så den
+   BREKKER i stedet for å bli kappet — «1 måned» over to linjer er lesbart,
+   «1 må…» er det ikke. Den glidende flaten er `top`/`bottom`-forankret og
+   strekker seg med høyden, så markeringen følger med.
+
+   Polstringen er knappere enn hovedbryterens 14 px, og det er regnet, ikke
+   smak: den lengste etiketten er «1 måned» på 65 px (engelsk «1 month», 63).
+   På 320 px — den smaleste telefonen som fortsatt er i bruk — er sporet 78 px,
+   og 6 px på hver side lar de 65 stå på ÉN linje. Under det brekker den, som
+   den gamle bryteren gjorde allerede fra 320 (den hadde 10 px og bare 55 px
+   igjen til teksten). */
+.events-horizon-panel .events-horizon .seg-btn {
+  white-space: normal;
+  padding-inline: 6px;
 }
-.events-horizon-btn {
-  flex: 1 1 0;
-  min-width: 0;
-  appearance: none;
-  border: none;
-  border-radius: 999px;
-  padding: 7px 10px;
-  background: transparent;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: var(--fs-sm);
-  font-weight: 600;
-  color: var(--ink-soft);
-  transition: background 0.15s, color 0.15s;
-}
-.events-horizon-btn:hover { color: var(--ink); }
-.events-horizon-btn.is-on {
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: var(--shadow-sm);
-}
-.events-horizon-btn:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 2px; }
 
 /* Luften bærer inndelingen. Gapet er det samme i begge ledd (30 px), så
    avstanden mellom to SEKSJONER er den samme som mellom to grupper og mellom
@@ -4399,6 +4525,16 @@ body.no-auth .corner-controls { display: none; }
    heller ikke midt i et drag, der dnd-kits klone gjør listen «ikke tom». */
 .ideas-empty { display: none; margin: 0; font-size: var(--fs-sm); color: var(--ink-soft); font-weight: 500; }
 .items-container:empty + .ideas-empty { display: block; }
+/* … og da er kortet en ren tekstboks, med LIK luft hele veien rundt. Kortets
+   egen polstring er 10 px opp/ned og 0 til sidene (radene bærer sitt eget
+   innrykk), så teksten sto 34 px fra toppen — kortets 10 + den tomme
+   beholderens minstehøyde 14 + hyllegapet 10 — og klint mot venstrekanten.
+   Er beholderen tom, er det heller ingenting å slippe i den: den legges flat,
+   og polstringen settes i ÉN verdi. Under et drag er beholderen ikke tom
+   (dnd-kits klone ligger i den), så slippmålet er urørt der det finnes noe å
+   slippe. */
+.ideas-card:has(> .items-container:empty) { padding: 16px; }
+.ideas-card > .items-container:empty { display: none; }
 
 /* KATEGORIENE ER MODALENS ENESTE FARGEDE FLATER, og de får fargen sin av
    POSISJONEN — samme regel som lister og områder: den øverste er alltid den
@@ -4513,7 +4649,7 @@ body.no-auth .corner-controls { display: none; }
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
+  padding: var(--list-row-pad-y) var(--list-row-pad-x);
   border: 1.5px solid transparent;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
@@ -4676,7 +4812,7 @@ body.no-auth .corner-controls { display: none; }
      med den lille stien i stedet for med innholdet. */
   align-items: center;
   gap: 10px;
-  padding: 9px 12px;
+  padding: var(--list-row-pad-y) var(--list-row-pad-x);
   border: 1.5px solid transparent;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
@@ -5023,7 +5159,9 @@ body.no-auth .corner-controls { display: none; }
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px 9px;
+  /* Samme venstrekant som radene under, så navnet og etikettene
+     står på én linje: X-en er radfamiliens token. */
+  padding: 4px var(--menu-row-pad-x) 9px;
   margin-bottom: 5px;
   border-bottom: 1px solid var(--line);
   font-size: var(--fs-sm);
@@ -5052,7 +5190,7 @@ body.no-auth .corner-controls { display: none; }
   /* 40 px høy rad: over AA-gulvet på 24 px, og radene ligger tett i tett, så
      de utvider seg ikke som ikonknappene gjør (ingen naboer å møte). */
   min-height: 40px;
-  padding: 8px 9px;
+  padding: var(--menu-row-pad-y) var(--menu-row-pad-x);
   border-radius: var(--control-radius);
   background: transparent;
   color: var(--ink);
@@ -5070,12 +5208,33 @@ body.no-auth .corner-controls { display: none; }
 .obj-menu-row .obj-menu-hint {
   flex: 1 0 100%;
   order: 3;
-  padding-left: 31px;
+  /* Flukter med etiketten over: ikonets 21 px + radens 10 px gap. Regnet,
+     ikke gjettet, så et nytt ikonmål ikke etterlater hintet i utakt. */
+  padding-left: calc(21px + 10px);
   font-size: var(--fs-xs);
   font-weight: 500;
   color: var(--ink-soft);
 }
 .obj-menu-row:has(.obj-menu-hint) { flex-wrap: wrap; }
+/* Telleren (antall koblinger) står i ENDEN av raden, på samme linje som
+   etiketten. Den er en opplysning om raden, ikke en handling, så den er en
+   dempet pille uten egen flateforskjell — og fremfor alt lar den radhøyden
+   være i fred, slik at hver menyrad har den samme polstringen. */
+.obj-menu-count {
+  flex: 0 0 auto;
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--wash);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  /* Tett linjehøyde: pillen skal ikke være høyere enn etiketten ved siden av,
+     ellers dytter den radhøyden ett hakk opp og «Koblinger» blir igjen den ene
+     raden som ikke matcher naboene (MÅLT: 41 px mot 40). */
+  line-height: 1.35;
+  text-align: center;
+  color: var(--ink-soft);
+}
 /* Sletting/oppløsing: rød etikett bak en skillelinje, alltid nederst. */
 .obj-menu-sep { height: 1px; margin: 5px 4px; background: var(--line); }
 .obj-menu-row.is-danger { color: var(--danger-ink); }
@@ -5091,9 +5250,21 @@ body.no-auth .corner-controls { display: none; }
 .obj-menu-list > * + .obj-menu-group { border-top: 1px solid var(--line); }
 /* Raden UNDER en skuff får linjen som eget strøk, ikke som `border-top`: radene
    er avrundet (`--control-radius`), så en kant på selve raden buer i endene og
-   linjen ville sett annerledes ut enn de flate linjene ellers i menyen. */
-.obj-menu-group + .obj-menu-row { position: relative; }
-.obj-menu-group + .obj-menu-row::before {
+   linjen ville sett annerledes ut enn de flate linjene ellers i menyen.
+   SAMME STRØK MELLOM TO VANLIGE RADER. Linjene fulgte tidligere bare skuffene,
+   og da fikk en meny linjer der det tilfeldigvis sto en skuff og ingen der det
+   ikke gjorde det: på notatsiden rant «Deling og medlemmer», «Lås», «Koblinger»
+   og «Arkiver» sammen til én blokk mens radene over dem sto hver for seg.
+   Skillet er MELLOM valgene, ikke rundt skuffene, så hver rad som har en
+   nabo over seg bærer det. `.obj-menu-sep` (over sletteraden) er fortsatt sin
+   egen, tydeligere pause med luft rundt: den skiller det som fjerner noe fra
+   alt annet, og skal ikke lese som nok en radgrense.
+   Bare direkte barn av lista — radene INNE i en skuff («Flytt opp/ned»,
+   ansvarlig-radene) er ett trinn ned og hører sammen. */
+.obj-menu-group + .obj-menu-row,
+.obj-menu-list > .obj-menu-row + .obj-menu-row { position: relative; }
+.obj-menu-group + .obj-menu-row::before,
+.obj-menu-list > .obj-menu-row + .obj-menu-row::before {
   content: '';
   position: absolute;
   inset: 0 0 auto;
@@ -5124,7 +5295,7 @@ body.no-auth .corner-controls { display: none; }
    ingen radpolstring av seg selv, så uten det ekstra innrykket her ville den
    startet lengre til venstre enn radene i de andre skuffene: 8 px fra
    `.obj-menu-sub > *` + 9 px fra `.obj-menu-row` = samme venstrekant. */
-.obj-menu-sub > .time-editor { padding-left: 17px; }
+.obj-menu-sub > .time-editor { padding-left: calc(8px + var(--menu-row-pad-x)); }
 .obj-menu-sub .time-editor { gap: 12px; }
 .obj-menu-sub .time-lock { font-size: var(--fs-sm); }
 
@@ -5461,6 +5632,14 @@ body.no-auth .corner-controls { display: none; }
 .seg.is-tog-drag::before { transition: none; }
 .seg-btn {
   position: relative;        /* over den glidende flaten */
+  /* LIKE BREDE ER EN INVARIANT, IKKE ET ØNSKE. Rutenett-elementer har
+     `min-width: auto` og nekter å krympe under sitt eget innhold, så på en
+     smal nok skjerm sluttet sporene å være like: da traff verken den glidende
+     flaten (`100% / --seg-n`) eller dragets geometri (`togGeometry`, samme
+     regnestykke) segmentene lenger, og etiketten rant ut av pillen (MÅLT på
+     280 px: 68/93/60 px i en 200 px bred bryter, med markøren på 65). Med 0
+     krymper sporene i takt og regnestykket holder hele veien ned. */
+  min-width: 0;
   appearance: none;
   cursor: pointer;
   display: inline-flex;
@@ -5481,15 +5660,24 @@ body.no-auth .corner-controls { display: none; }
 }
 .seg-btn:not(.is-active) { opacity: 0.72; }
 .seg-btn:not(.is-active):hover { opacity: 1; color: var(--ink); }
-/* Det aktive segmentet står PÅ den grønne flaten. Samme pinning som
-   `.btn-solid`: gradienten er den samme i begge drakter, så blekket og
-   ikonstreken skal stå stille. Vekten bærer forskjellen sammen med fargen. */
+/* Det aktive segmentet står PÅ den grønne flaten. Ikonene pinnes som på
+   `.btn-solid`: gradienten er den samme i begge drakter, så streken oppå skal
+   stå stille.
+
+   ETIKETTEN ER HVIT MED KONTUR, ikke mørk. Mørkt blekk på den lyse grønne ga
+   en matt, lavkontrasts etikett akkurat der valget skal være tydeligst — og
+   appen har allerede ett svar på «hvit skrift på en vilkårlig farget flate»:
+   skygge pluss full svart kontur, det samme korttitlene bruker. Da leser det
+   aktive segmentet som en markert flate og ikke som en litt annen gråtone, og
+   det gjør det likt i begge drakter. */
 .seg-btn.is-active {
-  --ink: #37343f;
   --icon-ink: #111111;
   --icon-paper: #ffffff;
   --icon-grey: #c0c4c9;
-  color: var(--ink);
+  color: #fff;
+  text-shadow: var(--text-shadow);
+  -webkit-text-stroke: 1px #000;
+  paint-order: stroke fill;
   font-weight: 800;
 }
 .seg-btn:focus-visible { outline: var(--focus-w) solid var(--focus); outline-offset: 2px; }

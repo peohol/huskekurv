@@ -94,7 +94,27 @@ av den avstanden bare ble støy.
 ### Tidshorisonten
 
 Under tittelen står et fast panel med overskriften **«Tidshorisont»** og en
-bryter med tre posisjoner (`role="radiogroup"`, rullende tabindex, piltaster):
+bryter med tre posisjoner (`role="radiogroup"`, rullende tabindex, piltaster).
+
+Bryteren er appens **segmenterte kontroll** (`.seg`, se
+[`design-system.md`](design-system.md)) — den samme som hovedbryteren
+Lister ↔ Notater og søkets scopevelger. Den arver derfor både den grønne flaten
+som GLIR mellom stillingene og dra-gesten: en bryter som så ut som de andre,
+men verken bar den grønne markeringen eller lot seg dra, leste som den samme
+kontrollen i ustand. `paintSeg` melder `aria-checked` her (og `aria-selected`
+der bruksstedet er en fane-rekke) — det er rollen på beholderen som avgjør,
+ikke to ulike malere.
+
+Bruksstedet legger til to ting, og bare to. Panelet strekker bryteren ut i full
+bredde. Og etiketten BREKKER i stedet for å fylle sporet sitt: segmentene
+holder seg like brede uansett bredde (`min-width: 0`, se design-systemet), og
+da må teksten vike for noe — her er den ren tekst i en modal med plass nedover,
+så «1 måned» over to linjer er svaret. Polstringen er samtidig knappere enn
+hovedbryterens, og det er regnet: den lengste etiketten er 65 px («1 month»,
+63), sporet er 78 px på en 320 px skjerm, og 6 px på hver side lar de 65 stå på
+ÉN linje. Under det brekker den — som den gamle bryteren gjorde allerede fra
+320 px. Uten brekkingen spiste teksten hele polstringen og la seg kant i kant
+med nabosegmentet (MÅLT på 280 px: 65 px tekst i et 65 px spor).
 
 | Posisjon | Vindu | Virkning |
 |---|---|---|

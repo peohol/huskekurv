@@ -193,7 +193,6 @@
        søppelkassen, som fortsatt kan hentes fra. */
     'notes.archive':    ['Arkiver', 'Archive'],
     'notes.unarchive':  ['Hent ut av arkivet', 'Take out of the archive'],
-    'notes.archiveHint': ['Legges til side, ikke slettet', 'Set aside, not deleted'],
     'notes.archived':   ['{name} er lagt i arkivet.', '{name} was moved to the archive.'],
     'notes.unarchived': ['{name} er hentet ut av arkivet.', '{name} was taken out of the archive.'],
     'notes.archiveNote': ['Hent tilbake det du vil bruke igjen. Resten kan du legge i søppelkassen — derfra kan det fortsatt hentes.',

@@ -4,9 +4,11 @@
 
   Dekker den klientvendte oppførselen SQL-testene ikke ser:
     1. «Deling og medlemmer» ligger i den VANLIGE objektmenyen på alle tre
-       notatnivåene — ingen ny menytype
+       notatnivåene — ingen ny menytype — og hver rad i menyen er skilt fra
+       naboen over seg, også der det ikke står en skuff imellom
     2. Delemodalen er den SAMME: medlemsliste med kategorier, invitasjonsfelt,
-       rollevelger og «Forlat»/«Slett» etter serverens capabilities
+       rollevelger og «Forlat»/«Slett» etter serverens capabilities — og
+       kroppen er fire seksjoner skilt av luft og en linje, ikke én ramse
     3. Eier / redaktør / REN LESER: låsen er det som lager leseren, og en leser
        får verken omdøping, sletting, ＋-knapper eller en skrivbar editor —
        men beholder «Kopier alt»/«Kopier som Markdown», som er lesing
@@ -217,6 +219,86 @@ async function run(label, viewport, mobile) {
   log(label + ' 1: notatkortets meny har den òg — alle tre nivåene kan deles',
     nRows.some((r) => /Deling/i.test(r)), nRows.join(' | '));
 
+  /* … og radene er SKILT fra hverandre. Notatmenyen er den lengste i appen —
+     «Deling og medlemmer», «Lås», «Koblinger» og «Arkiver» står etter
+     hverandre uten en eneste skuff imellom — og med linjer bare rundt skuffene
+     rant nettopp de fire sammen til én blokk mens radene over dem sto hver for
+     seg (docs/menus.md). Linjen måles som malt: enten `border-top` eller
+     strøket i `::before`. */
+  await p.locator(noteSel + ' .obj-menu-btn').first().click();
+  await p.waitForTimeout(250);
+  const skilt = await p.evaluate(() => {
+    const linje = (el) => {
+      const cs = getComputedStyle(el);
+      if ((parseFloat(cs.borderTopWidth) || 0) > 0) return true;
+      const b = getComputedStyle(el, '::before');
+      return b.content !== 'none' && (parseFloat(b.height) || 0) > 0
+        && b.backgroundColor !== 'rgba(0, 0, 0, 0)';
+    };
+    const rader = [...document.querySelectorAll('#obj-menu-panel .obj-menu-list > *')];
+    return rader.map((el, i) => ({
+      navn: (el.querySelector('.obj-menu-label') || {}).textContent || '(linje)',
+      sep: el.classList.contains('obj-menu-sep'),
+      // Første rad trenger ingen linje (hodet har sin egen), og heller ikke
+      // raden rett etter `.obj-menu-sep` — den er allerede skilt av den.
+      må: i > 0 && !el.classList.contains('obj-menu-sep')
+        && !rader[i - 1].classList.contains('obj-menu-sep'),
+      har: linje(el),
+    }));
+  });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(200);
+  const uskilt = skilt.filter((r) => r.må && !r.har);
+  log(label + ' 1: … og hver rad i notatmenyen er skilt fra naboen over seg',
+    skilt.length > 4 && uskilt.length === 0,
+    JSON.stringify(uskilt.length ? uskilt : skilt.map((r) => r.navn)));
+
+  /* HINTET ER FORBEHOLDT RADER SOM TRENGER EN SETNING. Det legger en linje til
+     under etiketten og gjør raden halvannen gang så høy som naboene, så et
+     tall («Koblinger» viste antallet der) eller en gjentakelse av etiketten
+     («Arkiver» sa «Legges til side, ikke slettet») hører ikke hjemme i det.
+     I notatmenyen er låseraden den ENESTE som har noe å forklare. */
+  await p.locator(noteSel + ' .obj-menu-btn').first().click();
+  await p.waitForTimeout(250);
+  const hint = await p.evaluate(() => {
+    const rad = (navn) => [...document.querySelectorAll('#obj-menu-panel .obj-menu-row')]
+      .find((r) => new RegExp(navn, 'i').test((r.querySelector('.obj-menu-label') || {}).textContent || ''));
+    const les = (navn) => {
+      const r = rad(navn);
+      if (!r) return null;
+      return { hint: !!r.querySelector('.obj-menu-hint'),
+        teller: (r.querySelector('.obj-menu-count') || {}).textContent || null,
+        h: Math.round(r.getBoundingClientRect().height) };
+    };
+    return { arkiver: les('^Arkiver'), koblinger: les('^Koblinger'),
+      lås: les('^Lås'),
+      // Hver hint-tekst i menyen, så POLICYEN kan prøves og ikke bare antallet:
+      // et hint skal si noe etiketten ikke alt sier.
+      hint: [...document.querySelectorAll('#obj-menu-panel .obj-menu-row')]
+        .map((r) => {
+          const h = r.querySelector('.obj-menu-hint');
+          return h ? { rad: (r.querySelector('.obj-menu-label') || {}).textContent,
+            tekst: h.textContent } : null;
+        }).filter(Boolean) };
+  });
+  await p.keyboard.press('Escape');
+  await p.waitForTimeout(200);
+  log(label + ' 1: «Arkiver» har ingen forklaringslinje, og er like høy som en vanlig rad',
+    !!hint.arkiver && hint.arkiver.hint === false && hint.arkiver.h === 40,
+    JSON.stringify(hint));
+  log(label + ' 1: «Koblinger» er også en vanlig rad — antallet er ingen hintlinje',
+    !!hint.koblinger && hint.koblinger.hint === false && hint.koblinger.h === 40,
+    JSON.stringify(hint.koblinger));
+  /* Hintet er FORBEHOLDT rader som trenger en setning: låsen, og de to
+     kopieringsradene som skiller to utfall med nesten samme navn. Prøven er
+     ikke ANTALLET — det vokser med nye rader — men om teksten sier noe
+     etiketten ikke alt sier: aldri et blott tall, aldri ett ord. */
+  const dårligeHint = hint.hint.filter((h) => /^\s*\d+\s*$/.test(h.tekst)
+    || h.tekst.trim().split(/\s+/).length < 3);
+  log(label + ' 1: … og hvert hint er en setning som forklarer, ikke et tall eller et ord',
+    !!hint.lås && hint.lås.hint === true && hint.hint.length > 0 && dårligeHint.length === 0,
+    JSON.stringify(dårligeHint.length ? dårligeHint : hint.hint));
+
   /* ---------- 2) Delemodalen er den SAMME som for områder og mapper ---------- */
   await menuPick(p, noteSel, 'Deling');
   const modal = await p.evaluate(() => {
@@ -239,6 +321,89 @@ async function run(label, viewport, mobile) {
     modal.kategorier.join(' | '));
   log(label + ' 2: eieren får invitasjonsfelt, rollevelger og «Slett»',
     modal.invitasjonsfelt && modal.rollevelger && modal.slett === 1, JSON.stringify(modal));
+
+  /* Kroppen er FIRE seksjoner, ikke én ramse: invitasjon, medlemmer, lås og de
+     endelige knappene. De lå tidligere rett etter hverandre med det samme
+     lille gapet som skiller to felt INNE i en seksjon, og modalen leste som én
+     vegg av kontroller — verst på mobil (docs/design-system.md, «Del-modalen»).
+     Grensen er luft PLUSS en linje, og den FØRSTE synlige seksjonen har ingen
+     linje over seg: modalhodets egen ligger der allerede. */
+  const seksjoner = await p.evaluate(() => {
+    const kropp = document.getElementById('share-body');
+    const synlige = [...kropp.children].filter((el) => !el.hidden
+      && getComputedStyle(el).display !== 'none');
+    const luft = parseFloat(getComputedStyle(kropp).getPropertyValue('--share-sec-gap')) || 0;
+    return {
+      luft,
+      seksjoner: synlige.map((el) => {
+        const cs = getComputedStyle(el);
+        return {
+          kl: el.className,
+          linje: (parseFloat(cs.borderTopWidth) || 0) > 0,
+          over: Math.round((parseFloat(cs.marginTop) || 0) + (parseFloat(cs.paddingTop) || 0)),
+          // Luften INNE i seksjonen skal være mindre enn den MELLOM dem.
+          inni: Math.round(parseFloat(cs.rowGap) || 0),
+        };
+      }),
+    };
+  });
+  const s = seksjoner.seksjoner;
+  log(label + ' 2: delemodalens kropp er fire seksjoner, hver med sin egen klasse',
+    s.length === 4 && s.every((x) => /share-sec/.test(x.kl)), JSON.stringify(s));
+  log(label + ' 2: … skilt av en linje og LIK luft, men ikke over den første',
+    seksjoner.luft > 0 && s[0].linje === false && s[0].over === 0 &&
+    s.slice(1).every((x) => x.linje === true && x.over === seksjoner.luft * 2),
+    JSON.stringify(seksjoner));
+  log(label + ' 2: … og luften inne i en seksjon er mindre enn den mellom dem',
+    s.every((x) => x.inni < seksjoner.luft), JSON.stringify(s.map((x) => x.inni)));
+
+  /* … OG SEKSJONENS POLSTRING ER HELE LUFTEN, på begge sider av linja.
+     Boksavstanden var symmetrisk hele tiden (18/18); det som ikke var det, var
+     luften slik den SES — bolk-overskriftens halve linjeavstand og siste
+     medlemsrads bunnpolstring la seg oppå seksjonsgapet, så det ble 25 px
+     under linja mot 18 over, og 28 over mot 19 under (MÅLT på skjermbilde).
+
+     Glyfenes egne kanter kan ikke måles fra DOM-en — et Range over en tekst
+     gir linjeboksen, ikke bokstavene — så sjekken går på det som GARANTERER
+     lik luft i stedet: ingen boks helt ytterst i en seksjon legger til egen
+     høyde utover seksjonens polstring. Overskriften har `line-height: 1` og
+     klemmer derfor rundt teksten, og siste medlemsrad har ingen bunnpolstring
+     å legge oppå gapet. */
+  const kanter = await p.evaluate(() => {
+    const kropp = document.getElementById('share-body');
+    const synlige = (el) => [...el.children].filter((c) => !c.hidden
+      && getComputedStyle(c).display !== 'none');
+    const gjennomsiktig = (cs) => /^rgba\(0, 0, 0, 0\)$|^transparent$/.test(cs.backgroundColor)
+      && cs.backgroundImage === 'none';
+    /* Usynlig luft i en boks: polstringen og den halve linjeavstanden over og
+       under teksten. Har boksen en EGEN flate (låsraden, sletteknappen), er
+       kanten dens ikke luft men blekk — da teller ingenting av det. */
+    const luft = (el, side) => {
+      const cs = getComputedStyle(el);
+      if (!gjennomsiktig(cs)) return 0;
+      const pad = parseFloat(side === 'top' ? cs.paddingTop : cs.paddingBottom) || 0;
+      const lh = parseFloat(cs.lineHeight);
+      const fs = parseFloat(cs.fontSize);
+      // `normal` gir NaN og er nettopp tilfellet med udefinert luft — regn den
+      // som nettleserens vanlige ~1.2 i stedet for å la den slippe unna.
+      const linje = Number.isFinite(lh) ? lh : fs * 1.2;
+      const bærerTekst = el.children.length === 0 && (el.textContent || '').trim();
+      return Math.round(pad + (bærerTekst ? Math.max(0, linje - fs) / 2 : 0));
+    };
+    return synlige(kropp).map((el) => {
+      const cs = getComputedStyle(el);
+      const barn = synlige(el);
+      if (!barn.length) return { kl: el.className, tom: true };
+      return { kl: el.className,
+        pad: [Math.round(parseFloat(cs.paddingTop)), Math.round(parseFloat(cs.paddingBottom))],
+        ekstraTopp: luft(barn[0], 'top'),
+        ekstraBunn: luft(barn[barn.length - 1], 'bottom') };
+    });
+  });
+  log(label + ' 2: … og seksjonens polstring er hele luften — ingen kantboks legger til egen',
+    kanter.length === 4 && kanter.every((x) => x.tom
+      || (x.ekstraTopp <= 1 && x.ekstraBunn <= 1)),
+    JSON.stringify(kanter));
   await p.keyboard.press('Escape');
   await p.waitForTimeout(300);
 

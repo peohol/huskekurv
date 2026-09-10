@@ -216,6 +216,10 @@ async function run(navn, viewport, touch) {
     return { transform: cs.transform, markørW: parseFloat(cs.width),
       i: seg.style.getPropertyValue('--seg-i'),
       aktivId: aktiv.id, aktivFarge: ak.color,
+      // Etiketten er hvit MED KONTUR — appens oppskrift for hvit skrift på en
+      // farget flate. Konturen er det som bærer lesbarheten, så den måles.
+      aktivStrek: ak.webkitTextStrokeColor, aktivStrekBredde: ak.webkitTextStrokeWidth,
+      aktivSkygge: ak.textShadow,
       // Segmentet maler ingen egen flate: markøren ER flaten.
       egenFlate: ak.backgroundColor,
       tabIndex: [...seg.querySelectorAll('.main-tab')].map((b) => b.tabIndex).join(','),
@@ -227,9 +231,19 @@ async function run(navn, viewport, touch) {
   };
   log(navn + ': markøren GLIR til det andre segmentet (én flate, ikke to)',
     glidd.i === '1' && Math.abs(reist(glidd.transform) - glidd.markørW) < 1 &&
-    glidd.aktivId === 'tab-notes' && glidd.egenFlate === 'rgba(0, 0, 0, 0)' &&
-    glidd.aktivFarge === 'rgb(55, 52, 63)',
+    glidd.aktivId === 'tab-notes' && glidd.egenFlate === 'rgba(0, 0, 0, 0)',
     JSON.stringify(glidd));
+  /* ETIKETTEN PÅ DET AKTIVE SEGMENTET ER HVIT MED KONTUR, ikke mørk. Mørkt
+     blekk på den lyse grønne ga en matt, lavkontrasts etikett akkurat der
+     valget skal være tydeligst; appen har allerede ett svar på hvit skrift mot
+     en vilkårlig farget flate — skygge pluss full svart kontur, det samme
+     korttitlene bruker (docs/design-system.md, `.seg`). */
+  log(navn + ': … og etiketten er hvit med svart kontur og skygge',
+    glidd.aktivFarge === 'rgb(255, 255, 255)' &&
+    /^rgb\(0, 0, 0\)/.test(glidd.aktivStrek) &&
+    parseFloat(glidd.aktivStrekBredde) > 0 && /rgb/.test(glidd.aktivSkygge || ''),
+    JSON.stringify({ farge: glidd.aktivFarge, strek: glidd.aktivStrek,
+      bredde: glidd.aktivStrekBredde, skygge: glidd.aktivSkygge }));
   log(navn + ': rullende tabIndex følger med (0 på den aktive)',
     glidd.tabIndex === '-1,0', glidd.tabIndex);
 

@@ -18,7 +18,12 @@
        målet, ikke fra paletten).
     2. Fargen er faktisk rød respektive gul — målt som fargetone, ikke som
        likhet med et token.
-    3. Teksten på objektet er lesbar mot den nye flaten (kontrast ≥ 4,5:1).
+    3. Navnet er HVITT MED KONTUR, i begge drakter — appens egen oppskrift for
+       hvit skrift på en vilkårlig farget flate (`.card-title`). Målfargen er
+       den samme lyst som mørkt, så teksten oppå skal stå stille.
+    4. TYPE-IKONET står stille på samme vis: svart strek på HVITT papir i begge
+       drakter. Papiret snur ellers med drakten, og sto det igjen mens flaten
+       skiftet til målfargen, ble et notat dratt over arkivet et sort hull.
 
   ÅTTE DRAG PÅ RAD, ikke bare det første: hver kombinasjon måles med sitt eget
   løft, og målingen krever et skjermbilde tatt MENS draget pågår. Det er tøft
@@ -177,6 +182,36 @@ async function målFarge(p, indeks, mål, touch) {
     width: Math.max(6, Math.round(el.width * 0.45)), height: Math.max(5, Math.round(el.height * 0.2)),
   } });
   const farge = medianFarge(pngPiksler(png));
+  /* TYPE-IKONET, malt. Notatikonet har et «papir» som males av `--icon-paper`,
+     og den snur ellers med drakten. Ble den stående mens flaten skiftet til
+     målfargen, ble ikonet et SORT HULL i mørk drakt (MÅLT: `#262c36` på
+     `#e6c896`). Men målfargen er den SAMME i begge drakter, så ikonet oppå den
+     skal også stå stille: svart strek på hvitt papir, lyst som mørkt. Ikonet
+     er en 1 px strektegning på en papirflate, så medianen over ikonets boks
+     ligger nær papirfargen — trukket et stykke mot streken, som er tett på så
+     få piksler. */
+  const ib = await p.locator('[data-dnd-dragging] .icon').first().boundingBox();
+  const ikon = ib ? medianFarge(pngPiksler(await p.screenshot({ clip: {
+    x: Math.round(ib.x + ib.width * 0.2), y: Math.round(ib.y + ib.height * 0.2),
+    width: Math.max(4, Math.round(ib.width * 0.6)), height: Math.max(4, Math.round(ib.height * 0.6)),
+  } }))) : null;
+  // … og tokenene bak papiret og streken, som evidens når medianen skulle svikte.
+  const papir = await p.evaluate(() => {
+    const el = document.querySelector('[data-dnd-dragging]');
+    if (!el) return null;
+    const flate = el.querySelector('[fill="#ffffff"]');
+    const strek = el.querySelector('[stroke="#111"]');
+    return { papir: flate ? getComputedStyle(flate).fill : null,
+      strek: strek ? getComputedStyle(strek).stroke : null };
+  });
+  // Konturen rundt navnet — det er DEN som bærer lesbarheten, ikke flaten.
+  const kontur = await p.evaluate(() => {
+    const t = document.querySelector('[data-dnd-dragging] .note-card-title');
+    if (!t) return null;
+    const cs = getComputedStyle(t);
+    return { strek: cs.webkitTextStrokeColor, bredde: cs.webkitTextStrokeWidth,
+      skygge: cs.textShadow };
+  });
   // Tittelens blekk, for lesbarhetssjekken.
   const blekk = await p.evaluate(() => {
     const t = document.querySelector('[data-dnd-dragging] .note-card-title');
@@ -187,7 +222,7 @@ async function målFarge(p, indeks, mål, touch) {
   await G.travel(p, { x: b.x + b.width / 2, y: b.y + 18 }, touch);
   await G.drop(p, undefined, touch);
   await p.waitForTimeout(500);
-  return { farge, hvile, blekk };
+  return { farge, hvile, blekk, ikon, papir, kontur };
 }
 const rgb = (s) => {
   const m = /(\d+),\s*(\d+),\s*(\d+)/.exec(s || '');
@@ -225,11 +260,47 @@ async function run(label, viewport, touch) {
         treffer(ta) && treffer(tb),
         JSON.stringify({ a: { hex: hex(a.farge), h: Math.round(ta.h), s: +ta.s.toFixed(2) },
           b: { hex: hex(b.farge), h: Math.round(tb.h), s: +tb.s.toFixed(2) } }));
+      /* NAVNET ER HVITT MED KONTUR, i BEGGE drakter. Målfargen er den samme
+         lyst som mørkt, så teksten oppå skal stå stille — og da er svaret
+         appens egen oppskrift for hvit skrift på en vilkårlig farget flate:
+         hvitt blekk, skygge og en full svart kontur (`.card-title`).
+         Lesbarheten bæres av KONTUREN, ikke av flaten under: hvit rett på
+         arkivets gule er 2,5:1, og det er nettopp det konturen kompenserer
+         for — samme regnestykke som lys drakt gjør for hele palettens
+         korttitler (`a11y-contrast`, «Hvit korttittel på de mørke
+         kortfargene»). Vi krever derfor at blekket ER hvitt og at konturen og
+         skyggen faktisk står der, ikke en kontrastverdi flaten aldri kunne
+         innfridd. */
       const blekk = rgb(a.blekk);
-      log(label + ' ' + drakt + '/' + navn + ': teksten er lesbar mot den nye flaten',
-        !!blekk && kontrast(blekk, a.farge) >= 4.5,
-        JSON.stringify({ blekk: a.blekk, flate: hex(a.farge),
-          kontrast: blekk ? +kontrast(blekk, a.farge).toFixed(2) : null }));
+      const hvitt = !!blekk && blekk.r === 255 && blekk.g === 255 && blekk.b === 255;
+      const k = a.kontur || {};
+      const konturStrek = rgb(k.strek);
+      log(label + ' ' + drakt + '/' + navn + ': navnet er hvitt med svart kontur og skygge',
+        hvitt && parseFloat(k.bredde) > 0 && !!konturStrek &&
+        konturStrek.r < 40 && konturStrek.g < 40 && konturStrek.b < 40 &&
+        /rgb/.test(k.skygge || ''),
+        JSON.stringify({ blekk: a.blekk, kontur: k, flate: hex(a.farge) }));
+      /* IKONET STÅR STILLE PÅ SAMME VIS: svart strek på hvitt papir i begge
+         drakter, som `.btn-solid` og `.icon-pin-light`. To bevis, fordi ingen
+         av dem er hele saken alene — tokenene sier hva vi ba om, det malte
+         utsnittet at det faktisk kom på skjermen.
+
+         Det malte utsnittet måles som RETNING, ikke som kontrast: ikonet er så
+         lite at den svarte streken drar medianen langt ned igjen (MÅLT 1,07:1
+         mot arkivets tan, som selv er lys). En kontrastterskel ville derfor
+         bare målt hvor lys målfargen tilfeldigvis er. Påstanden er at ikonet
+         ikke er en MØRK masse i flaten — det var nettopp det feilen var:
+         `#262a32` på `#e6c896`, altså en tjuendedel av flatens lyshet. */
+      const p2 = a.papir || {};
+      const pk = rgb(p2.papir), sk = rgb(p2.strek);
+      log(label + ' ' + drakt + '/' + navn + ': type-ikonet er svart strek på hvitt papir',
+        !!pk && pk.r === 255 && pk.g === 255 && pk.b === 255 &&
+        !!sk && sk.r < 40 && sk.g < 40 && sk.b < 40, JSON.stringify(p2));
+      const lysHet = a.ikon ? lum(a.ikon) / Math.max(lum(a.farge), 0.0001) : 0;
+      log(label + ' ' + drakt + '/' + navn + ': … og ikonet er ingen mørk masse i flaten',
+        !!a.ikon && lysHet > 0.75,
+        JSON.stringify({ ikon: a.ikon && hex(a.ikon), flate: hex(a.farge),
+          lyshet: +lysHet.toFixed(2) }));
     }
   }
   await settDrakt(p, 'light');
