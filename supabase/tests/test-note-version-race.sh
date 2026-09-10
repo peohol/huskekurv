@@ -25,8 +25,15 @@
 # innholdsskrivingene.
 #
 # Testen kjører kappløpet i begge rekkefølger, og krever ÉN rad hver gang.
-# Til slutt: to ULIKE tilstander samtidig skal fortsatt gi to rader — låsen
-# skal serialisere, ikke svelge.
+# Deretter: to ULIKE tilstander samtidig skal fortsatt gi to rader — låsen skal
+# serialisere, ikke svelge.
+#
+# SAMME SLAG KAPPLØP GJELDER TAKET PÅ MERKEDE BILDER. Taket er en TELLING, og
+# en telling uten lås kan to kall passere samtidig: med ett merke igjen kan
+# begge se «det er plass» og ende ett over. Låsen tas derfor FØR tellingen i
+# `note_version_save()`, og `note_version_pin()` tar den samme. Scenario 4 og 5
+# kjører de to veiene inn — to merkinger, og én merking mot ett nytt merket
+# bilde.
 #
 # Kjøres av run-tests.sh mot den samme databasen som resten av suiten.
 # Autoritativt for modellen: docs/notater-plan.md → «Historikk».
@@ -135,6 +142,81 @@ wait $treig
 n=$(antall)
 [ "$n" = "2" ] || feil "to ULIKE tilstander ga $n rader (ventet 2)"
 ok "to ulike tilstander samtidig gir to bilder — låsen serialiserer, den svelger ikke  [rader=$n]"
+
+# ---------- 4. Taket på merker: to MERKINGER samtidig ----------
+# Fyll opp til ETT under taket, og la to bilder bli merket i det samme
+# øyeblikket. Uten låsen ser begge «det er plass», og notatet ender ett over.
+tom
+TAK=$($PSQL -c "select public.note_versions_pin_max()")
+$PSQL >/dev/null -c "insert into public.note_versions
+    (id, note_id, author_id, title, doc, excerpt, chars, fingerprint, pinned)
+  select gen_random_uuid(), '$N', '$A', 'fyll', jsonb_build_object('n', i),
+         '', i, 'fyll' || i, true
+    from generate_series(1, $TAK - 1) i"
+V1=$($PSQL -c "insert into public.note_versions
+    (id, note_id, author_id, title, doc, excerpt, chars, fingerprint, pinned)
+  values (gen_random_uuid(), '$N', '$A', 'kandidat', '{\"n\":101}'::jsonb, '', 1, 'k1', false)
+  returning id")
+V2=$($PSQL -c "insert into public.note_versions
+    (id, note_id, author_id, title, doc, excerpt, chars, fingerprint, pinned)
+  values (gen_random_uuid(), '$N', '$A', 'kandidat', '{\"n\":102}'::jsonb, '', 1, 'k2', false)
+  returning id")
+
+# Én merking holdes åpen; den andre kommer inn mens den er uavklart.
+(
+  $PSQL >/dev/null <<SQL || true
+begin;
+select set_config('request.jwt.claim.sub', '$A', false);
+set local role authenticated;
+select public.note_version_pin('$N'::uuid, '$V1'::uuid, true);
+select pg_sleep(1.5);
+commit;
+SQL
+) &
+treig=$!
+sleep 0.4
+$PSQL >/dev/null -c "select set_config('request.jwt.claim.sub', '$B', false);
+                     set role authenticated;
+                     select public.note_version_pin('$N'::uuid, '$V2'::uuid, true)" 2>/dev/null || true
+wait $treig
+merket=$($PSQL -c "select count(*) from public.note_versions where note_id = '$N' and pinned")
+[ "$merket" = "$TAK" ] || feil "to samtidige merkinger på grensen ga $merket merker (taket er $TAK)"
+ok "to samtidige merkinger på grensen bryter ikke taket  [merker=$merket av $TAK]"
+
+# ---------- 5. Én merking mot ett NYTT merket bilde ----------
+# Den andre veien inn til den samme tellingen: `note_version_pin` mot
+# `note_version_save(..., pinned = true)`. Ett merke tas AV først, slik at det
+# igjen er nøyaktig én ledig plass — det er grensen som skal testes.
+$PSQL >/dev/null -c "update public.note_versions set pinned = false
+                      where id = (select id from public.note_versions
+                                   where note_id = '$N' and pinned and title = 'fyll'
+                                   order by fingerprint limit 1)"
+$PSQL >/dev/null -c "update public.note_versions set pinned = false
+                      where note_id = '$N' and id = '$V2'"
+[ "$($PSQL -c "select count(*) from public.note_versions where note_id = '$N' and pinned")" = "$((TAK - 1))" ] \
+  || feil "oppsettet til scenario 5 traff ikke grensen"
+# Den ene av de to SKAL avvises — det er nettopp taket som virker — så
+# feilmeldingen dempes her og påstanden ligger på tellingen etterpå.
+(
+  $PSQL >/dev/null 2>&1 <<SQL || true
+begin;
+select set_config('request.jwt.claim.sub', '$A', false);
+set local role authenticated;
+select public.note_version_pin('$N'::uuid, '$V2'::uuid, true);
+select pg_sleep(1.5);
+commit;
+SQL
+) &
+treig=$!
+sleep 0.4
+$PSQL >/dev/null -c "select set_config('request.jwt.claim.sub', '$B', false);
+                     set role authenticated;
+                     select public.note_version_save('$N'::uuid, gen_random_uuid(),
+                       'Felles notat', '{\"v\":1,\"n\":999}'::jsonb, 'utdrag', 3, true)" 2>/dev/null || true
+wait $treig
+merket=$($PSQL -c "select count(*) from public.note_versions where note_id = '$N' and pinned")
+[ "$merket" = "$TAK" ] || feil "merking mot nytt merket bilde ga $merket merker (taket er $TAK)"
+ok "merking mot et nytt merket bilde bryter heller ikke taket  [merker=$merket av $TAK]"
 
 # Radene blir stående: hver runde av suiten starter på et ferskt skjema, og en
 # sletting her ville bare lagt igjen en gravstein til neste kjøring.

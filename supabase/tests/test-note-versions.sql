@@ -110,6 +110,26 @@ select public.t_check('note_versions_prune er ikke kallbar som RPC',
   not has_function_privilege('authenticated', 'public.note_versions_prune(uuid)', 'EXECUTE')
   and not has_function_privilege('anon', 'public.note_versions_prune(uuid)', 'EXECUTE'));
 
+/* … OG DEN ER UFARLIG OGSÅ UTEN DEN REVOKE-EN. PostgreSQL gir hver ny funksjon
+   EXECUTE til `public`, og revoke-en ligger langt nede i migreringsfila — et
+   løp som stopper imellom ville ellers etterlatt en SECURITY DEFINER-funksjon
+   uten autorisasjonssjekk, kallbar for hvilket som helst notat. Den er derfor
+   SECURITY INVOKER, og sjekken her er på selve egenskapen: en revoke som blir
+   stående er det YTTERSTE laget, ikke det eneste. */
+select public.t_check('note_versions_prune er SECURITY INVOKER, ikke DEFINER',
+  (select not prosecdef from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public' and p.proname = 'note_versions_prune'));
+
+/* Den HALVMIGRERTE tilstanden, spilt av: EXECUTE gis tilbake slik PostgreSQL
+   gjør det ved opprettelsen, og kallet skal fortsatt stoppe — på at rollen
+   ikke har noen rettighet på `note_versions` i det hele tatt. */
+grant execute on function public.note_versions_prune(uuid) to authenticated;
+select set_config('request.jwt.claim.sub', :'A', false); set role authenticated;
+select public.t_fails('… og et direkte kall stopper selv NÅR EXECUTE er gitt',
+  'select public.note_versions_prune(''' || :'N' || ''')');
+reset role;
+revoke execute on function public.note_versions_prune(uuid) from public, anon, authenticated;
+
 -- ---------- 2–3. A lagrer et bilde ----------
 select set_config('request.jwt.claim.sub', :'A', false); set role authenticated;
 select public.note_version_save(:'N', :'V1', 'Felles notat',

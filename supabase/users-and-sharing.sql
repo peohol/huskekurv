@@ -6634,9 +6634,20 @@ create or replace function public.note_versions_pin_max() returns integer
    bilde: brukeren har sagt «behold dette», og en opprydning som likevel tok
    det ville gjort merket til en løgn. Taket på antall merker håndheves i
    stedet ved MERKINGEN (`note_versions_pin_max`), der brukeren er til stede og
-   kan velge hvilket som skal vike. */
+   kan velge hvilket som skal vike.
+
+   FUNKSJONEN ER SECURITY INVOKER, og det er en sikkerhetsegenskap, ikke en
+   detalj. Den har ingen egen autorisasjonssjekk — kallerne har alt kontrollert
+   myndigheten — og PostgreSQL gir hver NY funksjon EXECUTE til `public`. Revoke-en
+   ligger langt nede i fila (seksjon 12), så et migreringsløp som stopper
+   imellom ville etterlatt en DEFINER-funksjon uten sjekk som hvem som helst
+   kunne kalt for et hvilket som helst notat. Som INVOKER arver den i stedet
+   kallerens rettigheter: kalt fra RPC-ene i 9e kjører den som eieren og virker,
+   mens et direkte kall fra `authenticated` stopper på at rollen ikke har noen
+   rettighet på `note_versions` i det hele tatt. Revoke-en er fortsatt der — to
+   lag, og det innerste virker også i en halvferdig migrering. */
 create or replace function public.note_versions_prune(p_note uuid)
-returns integer language plpgsql security definer set search_path = public as $$
+returns integer language plpgsql set search_path = public as $$
 declare n integer := 0; m integer := 0;
 begin
   delete from public.note_versions v
@@ -6742,13 +6753,6 @@ begin
   if p_doc is null or jsonb_typeof(p_doc) <> 'object' then
     raise exception 'et bilde uten dokument' using errcode = '22023';
   end if;
-  -- Taket sjekkes FØR skrivingen, slik at et avslag aldri etterlater et
-  -- halvferdig bilde. Se `note_version_pin`.
-  if merk and (select count(*) from public.note_versions
-                where note_id = p_note and pinned) >= public.note_versions_pin_max() then
-    raise exception 'for mange merkede bilder' using errcode = '54000';
-  end if;
-
   /* ÉN AV GANGEN PER NOTAT. Fingeravtrykket sammenlignes mot det ferskeste
      bildet, og «det ferskeste» er ikke en fast størrelse under samtidighet: to
      enheter som ber om et bilde i det samme øyeblikket leser hver sin
@@ -6761,8 +6765,17 @@ begin
      akkurat det historikken finnes for. Låsen er en RÅDGIVENDE lås på notatet,
      ikke en radlås: den holder de to skrivingene fra hverandre uten å røre
      `notes`-raden, som innholdsskrivingene bruker. Den varer transaksjonen ut
-     og dekker derfor både lesingen av `siste` og innsettingen. */
+     og dekker derfor ALT som leser og skriver videre: både «det ferskeste
+     bildet» og tellingen av merker under. Tas den etter tellingen, kan to kall
+     med 19 merkede bilder begge se 19 og ende på 21. */
   perform pg_advisory_xact_lock(hashtextextended('note_version:' || p_note::text, 0));
+
+  -- Taket sjekkes FØR skrivingen, slik at et avslag aldri etterlater et
+  -- halvferdig bilde. Se `note_version_pin`.
+  if merk and (select count(*) from public.note_versions
+                where note_id = p_note and pinned) >= public.note_versions_pin_max() then
+    raise exception 'for mange merkede bilder' using errcode = '54000';
+  end if;
 
   select * into siste from public.note_versions
    where note_id = p_note order by created_at desc, id desc limit 1;
@@ -6805,6 +6818,10 @@ begin
   if not public.can_edit_content('note', p_note, uid) then
     raise exception 'mangler skriverett i notatet' using errcode = '42501';
   end if;
+  -- SAMME LÅS som `note_version_save`, og av samme grunn: taket er en telling,
+  -- og en telling uten lås kan to kall passere samtidig. Låsen dekker også
+  -- uttynningen under, som et merke som tas AV utløser.
+  perform pg_advisory_xact_lock(hashtextextended('note_version:' || p_note::text, 0));
   if merk and (select count(*) from public.note_versions
                 where note_id = p_note and pinned and id <> p_id)
              >= public.note_versions_pin_max() then

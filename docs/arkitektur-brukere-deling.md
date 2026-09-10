@@ -220,7 +220,19 @@ per time, eldre til ett per døgn, og til slutt gjelder et hardt tak på antall
 rader (`note_versions_keep()`). MERKEDE bilder står utenfor alle fire — det er
 hele meningen med å merke ett. Taket på antall merker
 (`note_versions_pin_max()`) håndheves i stedet ved MERKINGEN, der brukeren er
-til stede og kan velge hvilket som skal vike.
+til stede og kan velge hvilket som skal vike — og den tellingen skjer INNENFOR
+den samme låsen, i både `note_version_save` og `note_version_pin`, ellers kunne
+to samtidige merkinger begge sett at det var plass til én til.
+
+**Uttynningen er SECURITY INVOKER, og det er en sikkerhetsegenskap.** Den har
+ingen egen autorisasjonssjekk — kallerne har alt kontrollert myndigheten — og
+PostgreSQL gir hver ny funksjon EXECUTE til `public`. Revoke-en ligger langt
+nede i migreringsfila, så et løp som stopper imellom ville etterlatt en
+DEFINER-funksjon uten sjekk, kallbar for et hvilket som helst notat. Som INVOKER
+arver den kallerens rettigheter i stedet: kalt fra RPC-ene kjører den som
+eieren, mens et direkte kall fra `authenticated` stopper på at rollen ikke har
+noen rettighet på tabellen. Revoke-en er fortsatt der — to lag, og det innerste
+virker også i en halvferdig migrering.
 
 **Skrivingen er serialisert per notat.** Fingeravtrykket sammenlignes mot det
 FERSKESTE bildet, og «det ferskeste» er ikke en fast størrelse under
@@ -236,7 +248,8 @@ innholdsskrivingene.
 fingeravtrykket, en ren leser, en utenforstående, merking og taket, alle fire
 lagene i uttynningen, tilbakekalling, kaskaden og kontosletting;
 `supabase/tests/test-note-version-race.sh` kjører kappløpet med to ekte
-tilkoblinger, i begge rekkefølger.
+tilkoblinger, i begge rekkefølger — og det samme for taket på merkede bilder,
+der to samtidige merkinger på grensen ikke skal kunne ende ett over.
 
 At man har lov til å legge noe i bokhyllen/notatboken er en egen betingelse i
 `note_folders_insert`/`notes_insert` (`can_create_child` / `can_create_note`),
