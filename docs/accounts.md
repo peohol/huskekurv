@@ -435,8 +435,11 @@ Klientsiden ligger i tre deler, alle i notat-seksjonen i `app.js`:
   frø kastes mens brukeren hadde rukket å skrive, er det utkastet den ENESTE
   kopien — CRDT-en er byttet ut og projeksjonen skrives over. Det legges derfor
   i en holdbar kø FØR noe kastes, tømmes på den vanlige synk-runden, og fjernes
-  først når serveren har bekreftet bildet. Nøkkelen tømmes ved utlogging, og
-  for ett enkelt notat når tilgangen til det forsvinner — som de to andre.
+  først når serveren har bekreftet bildet. Køen har **ikke noe tak**: hver rad
+  er den eneste kopien av noe brukeren har skrevet, og et tak måtte kastet den
+  eldste. Forsøket på nytt bruker køradens egen id, så serveren kjenner igjen et
+  bilde den alt har lagret. Nøkkelen tømmes ved utlogging, og for ett enkelt
+  notat når tilgangen til det forsvinner — som de to andre.
 
 **Lagringsstatusen i editoren** er avledet av nettopp dette: står det rader i
 køen, sier den «Lagrer …»; kommer de ikke fram, «Lagret på denne enheten»; og

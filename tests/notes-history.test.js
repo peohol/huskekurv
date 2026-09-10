@@ -37,6 +37,11 @@
        og utkastet legges i historikken
   15e. … og det skjer ikke på håp: FEILER den første lagringen, ligger utkastet
        i en holdbar kø på enheten og kommer inn ved neste runde
+   16. Køen kaster ALDRI en ubekreftet kopi: 25 utkast med vedvarende
+       lagringsfeil blir alle stående, i minnet og i enhetens lagring
+   17. Et forsøk på nytt er EKSAKT idempotent: serveren committer, svaret blir
+       borte, en annen historikkrad kommer imellom — og utkastet finnes
+       fortsatt bare én gang
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -504,6 +509,126 @@ async function runUtdatert() {
     rader.some((r) => /MITT UTKAST/.test(r.text)), rader.map((r) => r.text));
   await a.evaluate(() => window.__huskis.closeNoteHistory());
   await lukkEditor(a);
+
+  /* ---- 16. Køen kaster ALDRI en ubekreftet kopi ----
+     Hver rad er en tekst som ikke finnes noe annet sted før serveren har
+     bekreftet den. Et tak ville måttet kaste den eldste — altså slette den
+     eneste kopien av noe, stille. Her legges 25 utkast i køen mens HVER
+     lagring feiler, og alle 25 skal fortsatt være å finne, både i minnet og i
+     enhetens lagring. */
+  await a.evaluate(() => {
+    const c = window.__huskis.client;
+    const ekte = c.rpc.bind(c);
+    c.rpc = function (navn, params) {
+      if (navn === 'note_version_save') {
+        return Promise.resolve({ data: null, error: { message: 'Failed to fetch' } });
+      }
+      return ekte(navn, params);
+    };
+    window.__hkGjenopprett = () => { c.rpc = ekte; };
+  });
+  await a.evaluate((x) => {
+    for (let i = 1; i <= 25; i++) {
+      window.__huskis.queueNoteDraft(x, {
+        title: 'Felles notat',
+        doc: { v: 1, blocks: [{ t: 'p', c: [{ s: 'UTKAST ' + i }] }] },
+      });
+    }
+  }, ids.N);
+  await a.evaluate(async () => { await window.__huskis.pushNoteDrafts(); });
+  await a.waitForTimeout(200);
+  const mange = await a.evaluate(() => {
+    const key = Object.keys(localStorage).find((k) => k.indexOf('hk-note-draft:') === 0);
+    const lagret = JSON.parse(localStorage.getItem(key) || '[]');
+    const info = window.__huskis.noteDraftsInfo;
+    return {
+      iMinnet: info.count,
+      iLagringen: lagret.length,
+      førsteFinnes: info.texts.some((t) => t === 'UTKAST 1'),
+      sisteFinnes: info.texts.some((t) => t === 'UTKAST 25'),
+    };
+  });
+  check(navn + ' 16: 25 ubekreftede utkast blir ALLE stående — ingen kastes for å spare plass',
+    mange.iMinnet === 25 && mange.iLagringen === 25
+    && mange.førsteFinnes && mange.sisteFinnes, mange);
+
+  /* ---- 17. Et forsøk på nytt er nøyaktig idempotent ----
+     Serveren committer bildet, men svaret blir borte, og en ANNEN historikkrad
+     kommer imellom før forsøket gjentas. Uten en stabil id ville
+     fingeravtrykket da ikke lenger vært mot den samme ferskeste raden, og det
+     samme utkastet ville blitt lagt inn en gang til. */
+  await a.evaluate(() => window.__hkGjenopprett());
+  // Tøm køen fra forrige sjekk: den hører ikke til dette scenariet.
+  await a.evaluate(() => {
+    Object.keys(localStorage).forEach((k) => {
+      if (k.indexOf('hk-note-draft:') === 0) localStorage.removeItem(k);
+    });
+  });
+  await a.reload();
+  await a.waitForFunction(() => {
+    const H = window.__huskis;
+    return !!(H && H.authUser && H.lastMy);
+  }, null, { timeout: 20000, polling: 200 });
+  await a.evaluate(() => window.__huskis.setMainTab('notes'));
+
+  await a.evaluate(() => {
+    const c = window.__huskis.client;
+    const ekte = c.rpc.bind(c);
+    let svelget = false;
+    window.__hkSvelget = 0;
+    c.rpc = async function (navn, params) {
+      const erUtkastet = navn === 'note_version_save'
+        && JSON.stringify((params || {}).p_doc || '').indexOf('IDEMPOTENT') > -1;
+      if (!erUtkastet || svelget) return ekte(navn, params);
+      svelget = true;
+      window.__hkSvelget++;
+      await ekte(navn, params);             // serveren COMMITTER bildet …
+      /* … og den ANDRE historikkraden legges inn her, mens svaret ennå ikke
+         har kommet tilbake. Da er den på plass uansett HVEM som kjører
+         forsøket på nytt — den eksplisitte pushen under, eller synk-runden
+         som drenerer den samme køen av seg selv. */
+      await ekte('note_version_save', {
+        p_note: params.p_note, p_id: crypto.randomUUID(), p_title: params.p_title,
+        p_doc: { v: 1, blocks: [{ t: 'p', c: [{ s: 'NOE HELT ANNET' }] }] },
+        p_excerpt: 'NOE HELT ANNET', p_chars: 14, p_pinned: false,
+      });
+      return { data: null, error: { message: 'Failed to fetch' } };   // … svaret blir borte
+    };
+  });
+  await a.evaluate((x) => {
+    window.__huskis.queueNoteDraft(x, {
+      title: 'Felles notat',
+      doc: { v: 1, blocks: [{ t: 'p', c: [{ s: 'IDEMPOTENT UTKAST' }] }] },
+    });
+  }, ids.N);
+  /* Køen leses i det SAMME evaluate-kallet som pushen, uten et opphold
+     imellom: synk-runden drenerer den samme køen, og et opphold ville latt
+     den rekke forsøket først. */
+  const etterTapt = await a.evaluate(async (x) => {
+    await window.__huskis.pushNoteDrafts();
+    const db = JSON.parse(localStorage.getItem('hk-mock-db'));
+    const rader = (db.note_versions || []).filter((v) => v.note_id === x)
+      .sort((p1, p2) => p2.created_at - p1.created_at);
+    return {
+      svelget: window.__hkSvelget,
+      iKøen: window.__huskis.noteDraftsInfo.count,
+      ferskeste: JSON.stringify((rader[0] || {}).doc || '').indexOf('NOE HELT ANNET') > -1,
+    };
+  }, ids.N);
+  check(navn + ' 17: et tapt svar lar raden bli stående i køen, og en ANNEN rad '
+    + 'er kommet imellom (forutsetningen)',
+    etterTapt.svelget === 1 && etterTapt.iKøen === 1 && etterTapt.ferskeste, etterTapt);
+
+  await a.evaluate(async () => { await window.__huskis.pushNoteDrafts(); });
+  await a.waitForFunction(() => window.__huskis.noteDraftsInfo.count === 0,
+    null, { timeout: 20000, polling: 100 });
+  const antall = await a.evaluate((x) => {
+    const db = JSON.parse(localStorage.getItem('hk-mock-db'));
+    return (db.note_versions || []).filter((v) => v.note_id === x)
+      .filter((v) => JSON.stringify(v.doc).indexOf('IDEMPOTENT') > -1).length;
+  }, ids.N);
+  check(navn + ' 17b: … og forsøket på nytt gir ÉN rad, ikke to',
+    antall === 1, { rader: antall });
 
   check(navn + ': ingen JS-feil', feil.length === 0, feil.join(' | '));
   await br.close();

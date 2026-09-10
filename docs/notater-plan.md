@@ -325,8 +325,11 @@ av serverens dokument rett etterpå. Å sende det med ett kall og håpe ville gj
 et tapt svar til stille datatap i nettopp det som skal hindre datatap. Utkastet
 legges derfor i en HOLDBAR KØ i enhetens lagring FØR noe kastes, køen tømmes på
 den vanlige synk-runden, og raden fjernes først når serveren har bekreftet
-bildet. Køen ryddes som resten av notatlagringen: ved utlogging, og for et notat
-når tilgangen til det forsvinner.
+bildet. Køen har INGEN øvre grense — hver rad er den eneste kopien av noe
+brukeren har skrevet, og et tak måtte kastet den eldste — og forsøket på nytt
+bruker køradens egen id, så et bilde serveren alt har lagret ikke legges inn en
+gang til. Køen ryddes som resten av notatlagringen: ved utlogging, og for et
+notat når tilgangen til det forsvinner.
 
 **Offline er bedre enn før, ikke dårligere.** Oppdateringene legges i en kø i
 enhetens lagring, ved siden av en lokal kopi av CRDT-en, og køen tømmes ved
@@ -972,11 +975,12 @@ autoritative beskrivelsen; her er bare det som er verdt å vite om VALGENE:
 Dekket av `tests/notes-history.test.js` (ny: bildene ved åpning og lukking,
 dubletthåndteringen, modalen, forhåndsvisningen, gjenoppretting gjennom CRDT-en
 med loggen som vokser, angring fra toasten, gjenoppretting MENS en annen
-skriver, en ren leser, tilbakekalling, uten nett, merking — og tre regresjoner
-på frøet, som hver feiler uten sin rettelse: den doblede teksten, det ferske
-notatet uten angre, og den utdaterte projeksjonen som ikke får slette den
-andres avsnitt — den siste også med lagringen av utkastet tvunget til å feile,
-så køen på enheten er bevist; desktop og mobil),
+skriver, en ren leser, tilbakekalling, uten nett, merking — og fem regresjoner
+som hver feiler uten sin rettelse: den doblede teksten ved første åpning, det
+ferske notatet uten angre, den utdaterte projeksjonen som ikke får slette den
+andres avsnitt (også med lagringen av utkastet tvunget til å feile, så køen på
+enheten er bevist), de 25 ubekreftede utkastene der ingen kastes, og forsøket på
+nytt som gir én historikkrad og ikke to; desktop og mobil),
 `supabase/tests/test-note-versions.sql` (serverkontrakten: grants, policy,
 fingeravtrykk, ren leser, utenforstående, merking og tak, alle fire lagene i
 uttynningen, tilbakekalling, kaskade og kontosletting),

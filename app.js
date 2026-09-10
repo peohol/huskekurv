@@ -19038,7 +19038,6 @@
      legges her — i enhetens lagring — FØR det foreløpige dokumentet kastes, og
      fjernes først når serveren har bekreftet at bildet står i historikken. */
   const noteDraftKey = () => 'hk-note-draft:' + (authUser ? authUser.id : '-');
-  const NOTE_DRAFTS_MAX = 20;         // hvor mange strandede utkast enheten bærer
 
   let noteLive = null;        // den åpne øktens tilstand (se openNoteLive)
   let noteOps = [];           // [{ id, note, u }] — ventende rader
@@ -19098,13 +19097,25 @@
     noteDrafts = Array.isArray(raw)
       ? raw.filter((d) => d && d.id && d.note && d.doc && typeof d.doc === 'object') : [];
   }
-  function saveNoteDrafts() { writeJsonStore(noteDraftKey(), noteDrafts); }
+  /* Sier enhetens lagring nei (full disk, privat modus), beholdes raden i
+     MINNET og køen tømmes som vanlig ved neste runde. Å kaste den fordi den
+     ikke lot seg lagre ville vært den samme feilen som et tak. */
+  function saveNoteDrafts() { return writeJsonStore(noteDraftKey(), noteDrafts); }
   const noteDraftsFor = (id) => noteDrafts.filter((d) => d.note === id);
+  /* KØEN HAR INGEN ØVRE GRENSE, og det er et bevisst valg. Hver rad her er en
+     tekst brukeren har skrevet som IKKE finnes noe annet sted før serveren har
+     bekreftet den. Et tak ville måttet kaste den eldste — altså slette den
+     eneste kopien av noe, stille, for å spare plass. Det er nøyaktig det denne
+     køen finnes for å hindre.
+
+     Den kan heller ikke vokse fritt i praksis: en rad havner her bare når en
+     henting fra serveren LYKKES (ellers avgjøres frøet aldri), og den fjernes
+     ved neste synk-runde. Å samle mange forutsetter derfor at lesingen virker
+     mens skrivingen ikke gjør det, om og om igjen. Skulle enhetens lagring
+     likevel si nei, beholder `saveNoteDrafts` raden i minnet i stedet for å
+     kaste den. */
   function queueNoteDraft(noteId, st) {
     noteDrafts.push({ id: uid(), note: noteId, title: st.title || '', doc: st.doc });
-    // Taket er en vakt mot at en enhet som aldri når serveren fyller lagringen.
-    // Det ELDSTE viker: et ferskt utkast er det brukeren nettopp mistet.
-    if (noteDrafts.length > NOTE_DRAFTS_MAX) noteDrafts = noteDrafts.slice(-NOTE_DRAFTS_MAX);
     saveNoteDrafts();
   }
   function dropNoteDraftsFor(id) {
@@ -19132,8 +19143,15 @@
       if (!n || !noteEditable(n)) { dropNoteDraft(d.id); continue; }
       let res = null;
       try {
+        /* ID-EN ER KØENS EGEN, ikke en ny for hvert forsøk. Committer serveren
+           bildet mens svaret blir borte, blir raden stående i køen — og et
+           nytt forsøk med en NY id ville lagt inn det samme utkastet en gang
+           til så snart en annen historikkrad var kommet imellom (da er
+           fingeravtrykket ikke lenger mot den samme ferskeste raden). Med den
+           stabile id-en gjør serverens `on conflict (id) do nothing` forsøket
+           nøyaktig idempotent. */
         res = await client.rpc('note_version_save', {
-          p_note: d.note, p_id: uid(), p_title: d.title, p_doc: d.doc,
+          p_note: d.note, p_id: d.id, p_title: d.title, p_doc: d.doc,
           p_excerpt: noteDocExcerpt(d.doc, NOTE_VERSION_EXCERPT),
           p_chars: noteDocText(d.doc).length,
           p_pinned: false,
@@ -27701,7 +27719,7 @@
     setNoteDoc,
     // Historikken (docs/notater-plan.md, «Historikk»)
     captureNoteVersion, openNoteHistory, closeNoteHistory, restoreNoteVersion,
-    loadNoteHistory, pushNoteDrafts,
+    loadNoteHistory, pushNoteDrafts, queueNoteDraft,
     // Køen av strandede utkast: den ENESTE kopien mellom at frøet kastes og
     // at serveren har bekreftet bildet (se noteKeepStrandedDraft).
     get noteDraftsInfo() {
