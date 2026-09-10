@@ -42,6 +42,10 @@
    17. Et forsøk på nytt er EKSAKT idempotent: serveren committer, svaret blir
        borte, en annen historikkrad kommer imellom — og utkastet finnes
        fortsatt bare én gang
+   18. REGRESJON (datatap): nekter BÅDE enhetens lagring og serveren, finnes
+       det ingen holdbar destinasjon — og da kastes ingenting. Økten blir
+       stående foreløpig, teksten står i editoren, ingenting publiseres, og
+       overgangen fullfører seg selv når lagringen er tilbake
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -635,6 +639,160 @@ async function runUtdatert() {
 }
 
 /* ============================================================
+   Løp 1c — HVERKEN enheten eller kontoen tar imot
+
+   Den siste utgangen av den utdaterte projeksjonen: utkastet skal ligge trygt
+   FØR det foreløpige dokumentet kastes. Nekter enhetens lagring OG serveren
+   samtidig, finnes det ingen holdbar destinasjon — og da skal ingenting
+   kastes. Økten blir stående foreløpig, arket beholder teksten, og ingenting
+   publiseres. Går lagringen igjen, fullfører overgangen av seg selv.
+   ============================================================ */
+async function runUtenLagring() {
+  const navn = 'uten lagring';
+  const { ids, db } = buildDB();
+  const br = await chromium.launch();
+  const ctx = await br.newContext({ viewport: { width: 1200, height: 900 } });
+  const feil = [];
+  const a = await ctx.newPage();
+  a.on('pageerror', (e) => feil.push('A: ' + e.message));
+  await loadAs(a, db, 'uA', 'a@x.no', true);
+
+  // Den samme oppstillingen som løp 1b: loggen har rader, og projeksjonen
+  // settes tilbake på serveren så den ligger ETTER loggen.
+  await åpneEditor(a, ids.N);
+  await skrivSlutt(a, ' AVSNITT FRA A');
+  await a.evaluate(async () => { window.__huskis.noteLiveFlush(); await window.__huskis.pushNoteOps(); });
+  await lukkEditor(a);
+  await a.waitForTimeout(250);
+  await a.evaluate(async (x) => {
+    await window.HK_MOCK._edit((d) => {
+      const n = d.notes.find((m) => m.id === x);
+      n.body = { v: 1, blocks: [{ t: 'p', c: [{ s: 'OPPRINNELIG' }] }] };
+      n.ts = Date.now() + 60000;
+      n.org = 'annen-enhet';
+    });
+    Object.keys(localStorage).forEach((k) => {
+      if (k.indexOf('hk-note-crdt:') === 0 || k.indexOf('hk-note-ops:') === 0) localStorage.removeItem(k);
+    });
+  }, ids.N);
+
+  await a.goto(BASE + '/?mock=1&lag=800');
+  await a.waitForFunction(() => {
+    const H = window.__huskis;
+    return !!(H && H.authUser && H.lastMy);
+  }, null, { timeout: 20000, polling: 200 });
+  await a.evaluate(() => window.__huskis.setMainTab('notes'));
+  await a.waitForFunction((x) => {
+    const n = window.__huskis.state.notes.find((m) => m.id === x);
+    return n && JSON.stringify(n.doc).indexOf('AVSNITT FRA A') === -1;
+  }, ids.N, { timeout: 20000, polling: 200 });
+
+  /* BEGGE holdbare destinasjonene sier nei: enhetens lagring nekter køen (full
+     disk, privat modus), og serveren tar ikke imot noe bilde. */
+  await a.evaluate(() => {
+    const ekteSet = localStorage.setItem.bind(localStorage);
+    window.__hkNektet = 0;
+    localStorage.setItem = function (k, v) {
+      if (String(k).indexOf('hk-note-draft:') === 0) {
+        window.__hkNektet++;
+        throw new Error('QuotaExceededError');
+      }
+      return ekteSet(k, v);
+    };
+    window.__hkLagringTilbake = () => { localStorage.setItem = ekteSet; };
+
+    const c = window.__huskis.client;
+    const ekteRpc = c.rpc.bind(c);
+    window.__hkAvvist = 0;
+    c.rpc = function (n2, params) {
+      if (n2 === 'note_version_save') {
+        window.__hkAvvist++;
+        return Promise.resolve({ data: null, error: { message: 'Failed to fetch' } });
+      }
+      return ekteRpc(n2, params);
+    };
+    window.__hkNettTilbake = () => { c.rpc = ekteRpc; };
+  });
+
+  await a.evaluate((x) => window.__huskis.openNoteEditor(x), ids.N);
+  await a.waitForFunction(() => !document.getElementById('note-editor').hidden,
+    null, { timeout: 5000, polling: 50 });
+  const iVinduet = await a.evaluate(() => window.__huskis.noteLiveInfo.seedPending);
+  check(navn + ' 18a: frøet er foreløpig når vi begynner å skrive (forutsetningen)',
+    iVinduet === true, { seedPending: iVinduet });
+  await skrivSlutt(a, ' MITT UTKAST');
+
+  /* Vent på at overgangen faktisk ble FORSØKT — signalet er at lagringen sa
+     nei, og det skjer uansett hva appen gjør etterpå. Å vente på toasten ville
+     latt testen henge i stedet for å felle en påstand når vakten mangler. */
+  await a.waitForFunction(() => window.__hkNektet > 0,
+    null, { timeout: 20000, polling: 100 });
+  await a.waitForTimeout(900);          // et par runder til, så et tak ville vist seg
+
+  const blokkert = await a.evaluate(() => ({
+    nektet: window.__hkNektet > 0,
+    seedPending: window.__huskis.noteLiveInfo.seedPending,
+    ark: document.getElementById('note-doc').innerText.trim(),
+    iKøen: window.__huskis.noteDraftsInfo.count,
+  }));
+  check(navn + ' 18b: lagringen nektet faktisk (forutsetningen)', blokkert.nektet, blokkert.nektet);
+  check(navn + ' 18: teksten står fortsatt der brukeren skrev den — ingenting ble kastet',
+    blokkert.ark.indexOf('MITT UTKAST') > -1 && blokkert.seedPending === true,
+    { ark: blokkert.ark, seedPending: blokkert.seedPending });
+  check(navn + ' 18c: … og køen vokser ikke med en rad for hver runde',
+    blokkert.iKøen === 0, { iKøen: blokkert.iKøen });
+
+  // Og ingenting ble publisert: den andres avsnitt står urørt på serveren.
+  const påServeren = await a.evaluate((x) => {
+    const d = JSON.parse(localStorage.getItem('hk-mock-db'));
+    const n = d.notes.find((m) => m.id === x);
+    return { body: JSON.stringify(n.body), rader: (d.note_updates || []).filter((u) => u.note_id === x).length };
+  }, ids.N);
+  check(navn + ' 18d: … og ingenting ble publisert oppå det den andre skrev',
+    påServeren.body.indexOf('MITT UTKAST') === -1, påServeren);
+
+  /* OG APPEN PÅSTÅR IKKE NOE ANNET. Toasten som sier at teksten er tatt vare
+     på skal ikke ha vært vist — den er sann bare når en holdbar destinasjon
+     faktisk tok imot. */
+  const sagt = await a.evaluate(() => (document.getElementById('toast') || {}).textContent || '');
+  check(navn + ' 18e: … og appen sier ikke at teksten er lagret',
+    sagt.indexOf('tatt vare på') === -1 && sagt.indexOf('ikke lagret ennå') > -1, sagt);
+
+  /* Går lagringen igjen, fullfører overgangen av seg selv: utkastet blir
+     holdbart, det foreløpige dokumentet kastes, og serverens dokument vinner.
+     Serveren tar fortsatt ikke imot bildet — raden skal derfor stå i køen. */
+  await a.evaluate(() => window.__hkLagringTilbake());
+  await a.waitForFunction(() => !window.__huskis.noteLiveInfo.seedPending,
+    null, { timeout: 20000, polling: 100 });
+  await a.waitForTimeout(300);
+  const køen = await a.evaluate(() => {
+    const key = Object.keys(localStorage).find((k) => k.indexOf('hk-note-draft:') === 0);
+    return {
+      kø: window.__huskis.noteDraftsInfo.texts,
+      iLagringen: JSON.parse(localStorage.getItem(key) || '[]').length,
+    };
+  });
+  check(navn + ' 18f: med lagringen tilbake blir utkastet holdbart, og overgangen fullføres',
+    køen.kø.some((t) => /MITT UTKAST/.test(t)) && køen.iLagringen >= 1, køen);
+
+  // … og når serveren tar imot igjen, havner det i historikken ÉN gang.
+  await a.evaluate(() => window.__hkNettTilbake());
+  await a.evaluate(async () => { await window.__huskis.pushNoteDrafts(); });
+  await a.waitForFunction(() => window.__huskis.noteDraftsInfo.count === 0,
+    null, { timeout: 20000, polling: 100 });
+  const iHistorikken = await a.evaluate((x) => {
+    const d = JSON.parse(localStorage.getItem('hk-mock-db'));
+    return (d.note_versions || []).filter((v) => v.note_id === x)
+      .filter((v) => JSON.stringify(v.doc).indexOf('MITT UTKAST') > -1).length;
+  }, ids.N);
+  check(navn + ' 18g: … og når serveren tar imot igjen, ligger det i historikken ÉN gang',
+    iHistorikken === 1, { rader: iHistorikken });
+
+  check(navn + ': ingen JS-feil', feil.length === 0, feil.join(' | '));
+  await br.close();
+}
+
+/* ============================================================
    Løp 2 — flere brukere og flere faner
    ============================================================ */
 async function runFlere() {
@@ -785,6 +943,7 @@ async function runFlere() {
   await run('desktop', { width: 1200, height: 900 }, false);
   await run('mobil', { width: 390, height: 780 }, true);
   await runUtdatert();
+  await runUtenLagring();
   await runFlere();
   console.log('\n==== ' + pass + '/' + (pass + fail) + ' PASS ====');
   process.exit(fail ? 1 : 0);

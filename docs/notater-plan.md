@@ -331,6 +331,26 @@ bruker køradens egen id, så et bilde serveren alt har lagret ikke legges inn e
 gang til. Køen ryddes som resten av notatlagringen: ved utlogging, og for et
 notat når tilgangen til det forsvinner.
 
+**Og sier enhetens lagring nei, ofres hurtigbufferen for utkastet.** De lokale
+kopiene av CRDT-en er en hurtigbuffer serveren har; et strandet utkast har ingen
+andre steder. De ryddes derfor bort, og skrivingen forsøkes en gang til — i den
+rekkefølgen, aldri omvendt. Køen av ventende oppdateringer røres ikke: den er
+ikke en kopi av noe serveren har.
+
+**Går det fortsatt ikke, kastes INGENTING.** Uten en holdbar destinasjon —
+verken enheten eller kontoen — blir hele overgangen stående: økten er fortsatt
+foreløpig, arket beholder teksten, ingenting publiseres, og neste runde prøver
+igjen. Toasten sier da at teksten ikke er lagret ennå, ikke at den er tatt vare
+på. Det er den samme regelen som ellers, tatt helt ut: den eneste kopien slippes
+aldri før noe holdbart har tatt imot den.
+
+At overgangen kan bli stående, er grunnen til at «er loggen tom?» avgjøres av
+ALLE radene økten har sett, ikke av hva den siste hentingen hadde med seg.
+Hentingen legger radene i økten og flytter merket før den spør, så en runde som
+ikke fullfører ville sett en tom leveranse neste gang — og lest den som en tom
+logg. Da ville det foreløpige dokumentet blitt sådd inn i en logg som alt hadde
+rader, altså nøyaktig doblingen frøet finnes for å hindre.
+
 **Offline er bedre enn før, ikke dårligere.** Oppdateringene legges i en kø i
 enhetens lagring, ved siden av en lokal kopi av CRDT-en, og køen tømmes ved
 første synk-runde etter at nettet er tilbake. Enheten som var borte mister
@@ -979,8 +999,9 @@ skriver, en ren leser, tilbakekalling, uten nett, merking — og fem regresjoner
 som hver feiler uten sin rettelse: den doblede teksten ved første åpning, det
 ferske notatet uten angre, den utdaterte projeksjonen som ikke får slette den
 andres avsnitt (også med lagringen av utkastet tvunget til å feile, så køen på
-enheten er bevist), de 25 ubekreftede utkastene der ingen kastes, og forsøket på
-nytt som gir én historikkrad og ikke to; desktop og mobil),
+enheten er bevist), de 25 ubekreftede utkastene der ingen kastes, forsøket på
+nytt som gir én historikkrad og ikke to, og overgangen som blir stående når
+BÅDE enhetens lagring og serveren sier nei; desktop og mobil),
 `supabase/tests/test-note-versions.sql` (serverkontrakten: grants, policy,
 fingeravtrykk, ren leser, utenforstående, merking og tak, alle fire lagene i
 uttynningen, tilbakekalling, kaskade og kontosletting),

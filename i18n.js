@@ -221,6 +221,11 @@
        du skrev er ikke borte — det ligger i historikken. */
     'notes.historyStranded': ['Noen andre hadde skrevet i notatet. Deres versjon står nå — det du rakk å skrive er tatt vare på, og legges i Historikk.',
                               'Someone else had written in the note. Their version is showing — what you managed to write has been kept, and goes into History.'],
+    /* … og går DET ikke — verken enhetens lagring eller kontoen tar imot —
+       kastes ingenting. Teksten blir stående i editoren, og toasten sier det
+       som er sant: den er ikke lagret ennå, så la notatet stå åpent. */
+    'notes.historyStrandedWait': ['Det du skriver er ikke lagret ennå. La notatet stå åpent til det er lagret.',
+                              'What you are writing is not saved yet. Leave the note open until it is.'],
 
     /* Livssyklus: arkiv og søppelkasse for alle tre nivåene
        (docs/notater-plan.md). «Arkiver» legger til side; «Slett» legger i

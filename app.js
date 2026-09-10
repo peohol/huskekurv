@@ -19097,10 +19097,17 @@
     noteDrafts = Array.isArray(raw)
       ? raw.filter((d) => d && d.id && d.note && d.doc && typeof d.doc === 'object') : [];
   }
-  /* Sier enhetens lagring nei (full disk, privat modus), beholdes raden i
-     MINNET og køen tømmes som vanlig ved neste runde. Å kaste den fordi den
-     ikke lot seg lagre ville vært den samme feilen som et tak. */
-  function saveNoteDrafts() { return writeJsonStore(noteDraftKey(), noteDrafts); }
+  /* Sier enhetens lagring nei, er det så godt som alltid fordi den er FULL — og
+     da ligger det noe der som kan hentes igjen: de lokale kopiene av CRDT-en er
+     en hurtigbuffer, og serveren har dem. Et strandet utkast har ingen andre
+     steder. Hurtigbufferen ofres derfor for utkastet, og skrivingen forsøkes en
+     gang til — i den rekkefølgen, aldri omvendt. Køen av ventende oppdateringer
+     (`hk-note-ops`) røres ikke: den er ikke en kopi av noe serveren har. */
+  function saveNoteDrafts() {
+    if (writeJsonStore(noteDraftKey(), noteDrafts)) return true;
+    try { localStorage.removeItem(noteSnapKey()); } catch (e) { /* ignore */ }
+    return writeJsonStore(noteDraftKey(), noteDrafts);
+  }
   const noteDraftsFor = (id) => noteDrafts.filter((d) => d.note === id);
   /* KØEN HAR INGEN ØVRE GRENSE, og det er et bevisst valg. Hver rad her er en
      tekst brukeren har skrevet som IKKE finnes noe annet sted før serveren har
@@ -19116,7 +19123,14 @@
      kaste den. */
   function queueNoteDraft(noteId, st) {
     noteDrafts.push({ id: uid(), note: noteId, title: st.title || '', doc: st.doc });
+    if (saveNoteDrafts()) return true;
+    /* Ikke holdbar. Da skal raden heller ikke bli stående i minnet: den som
+       spurte får nei og lar være å kaste sin egen kopi (se
+       `noteKeepStrandedDraft`), og køen vokser ikke med en ny rad for hver
+       runde som prøver på nytt. */
+    noteDrafts.pop();
     saveNoteDrafts();
+    return false;
   }
   function dropNoteDraftsFor(id) {
     if (!noteDrafts.some((d) => d.note === id)) return;
@@ -19484,7 +19498,7 @@
      raden ligger i synk-køen når editoren åpnes, så den første hentingen
      svarer «finnes ikke» og økten blir stående foreløpig noen sekunder til.
      Det er nettopp derfor det lokale dokumentet ikke venter på svaret. */
-  function noteLiveSettleSeed(s, fresh) {
+  function noteLiveSettleSeed(s) {
     const Y = noteYLib();
     if (!Y) return;
     const skrev = s.dirty;
@@ -19497,7 +19511,14 @@
     const mittUtkast = skrev ? noteVersionState(s.id) : null;
     const ferdig = () => { s.seedPending = false; s.dirty = false; s.seedBase = null; };
 
-    if (!fresh.length) {
+    /* SPØRSMÅLET ER OM LOGGEN ER TOM — ikke om DENNE hentingen hadde noe nytt.
+       Hentingen legger radene i `s.log` og flytter merket FØR den spør her, så
+       en runde som ikke fullfører overgangen ville sett en tom leveranse neste
+       gang. Å lese det som «loggen er tom» ville sådd det foreløpige
+       dokumentet inn i en logg som alt hadde rader — nøyaktig doblingen dette
+       frøet finnes for å hindre. Avgjørelsen tas derfor av alle radene vi har
+       sett, og den kan tas om igjen uten virkning. */
+    if (!s.log.size) {
       ferdig();
       const n = findNoteById(s.id);
       if (noteEditable(n)) queueNoteOp(s.id, Y.encodeStateAsUpdate(s.ydoc));
@@ -19506,22 +19527,33 @@
     }
     const gammel = s.ydoc;
     const ydoc = noteYEmpty();
-    fresh.forEach((u) => { try { Y.applyUpdate(ydoc, u, 'remote'); } catch (e) { /* ignore */ } });
-    noteLiveBindDoc(s, ydoc);
-    try { gammel.destroy(); } catch (e) { /* ignore */ }
-    ferdig();          // FØRST nå er dokumentet serverens, og skrivinger kan ut
-    if (!(noteEditorOpen() && noteOpenId === s.id && noteDocEl)) return;
-    const serverDoc = noteYDoc(s.ydoc);
+    s.log.forEach((u) => { try { Y.applyUpdate(ydoc, u, 'remote'); } catch (e) { /* ignore */ } });
+    const serverDoc = noteYDoc(ydoc);
+    const påSkjermen = !!(noteEditorOpen() && noteOpenId === s.id && noteDocEl);
     // Sto projeksjonen vi sådde fra på det SAMME som serveren har? Bare da er
     // en forskjell mot serverens dokument det samme som tastetrykkene.
     const trygt = base === JSON.stringify(serverDoc);
+    /* HOLDBARHETEN AVGJØRES FØR NOE KASTES. Er utkastet strandet, skal det
+       ligge trygt et sted før det foreløpige dokumentet ryker. Går det ikke,
+       gjør vi INGENTING: økten blir stående foreløpig, arket beholder teksten,
+       ingenting publiseres, og neste runde prøver igjen. Å kaste den eneste
+       kopien fordi den ikke lot seg lagre ville vært datatap i nettopp det
+       nettet som skal hindre datatap. */
+    if (skrev && !trygt && påSkjermen && !noteKeepStrandedDraft(s.id, mittUtkast)) {
+      try { ydoc.destroy(); } catch (e) { /* ignore */ }
+      if (!s.strandWarned) { s.strandWarned = true; showToast(tr('notes.historyStrandedWait')); }
+      return;
+    }
+    noteLiveBindDoc(s, ydoc);
+    try { gammel.destroy(); } catch (e) { /* ignore */ }
+    ferdig();          // FØRST nå er dokumentet serverens, og skrivinger kan ut
+    if (!påSkjermen) return;
     if (skrev && trygt) {
       noteLiveFlush();
       scheduleNoteSave();
       refreshNoteTools();
       return;
     }
-    if (skrev) noteKeepStrandedDraft(s.id, mittUtkast);
     noteApplyingDoc = true;
     noteDocIntoEl(noteDocEl, serverDoc);
     noteApplyIndent();
@@ -19540,13 +19572,19 @@
      rett etterpå. Å sende det med et enkelt RPC-kall og håpe ville gjort ett
      tapt svar til stille datatap i nettopp det nettet som skal hindre datatap.
      Raden legges derfor i enhetens lagring FØR noe kastes, og fjernes først når
-     serveren har bekreftet bildet. Toasten kan da si det den sier: teksten er
-     tatt vare på. */
+     serveren har bekreftet bildet.
+
+     SVARET SIER OM DET GIKK, og det er dét som gjør toasten sann: sier
+     lagringen nei — selv etter at hurtigbufferen er ofret — er det ingen
+     holdbar destinasjon, og da kastes ingenting. Den som spurte lar det
+     foreløpige dokumentet stå, og teksten blir liggende der brukeren skrev
+     den. */
   function noteKeepStrandedDraft(id, utkast) {
-    if (!utkast) return;
-    queueNoteDraft(id, utkast);
+    if (!utkast) return true;            // ingenting å ta vare på
+    if (!queueNoteDraft(id, utkast)) return false;
     pushNoteDrafts();
     showToast(tr('notes.historyStranded'));
+    return true;
   }
   function closeNoteLive() {
     const s = noteLive;
@@ -19634,7 +19672,7 @@
         s.log.set(row.id, bytes);
         fresh.push(bytes);
       });
-      if (s.seedPending) noteLiveSettleSeed(s, fresh);
+      if (s.seedPending) noteLiveSettleSeed(s);
       else if (fresh.length) noteLiveApply(s, fresh);
       s.loaded = true;
       noteLiveCompactMaybe();
