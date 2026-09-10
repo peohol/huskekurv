@@ -19033,6 +19033,12 @@
 
   const noteOpsKey = () => 'hk-note-ops:' + (authUser ? authUser.id : '-');
   const noteSnapKey = () => 'hk-note-crdt:' + (authUser ? authUser.id : '-');
+  /* STRANDEDE UTKAST (se `noteKeepStrandedDraft`). Den ENESTE kopien av noe
+     brukeren har skrevet skal aldri slippes fordi ett kall gikk galt, så den
+     legges her — i enhetens lagring — FØR det foreløpige dokumentet kastes, og
+     fjernes først når serveren har bekreftet at bildet står i historikken. */
+  const noteDraftKey = () => 'hk-note-draft:' + (authUser ? authUser.id : '-');
+  const NOTE_DRAFTS_MAX = 20;         // hvor mange strandede utkast enheten bærer
 
   let noteLive = null;        // den åpne øktens tilstand (se openNoteLive)
   let noteOps = [];           // [{ id, note, u }] — ventende rader
@@ -19040,6 +19046,8 @@
   let noteOpsBlocked = false; // siste push nådde ikke fram / ble avvist
   let noteOpsTimer = null;
   let noteFlushTimer = null;
+  let noteDrafts = [];                // [{ id, note, title, doc }] — ventende bilder
+  let noteDraftsChain = Promise.resolve();
 
   function readJsonStore(key, fallback) {
     try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
@@ -19075,6 +19083,77 @@
     refreshNoteSaveStatus();
   }
 
+  /* ---- Køen av STRANDEDE UTKAST ----
+     Et strandet utkast er det brukeren rakk å skrive oppå et frø som viste seg
+     å måtte kastes (`noteLiveSettleSeed`). Det kan ikke settes inn i serverens
+     dokument uten å risikere å slette noe andre skrev, så det legges i
+     historikken i stedet — men det er den ENESTE kopien i det øyeblikket:
+     CRDT-en er byttet ut, og projeksjonen skrives over av serverens dokument.
+     Et enkelt RPC-kall som ikke kommer fram ville da vært stille datatap i
+     nettopp det nettet som skal hindre datatap. Køen ligger derfor i enhetens
+     lagring, den skrives FØR noe kastes, og raden fjernes først når serveren
+     har bekreftet bildet. */
+  function loadNoteDrafts() {
+    const raw = readJsonStore(noteDraftKey(), []);
+    noteDrafts = Array.isArray(raw)
+      ? raw.filter((d) => d && d.id && d.note && d.doc && typeof d.doc === 'object') : [];
+  }
+  function saveNoteDrafts() { writeJsonStore(noteDraftKey(), noteDrafts); }
+  const noteDraftsFor = (id) => noteDrafts.filter((d) => d.note === id);
+  function queueNoteDraft(noteId, st) {
+    noteDrafts.push({ id: uid(), note: noteId, title: st.title || '', doc: st.doc });
+    // Taket er en vakt mot at en enhet som aldri når serveren fyller lagringen.
+    // Det ELDSTE viker: et ferskt utkast er det brukeren nettopp mistet.
+    if (noteDrafts.length > NOTE_DRAFTS_MAX) noteDrafts = noteDrafts.slice(-NOTE_DRAFTS_MAX);
+    saveNoteDrafts();
+  }
+  function dropNoteDraftsFor(id) {
+    if (!noteDrafts.some((d) => d.note === id)) return;
+    noteDrafts = noteDrafts.filter((d) => d.note !== id);
+    saveNoteDrafts();
+  }
+  /* Tømmingen rir på den SAMME synk-runden som samskrivingskøen, så den får
+     pollets kadens og reconnect-en gratis. Kallene serialiseres, som pushene:
+     `await pushNoteDrafts()` betyr «min tur er over», og det er dét testen
+     trenger for å kjøre runden deterministisk. */
+  function pushNoteDrafts() {
+    noteDraftsChain = noteDraftsChain.then(pushNoteDraftsOnce, pushNoteDraftsOnce);
+    return noteDraftsChain;
+  }
+  async function pushNoteDraftsOnce() {
+    if (!noteDrafts.length || !authUser) return;
+    const client = acli();
+    if (!client) return;
+    for (const d of noteDrafts.slice()) {
+      const n = findNoteById(d.note);
+      // Notatet er borte for oss, eller skriveretten er det: raden kan aldri
+      // leveres, og å beholde den ville vært en evig retry OG en kopi av
+      // innhold vi ikke lenger har.
+      if (!n || !noteEditable(n)) { dropNoteDraft(d.id); continue; }
+      let res = null;
+      try {
+        res = await client.rpc('note_version_save', {
+          p_note: d.note, p_id: uid(), p_title: d.title, p_doc: d.doc,
+          p_excerpt: noteDocExcerpt(d.doc, NOTE_VERSION_EXCERPT),
+          p_chars: noteDocText(d.doc).length,
+          p_pinned: false,
+        });
+      } catch (e) {
+        return;                        // nett — neste runde prøver igjen
+      }
+      if (res && res.error) {
+        if (noteWriteDenied(res.error)) { dropNoteDraft(d.id); continue; }
+        return;                        // forbigående — behold raden og prøv igjen
+      }
+      dropNoteDraft(d.id);
+    }
+  }
+  function dropNoteDraft(rowId) {
+    const før = noteDrafts.length;
+    noteDrafts = noteDrafts.filter((d) => d.id !== rowId);
+    if (noteDrafts.length !== før) saveNoteDrafts();
+  }
+
   /* Den lokale kopien av CRDT-en, per notat. Uten den ville en enhet som
      åpner et notat UTEN nett vært nødt til å så det på nytt fra `body` — og et
      nytt frø ved siden av et gammelt gir dobbelt innhold når de møtes. Med den
@@ -19106,7 +19185,9 @@
      køen og de lokale kopiene tilhører kontoen, ikke enheten. */
   function clearNoteCollabStore() {
     const opsKey = noteOpsKey(); const snapKey = noteSnapKey();
-    noteOps = []; noteOpsBlocked = false;
+    const draftKey = noteDraftKey();
+    noteOps = []; noteOpsBlocked = false; noteDrafts = [];
+    try { localStorage.removeItem(draftKey); } catch (e) { /* ignore */ }
     // Merket over «hvilken tilstand har vi alt bedt om et bilde av» hører til
     // kontoen, ikke enheten.
     noteVersionLast = { id: null, sig: '' };
@@ -19434,10 +19515,19 @@
   /* Det som ble skrevet oppå et frø vi måtte kaste. Det kan ikke settes inn i
      serverens dokument uten å risikere å slette noe andre skrev, men det skal
      heller ikke bare forsvinne: bildet legges i historikken, der brukeren kan
-     se det og hente det tilbake selv. */
+     se det og hente det tilbake selv.
+
+     KØEN FØRST, alltid. På dette punktet er utkastet den ENESTE kopien —
+     CRDT-en er byttet ut, og projeksjonen skrives over av serverens dokument
+     rett etterpå. Å sende det med et enkelt RPC-kall og håpe ville gjort ett
+     tapt svar til stille datatap i nettopp det nettet som skal hindre datatap.
+     Raden legges derfor i enhetens lagring FØR noe kastes, og fjernes først når
+     serveren har bekreftet bildet. Toasten kan da si det den sier: teksten er
+     tatt vare på. */
   function noteKeepStrandedDraft(id, utkast) {
     if (!utkast) return;
-    captureNoteVersion(id, { doc: utkast.doc, title: utkast.title });
+    queueNoteDraft(id, utkast);
+    pushNoteDrafts();
     showToast(tr('notes.historyStranded'));
   }
   function closeNoteLive() {
@@ -19704,6 +19794,7 @@
   function forgetNoteCollab(id) {
     if (noteLive && noteLive.id === id) closeNoteLive();
     dropNoteOpsFor(id);
+    dropNoteDraftsFor(id);
     dropNoteSnap(id);
   }
   /* …og det gjelder de LUKKEDE notatene like mye. Et notat man leste i går, og
@@ -19721,6 +19812,10 @@
     if (noteOps.some((o) => !finnes.has(o.note))) {
       noteOps = noteOps.filter((o) => finnes.has(o.note));
       saveNoteOps();
+    }
+    if (noteDrafts.some((d) => !finnes.has(d.note))) {
+      noteDrafts = noteDrafts.filter((d) => finnes.has(d.note));
+      saveNoteDrafts();
     }
     const alle = readJsonStore(noteSnapKey(), {}) || {};
     const døde = Object.keys(alle).filter((id) => !finnes.has(id));
@@ -24002,6 +24097,9 @@
        Å henge den på her gir den pollets kadens og reconnect-en gratis — en
        kø som ble stående etter et nettbrudd tømmes ved første runde etterpå. */
     pushNoteOps();
+    // …og det samme gjelder de strandede utkastene: en kø som ble stående etter
+    // et nettbrudd tømmes ved første runde etterpå (se noteKeepStrandedDraft).
+    pushNoteDrafts();
     if (cloudRunning) { cloudAgain = true; return; }
     cloudRunning = true;
     syncStatus.refresh();
@@ -25768,6 +25866,7 @@
       resetLocalSync();
       loadCache();
       loadNoteOps();   // samskrivingskøen er per konto, som resten av bufferen
+      loadNoteDrafts();   // …og det samme gjelder de strandede utkastene
       render();
     }
     // Sikkerhetsnett for readiness-punktet: `initAccounts()` har normalt satt
@@ -27602,7 +27701,13 @@
     setNoteDoc,
     // Historikken (docs/notater-plan.md, «Historikk»)
     captureNoteVersion, openNoteHistory, closeNoteHistory, restoreNoteVersion,
-    loadNoteHistory,
+    loadNoteHistory, pushNoteDrafts,
+    // Køen av strandede utkast: den ENESTE kopien mellom at frøet kastes og
+    // at serveren har bekreftet bildet (se noteKeepStrandedDraft).
+    get noteDraftsInfo() {
+      return { count: noteDrafts.length,
+               texts: noteDrafts.map((d) => noteDocText(d.doc)) };
+    },
     get noteHistoryInfo() {
       const c = noteHistoryCtx;
       return {

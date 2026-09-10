@@ -429,9 +429,14 @@ Klientsiden ligger i tre deler, alle i notat-seksjonen i `app.js`:
   notat når tilgangen til det forsvinner.
 - **Historikken** (`note_versions`) lagres IKKE på enheten. Den hentes ved behov
   og skrives bare når enheten har nett — et øyeblikksbilde er en rad på kontoen,
-  og en kø av dem ville vært enda en kopi av innholdet i enhetens lagring. Det
-  er derfor det heller ikke er noe å rydde bort her når en tilgang trekkes
-  tilbake. Autoritativt: [`notater-plan.md`](notater-plan.md) → «Historikk».
+  og en kø av dem ville vært enda en kopi av innholdet i enhetens lagring.
+  Autoritativt: [`notater-plan.md`](notater-plan.md) → «Historikk».
+- **Ett unntak: strandede utkast** (`hk-note-draft:<uid>`). Måtte et foreløpig
+  frø kastes mens brukeren hadde rukket å skrive, er det utkastet den ENESTE
+  kopien — CRDT-en er byttet ut og projeksjonen skrives over. Det legges derfor
+  i en holdbar kø FØR noe kastes, tømmes på den vanlige synk-runden, og fjernes
+  først når serveren har bekreftet bildet. Nøkkelen tømmes ved utlogging, og
+  for ett enkelt notat når tilgangen til det forsvinner — som de to andre.
 
 **Lagringsstatusen i editoren** er avledet av nettopp dette: står det rader i
 køen, sier den «Lagrer …»; kommer de ikke fram, «Lagret på denne enheten»; og

@@ -35,6 +35,8 @@
        loggen, og brukeren rekker å skrive før første henting svarer, skal den
        andres avsnitt aldri leses som en sletting. Serverens dokument vinner,
        og utkastet legges i historikken
+  15e. … og det skjer ikke på håp: FEILER den første lagringen, ligger utkastet
+       i en holdbar kø på enheten og kommer inn ved neste runde
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -432,6 +434,32 @@ async function runUtdatert() {
     return n && JSON.stringify(n.doc).indexOf('AVSNITT FRA A') === -1;
   }, ids.N, { timeout: 20000, polling: 200 });
 
+  /* DEN FØRSTE LAGRINGEN AV UTKASTET SKAL FEILE. Det er selve påstanden: på
+     det punktet er utkastet den eneste kopien — CRDT-en er byttet ut og
+     projeksjonen skrives over — så et enkelt tapt svar ville vært stille
+     datatap i nettopp det nettet som skal hindre datatap. Hentingen av loggen
+     må derimot LYKKES, ellers avgjøres frøet aldri. */
+  await a.evaluate(() => {
+    const c = window.__huskis.client;
+    const ekte = c.rpc.bind(c);
+    let brukt = false;
+    window.__hkFeilet = 0;
+    c.rpc = function (navn, params) {
+      /* Nøyaktig lagringen av UTKASTET, ikke den første lagringen som helhet:
+         editoren tar et åpningsbilde også, og en stubb som bare teller kall
+         ville felt feil kall og målt noe annet enn den tror. */
+      const erUtkastet = navn === 'note_version_save'
+        && JSON.stringify((params || {}).p_doc || '').indexOf('MITT UTKAST') > -1;
+      if (erUtkastet && !brukt) {
+        brukt = true;
+        window.__hkFeilet++;
+        return Promise.resolve({ data: null, error: { message: 'Failed to fetch' } });
+      }
+      return ekte(navn, params);
+    };
+    window.__hkGjenopprett = () => { c.rpc = ekte; };
+  });
+
   await a.evaluate((x) => window.__huskis.openNoteEditor(x), ids.N);
   await a.waitForFunction(() => !document.getElementById('note-editor').hidden,
     null, { timeout: 5000, polling: 50 });
@@ -451,10 +479,28 @@ async function runUtdatert() {
   check(navn + ' 15c: … og serverens dokument er det arket viser',
     etter.crdt.indexOf('MITT UTKAST') === -1, etter);
 
-  // Det som ble skrevet er ikke borte: det ligger i historikken.
+  /* Lagringen feilet — og teksten skal likevel finnes, i en holdbar kø på
+     enheten. Den overlever at fanen lukkes, og tømmes ved neste synk-runde. */
+  const køen = await a.evaluate(() => ({
+    feilet: window.__hkFeilet,
+    kø: window.__huskis.noteDraftsInfo,
+    lagret: JSON.parse(localStorage.getItem(
+      Object.keys(localStorage).find((k) => k.indexOf('hk-note-draft:') === 0) || 'x') || 'null'),
+  }));
+  check(navn + ' 15d: lagringen feilet faktisk (forutsetningen)', køen.feilet === 1, køen.feilet);
+  check(navn + ' 15e: utkastet er likevel tatt vare på — i en HOLDBAR kø på enheten',
+    køen.kø.count === 1 && /MITT UTKAST/.test(køen.kø.texts[0] || '')
+    && Array.isArray(køen.lagret) && køen.lagret.length === 1,
+    { kø: køen.kø.texts, iLagringen: (køen.lagret || []).length });
+
+  // …og ved neste runde havner det i historikken, uten at brukeren gjør noe.
+  await a.evaluate(() => window.__hkGjenopprett());
+  await a.evaluate(async () => { await window.__huskis.pushNoteDrafts(); });
+  await a.waitForFunction(() => window.__huskis.noteDraftsInfo.count === 0,
+    null, { timeout: 20000, polling: 100 });
   await åpneHistorikk(a, ids.N);
   const rader = await historikkRader(a);
-  check(navn + ' 15d: utkastet som ikke kunne flettes ligger i historikken',
+  check(navn + ' 15f: … og neste runde legger det i historikken av seg selv',
     rader.some((r) => /MITT UTKAST/.test(r.text)), rader.map((r) => r.text));
   await a.evaluate(() => window.__huskis.closeNoteHistory());
   await lukkEditor(a);

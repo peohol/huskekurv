@@ -319,6 +319,15 @@ ble skrevet legges i HISTORIKKEN i stedet for å bli borte. Det er den ene
 plassen der de to funksjonene i denne runden henger sammen: historikken er
 sikkerhetsnettet under samskrivingen.
 
+**Og det nettet holder også når nettet ikke gjør det.** I det øyeblikket er
+utkastet den ENESTE kopien: CRDT-en er byttet ut, og projeksjonen skrives over
+av serverens dokument rett etterpå. Å sende det med ett kall og håpe ville gjort
+et tapt svar til stille datatap i nettopp det som skal hindre datatap. Utkastet
+legges derfor i en HOLDBAR KØ i enhetens lagring FØR noe kastes, køen tømmes på
+den vanlige synk-runden, og raden fjernes først når serveren har bekreftet
+bildet. Køen ryddes som resten av notatlagringen: ved utlogging, og for et notat
+når tilgangen til det forsvinner.
+
 **Offline er bedre enn før, ikke dårligere.** Oppdateringene legges i en kø i
 enhetens lagring, ved siden av en lokal kopi av CRDT-en, og køen tømmes ved
 første synk-runde etter at nettet er tilbake. Enheten som var borte mister
@@ -410,6 +419,11 @@ ville vært enda en kopi av innholdet i enhetens lagring. Enheten som er borte
 mister bare tettheten i historikken, aldri innhold — dokumentet lever i CRDT-en
 og i projeksjonen som før — og neste bilde tas så snart nettet er tilbake.
 Modalen sier det i klartekst i stedet for å stå tom.
+
+Det ene unntaket er et STRANDET UTKAST (se «Sanntids samskriving»): der er
+bildet den eneste kopien, og da køes det på enheten til serveren har bekreftet
+det. Regelen over gjelder alt annet — det er forskjellen på et bilde vi kan ta
+igjen senere og et vi ikke kan.
 
 ## Globalt søk
 
@@ -961,7 +975,8 @@ med loggen som vokser, angring fra toasten, gjenoppretting MENS en annen
 skriver, en ren leser, tilbakekalling, uten nett, merking — og tre regresjoner
 på frøet, som hver feiler uten sin rettelse: den doblede teksten, det ferske
 notatet uten angre, og den utdaterte projeksjonen som ikke får slette den
-andres avsnitt; desktop og mobil),
+andres avsnitt — den siste også med lagringen av utkastet tvunget til å feile,
+så køen på enheten er bevist; desktop og mobil),
 `supabase/tests/test-note-versions.sql` (serverkontrakten: grants, policy,
 fingeravtrykk, ren leser, utenforstående, merking og tak, alle fire lagene i
 uttynningen, tilbakekalling, kaskade og kontosletting),

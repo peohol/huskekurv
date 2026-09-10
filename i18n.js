@@ -219,8 +219,8 @@
     /* Det sjeldne tilfellet: du rakk å skrive i notatet i det sekundet enheten
        hentet det andre hadde skrevet, og de to kunne ikke flettes trygt. Det
        du skrev er ikke borte — det ligger i historikken. */
-    'notes.historyStranded': ['Noen andre hadde skrevet i notatet. Deres versjon står nå — det du rakk å skrive ligger i Historikk.',
-                              'Someone else had written in the note. Their version is showing — what you managed to write is in History.'],
+    'notes.historyStranded': ['Noen andre hadde skrevet i notatet. Deres versjon står nå — det du rakk å skrive er tatt vare på, og legges i Historikk.',
+                              'Someone else had written in the note. Their version is showing — what you managed to write has been kept, and goes into History.'],
 
     /* Livssyklus: arkiv og søppelkasse for alle tre nivåene
        (docs/notater-plan.md). «Arkiver» legger til side; «Slett» legger i
