@@ -17,8 +17,10 @@
     1. vercel.json har én 308-regel per alternativt domene, med hele pathen
        bevart (`/:path*` → `https://huskis.no/:path*`) — og ingen regel som
        redirecter huskis.no selv eller preview-deployenes egne verter.
-       Reglene KANONISERER, og gjør ingenting annet: ingen av dem plukker ut
-       én enkelt path, og ingen av dem sender trafikk til et fremmed origin.
+       Reglene KANONISERER, og gjør ingenting annet: hver av dem flytter hele
+       `/:path*` til det kanoniske originet med pathen i behold — ingen
+       plukker ut én enkelt path, ingen lander på et fremmed origin, og ingen
+       kaster bort adressen brukeren ba om.
     2. Guarden i index.html står FØR alt som kjører (config.js, app.js,
        mock-backenden, update-check.js) — redirecten skal skje før appen,
        en service worker eller lokal tilstand initialiseres.
@@ -108,11 +110,17 @@ check('vercel.json: hver redirect-regel er bundet til nøyaktig én host',
    snike seg inn: da er adressen brukeren ser Huskis' egen, mens siden som
    svarer er en annens — og `huskis.no` blir inngangsdør for noe Huskis ikke
    eier, kontrollerer eller kan rette. Det som trenger sin egen adresse, skal
-   ha sin egen adresse. */
+   ha sin egen adresse.
+
+   Destinasjonen sammenlignes HELT, ikke bare på originet: `https://huskis.no/
+   login` ligger på riktig origin og kaster likevel bort hver adresse brukeren
+   ba om. En ny host som slipper unna løkken over — den sjekker de tre ved
+   navn — må derfor fortsatt gjennom denne. */
 check('vercel.json: ingen regel plukker ut én enkelt path (alle flytter hele `/:path*`)',
   redirects.every((r) => r.source === '/:path*'), redirects.map((r) => r.source));
-check('vercel.json: ingen regel sender trafikk til et fremmed origin',
-  redirects.every((r) => String(r.destination || '').indexOf(CANONICAL + '/') === 0),
+check('vercel.json: hver regel lander på ' + CANONICAL + ' med pathen i behold '
+  + '(aldri et fremmed origin, aldri en fast path)',
+  redirects.every((r) => r.destination === CANONICAL + '/:path*'),
   redirects.map((r) => r.destination));
 
 /* ================= B) Guarden i index.html ================= */
