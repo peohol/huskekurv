@@ -734,8 +734,10 @@ Se [`sprak.md`](sprak.md).
 To tekster står UTENFOR Huskis og følger likevel appspråket: navnet og
 beskrivelsen på Androids varselkanal (`notif.android.channelName` og
 `…channelDesc`), som brukeren møter i telefonens systeminnstillinger. De
-skrives på nytt når språket byttes — det er det eneste `createChannel` kan
-oppdatere på en kanal som allerede finnes (se «Varselkanalen»).
+skrives på nytt i den første speilingen etter et språkbytte, også når det ikke
+finnes en eneste alarm å planlegge — navn og beskrivelse er det eneste
+`createChannel` kan oppdatere på en kanal som allerede finnes (se
+«Varselkanalen»).
 
 ## De eksterne kanalene
 
@@ -964,13 +966,32 @@ fødselen. En egen lydfil ville vært en fil til å vedlikeholde uten at noen ha
 bedt om den.
 
 **Hvert varsel planlegges eksplisitt med `channelId`**, og **kanalen opprettes
-før den første alarmen** — den lages allerede i det brukeren slår varslene på,
-så den står i Androids innstillinger fra første stund, og igjen før en runde
-planlegger noe. Rekkefølgen er et krav, ikke en detalj: pluginen
+før noe planlegges** — første steg i hver speiling, ikke bare i de rundene som
+har en alarm å legge inn. Rekkefølgen er et krav, ikke en detalj: pluginen
 bygger hele `Notification`-objektet — kanalen inkludert — i det samme kallet
 som armerer alarmen, og legger det ferdige objektet i alarmen. Uten `channelId`
 havner varselet på pluginens egen `default`-kanal, som lages med
 IMPORTANCE_DEFAULT og altså legger seg stille i varselpanelet.
+
+At kallet står foran HELE runden har en grunn til: navnet og beskrivelsen er
+brukerrettet tekst, og `createChannel` er det ene som kan oppdatere dem på en
+kanal som finnes. Et språkbytte når dermed Androids innstillinger også på en
+telefon som ikke har en eneste alarm å planlegge. Kallet er memoisert per
+språk, så det koster én tur over broen per oppstart eller språkbytte.
+
+To unntak, og de er begge bevisste:
+
+- **En NEDRIGGING lager ingen kanal.** Tas planen ned — brukeren slo av
+  varslene, en annen enhet slo dem av, eller en ny bruker logget inn — er en
+  kanal å vise varsler i det siste den runden trenger. Den skriver heller ikke
+  migreringsmerket.
+- **En kanal som ikke lot seg opprette stopper runden.** Et varsel planlagt mot
+  en kanal som ikke finnes blir aldri vist på Android 8+, så en svelget feil
+  ville gitt stumme alarmer — og et merke og en signatur som sier «ferdig».
+  Feilen kastes videre, signaturen står urørt, og neste runde gjør hele jobben.
+  Det ene svaret som IKKE stopper noe er `UNAVAILABLE`/`UNIMPLEMENTED`: det er
+  Android under 8 (minSdk er 24), der kanaler ikke finnes og `channelId` er et
+  felt NotificationCompat ser bort fra. Varselet kommer fram som før.
 
 **HIGH er en FORESPØRSEL, ikke en garanti.** Android eier presentasjonen:
 brukeren kan skru kanalen ned i systeminnstillingene, «Ikke forstyrr» kan holde
@@ -1021,9 +1042,15 @@ Derfor er migreringen én regel, og den gjelder HELE planen:
 - **Signaturen hopper ikke over den.** En enhet som skal migreres svarer `null`
   på `sig(plan)` («spør meg hver gang»): en uendret plan er ikke det samme som
   ingenting å gjøre når alarmene står på feil kanal.
+- **Merket er ikke et løfte om at kanalen finnes.** Det sier bare at ingen alarm
+  på enheten er eldre enn kanalen. Kanalen selv sikres av at hver runde
+  begynner med å opprette den, og av at en runde som ikke fikk det til, feiler.
 
 Låst av `tests/notif-channels.test.js` 13, som gjør begge veiene: migreringen
-alene i en kjørende app, og den samme migreringen over en appoppgradering.
+alene i en kjørende app, og den samme migreringen over en appoppgradering — og
+som prøver de tre kantene rundt den: en kanal som ikke lot seg opprette (ingen
+varsler, intet merke, og neste runde gjør jobben), et språkbytte uten en eneste
+alarm, og et Android uten kanaler i det hele tatt.
 
 Ikonene står under «Ikonene i et systemvarsel».
 
@@ -1725,7 +1752,10 @@ De to henger sammen på nøyaktig ett punkt, og ellers ikke:
   installasjon med alarmer fra før kanalen får dem flyttet ved å planlegges på
   nytt (ingen avlysning, ingen dubletter, ingen mistet framtid), både i en
   kjørende app og over en appoppgradering, at gjentatt synk og nye omstarter
-  ikke gjør noe mer, og at ingen ny tillatelse har sneket seg inn: ingen
+  ikke gjør noe mer, at en kanal som ikke lot seg opprette verken gir varsler
+  eller et merke — mens neste runde gjør hele jobben — at et språkbytte når
+  systeminnstillingene selv uten en eneste alarm, at et Android uten kanaler får
+  varslene sine likevel, og at ingen ny tillatelse har sneket seg inn: ingen
   fullskjerm, ingen skjerm-på, ingen presise alarmer.
 - `tests/push-crypto.test.js` — VAPID-signaturen og RFC 8291-krypteringen, mot
   et fast vektor fra `http_ece` og med signaturen faktisk verifisert.

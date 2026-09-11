@@ -13333,12 +13333,22 @@
      en Android-kanal har systemets vanlige varsellyd fra fødselen. En egen
      lydfil ville vært en fil til å vedlikeholde uten at noen ba om den.
 
-     Feiler kallet, faller vi tilbake til å planlegge uansett: et varsel uten
-     heads-up er langt bedre enn ikke noe varsel. Android under 8 har ingen
-     kanaler i det hele tatt, og pluginen svarer `unavailable` der. */
+     EN FEIL HER STOPPER RUNDEN, med ett unntak. Et varsel som planlegges mot
+     en kanal som ikke finnes, blir aldri vist på Android 8+ — å svelge feilen
+     og planlegge likevel ville gitt stumme varsler, og et merke og en signatur
+     som sier «ferdig». Feilen kastes derfor videre: `syncNotifChannelOnce`
+     lar signaturen stå urørt, og neste runde gjør hele jobben.
+
+     Unntaket er `UNAVAILABLE`/`UNIMPLEMENTED`, som er Android UNDER 8 (minSdk
+     er 24): der finnes kanaler ikke i det hele tatt, `createChannel` svarer
+     `unavailable`, og `channelId` er et felt NotificationCompat ser bort fra.
+     Varselet kommer fram som før, og den feilen skal ikke koste alarmen. Den
+     kan heller ikke endre seg mens appen kjører, så den huskes. */
   let nativeChJob = null;
   let nativeChLang = null;
+  let nativeChGone = false;   // OS-et har ingen kanaler (Android 7)
   function ensureNativeChannel(ln) {
+    if (nativeChGone) return Promise.resolve();
     const lang = I18N.lang();
     if (nativeChJob && nativeChLang === lang) return nativeChJob;
     nativeChLang = lang;
@@ -13351,10 +13361,13 @@
         visibility: 1,          // VISIBILITY_PUBLIC — varselet vises på låseskjermen
         vibration: true,
       }) : null))
-      .catch(() => {
-        // Neste speiling prøver på nytt. Runden koster ingenting ekstra: den
-        // kjøres bare når planen faktisk har endret seg.
+      .catch((e) => {
+        // Memoet er for de gjentatte rundene i en økt som LYKTES; en runde som
+        // feilet skal prøves på nytt.
         if (nativeChLang === lang) { nativeChJob = null; nativeChLang = null; }
+        const kode = (e && e.code) || '';
+        if (kode === 'UNAVAILABLE' || kode === 'UNIMPLEMENTED') { nativeChGone = true; return; }
+        throw e;
       });
     return nativeChJob;
   }
@@ -13383,15 +13396,10 @@
       // på. Det er den ene handlingen som tar tilbake en fjern-avslåing — som
       // i web push-kanalen (`webChannel.enable`).
       notifPushRevoked = false;
-      /* Kanalen med det samme, ikke først når noe skal planlegges: da står den
-         i Androids varselinnstillinger for appen fra det øyeblikket varslene er
-         slått på, og brukeren kan justere lyd og påtrengenhet før det første
-         varselet kommer. Kallet er idempotent og gjentas ikke. */
-      await ensureNativeChannel(ln);
       return true;
     },
     async disable() {
-      await this.sync([]);       // planen tas ned; tillatelsen beholdes
+      await this.sync([], true); // planen tas ned; tillatelsen beholdes
       return true;
     },
     /* Hva kanalen sist ble speilet med. Er den uendret, er det ingenting å
@@ -13417,9 +13425,24 @@
        Diffen går på ID-en, og ID-en er signaturen (se `nativeNotifSig`): et
        varsel som har flyttet seg i tid eller fått ny tekst er derfor et ANNET
        tall, og blir avlyst og lagt inn på nytt i den samme runden. */
-    async sync(plan) {
+    async sync(plan, nedrigging) {
       const ln = nativePlugins.LocalNotifications;
       if (!ln) return;
+      /* KANALEN FØRST, hver runde og ikke bare når noe skal planlegges.
+
+         Alarmen bærer kanalen med seg fra det øyeblikket den armeres, så den
+         må finnes før planleggingen — men kallet står her, foran hele runden,
+         av en grunn til: navnet og beskrivelsen er brukerrettet tekst, og et
+         SPRÅKBYTTE skal nå Androids innstillinger også på en telefon som ikke
+         har en eneste alarm å planlegge. Det er dessuten det ene `createChannel`
+         kan oppdatere på en kanal som finnes.
+
+         Kallet er memoisert per språk: første runde etter en oppstart eller et
+         språkbytte koster én tur over broen, resten ingenting.
+
+         En NEDRIGGING er unntaket: da tas planen ned — en kanal å vise varsler
+         i er det siste den runden trenger. */
+      if (!nedrigging) await ensureNativeChannel(ln);
       const vil = new Map();
       plan.forEach((r) => vil.set(nativeNotifId(nativeNotifSig(r)), r));
       const pending = await ln.getPending();
@@ -13446,8 +13469,12 @@
          verken dubletter eller et hull der alarmen er avlyst og den nye ennå
          ikke satt — en «avlys, så planlegg» ville mistet alarmen om appen døde
          imellom. Merket skrives etterpå, så en runde som feiler i broen
-         gjentas i stedet for å bli hoppet over. */
-      const migrer = nativeChannelPending();
+         gjentas i stedet for å bli hoppet over.
+
+         En NEDRIGGING migrerer ingenting: den tar planen ned, og skal heller
+         ikke skrive merket — runden som bygger planen opp igjen er den som
+         faktisk setter alarmene på kanalen. */
+      const migrer = !nedrigging && nativeChannelPending();
       const nye = [...vil.entries()].filter(([id]) => migrer || !finnes.has(id)).map(([id, r]) => ({
         id,
         title: notifExternalTitle(r),
@@ -13475,12 +13502,7 @@
            egen `default`-kanal, og da er vi tilbake til et stille varsel. */
         channelId: NATIVE_CH_ID,
       }));
-      if (nye.length) {
-        // Kanalen FØRST — alarmen bærer den med seg fra det øyeblikket den
-        // armeres, og en kanal som ikke finnes ennå kan ikke rettes opp etterpå.
-        await ensureNativeChannel(ln);
-        await ln.schedule({ notifications: nye });
-      }
+      if (nye.length) await ln.schedule({ notifications: nye });
       if (migrer) setNativeChannelDone();
     },
   };
@@ -14051,13 +14073,21 @@
        ble speilet med, og `null` betyr «spør meg hver gang». Signaturen bærer
        kanal-id-en i tillegg, så et bytte av kanal aldri kan leses som
        «uendret». */
-    const egen = ch.sig(plan);
-    const sig = egen == null ? null : ch.id + '|' + egen;
-    if (sig !== null && sig === notifChSig) return;
+    const signatur = () => {
+      const egen = ch.sig(plan);
+      return egen == null ? null : ch.id + '|' + egen;
+    };
+    if (signatur() !== null && signatur() === notifChSig) return;
     try {
       if (await ch.state() !== 'on') return;
       await ch.sync(plan);
-      notifChSig = sig;
+      /* Signaturen leses PÅ NYTT etter speilingen, ikke før: runden kan ha
+         endret det den hviler på. Kanalmigreringen gjør nettopp det — den
+         svarer `null` («spør meg hver gang») så lenge alarmene står på en
+         eldre kanal, og er ferdig i det runden er over. Leste vi den bare på
+         forhånd, ville `null` blitt stående som «sist speilet med», og den
+         neste runden gått over pluginbroen for ingenting. */
+      notifChSig = signatur();
     } catch (e) {
       // Stille: neste runde prøver igjen — og signaturen står urørt, så den
       // gjør det med en gang og ikke først når planen endrer seg.
@@ -14193,7 +14223,9 @@
     notifChSig = null;
     notifPendingTarget = null;
     notifChannelTapped.clear();
-    if (androidChannel.supported()) androidChannel.sync([]).catch(() => {});
+    // Nedrigging (siste argument): planen tas ned, og en runde som rydder etter
+    // forrige bruker har ingen bruk for en varselkanal.
+    if (androidChannel.supported()) androidChannel.sync([], true).catch(() => {});
     notifRetryAt = 0;
     notifErrorLogged = false;
     notifPurged.clear();
