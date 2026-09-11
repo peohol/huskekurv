@@ -2747,9 +2747,12 @@ POST_NOTIFICATIONS (Android 13+) flettes derimot INN fra pluginen og skal det:
 den er selve varseltillatelsen, og adapteren ber om den bak et brukertrykk i
 varselinnstillingene — aldri ved oppstart.
 
-**Varslene har sin egen kanal**, `huskis-notif-v1`, med høy viktighet (4),
-offentlig låseskjerm (1) og vibrasjon, slik at Android normalt viser dem som
-heads-up og på låseskjermen. Det er en forespørsel, ikke en garanti: brukeren,
+**Varslene har sin egen kanal**, `huskis-notif-v1`, med høy viktighet (4) og
+vibrasjon, slik at Android normalt viser dem som heads-up. Låseskjermen ber
+appen ikke om: Android nullstiller kanalens lockscreen-visibility for en kanal
+appen selv oppretter, så hva som vises på en låst skjerm er brukerens egen
+innstilling (med varselets PRIVATE som utgangspunkt). Heads-up er dessuten en
+forespørsel, ikke en garanti: brukeren,
 «Ikke forstyrr» og produsentens innstillinger har siste ord — og de justeres
 der, i Androids varselinnstillinger for appen, ikke i en egen Huskis-bryter.
 Android 7 (API 24–25, som minSdk fortsatt slipper inn) har ingen kanaler i det
@@ -2799,12 +2802,11 @@ Android (Samsung, rein installasjon); resten står igjen.
       ([`varsler.md`](varsler.md), «Én synlig varsling»). Maskinelt låst av
       `tests/notif-channels.test.js` 12;
 - [x] med appen i bakgrunnen: Android-systemvarselet leveres;
-- [ ] … og det vises som HEADS-UP — banneret over skjermen — og på
-      låseskjermen. Kanalens høye viktighet er en FORESPØRSEL, så dette er
-      punktet bare en telefon kan svare på: brukeren, «Ikke forstyrr» og
-      produsentens innstillinger har siste ord. Sjekk samtidig at kanalen
-      («Påminnelser») står i Androids varselinnstillinger for Huskis, med lyd og
-      vibrasjon;
+- [ ] … og det vises som HEADS-UP — banneret over skjermen. Kanalens høye
+      viktighet er en FORESPØRSEL, så dette er punktet bare en telefon kan svare
+      på: brukeren, «Ikke forstyrr» og produsentens innstillinger har siste ord.
+      Sjekk samtidig at kanalen («Påminnelser») står i Androids
+      varselinnstillinger for Huskis, med lyd og vibrasjon;
 - [ ] en OPPGRADERING fra en versjon uten kanalen: alarmer som alt var
       planlagt kommer fortsatt, nå som heads-up, og bare ÉN gang. Migreringen
       er maskinelt dekket av `tests/notif-channels.test.js` 13, men bare mot en

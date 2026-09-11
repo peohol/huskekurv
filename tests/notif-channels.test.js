@@ -55,8 +55,9 @@
         diffen — et systemvarsel i tillegg er IKKE et ferdigkriterium. Er appen
         ikke åpen, er alarmen sikkerhetsnettet, og den skal være armert på
         forhånd. Klokka får faktisk passere terskelen her.
-    13. Androids egen varselkanal: den opprettes med HØY viktighet, offentlig
-        låseskjerm og vibrasjon, hvert varsel planlegges eksplisitt på den, og
+    13. Androids egen varselkanal: den opprettes med HØY viktighet og vibrasjon
+        — og uten et løfte om låseskjermen, som Android ikke lar en app sette —
+        hvert varsel planlegges eksplisitt på den, og
         den finnes FØR den første alarmen armeres. Og migreringen: en
         installasjon med alarmer fra før kanalen fantes får dem planlagt på nytt
         — uten dubletter, uten en mistet framtid — mens gjentatt synk og nye
@@ -238,9 +239,9 @@ function fakePlattform() {
             }
             const finnes = window.__kanal.kanaler.find((k) => k.id === ch.id);
             /* ANDROID LÅSER KANALEN: `createNotificationChannel` på en kanal som
-               allerede finnes oppdaterer BARE navn og beskrivelse. Viktighet,
-               låseskjerm og vibrasjon står som de ble opprettet — og det er
-               nettopp derfor en heving av viktigheten krever en NY kanal-id. */
+               allerede finnes oppdaterer BARE navn og beskrivelse. Viktighet og
+               vibrasjon står som de ble opprettet — og det er nettopp derfor en
+               heving av viktigheten krever en NY kanal-id. */
             if (finnes) {
               finnes.name = ch.name;
               finnes.description = ch.description;
@@ -248,7 +249,15 @@ function fakePlattform() {
               window.__kanal.kanaler.push({
                 id: ch.id, name: ch.name, description: ch.description,
                 importance: ch.importance == null ? 3 : ch.importance,
-                visibility: ch.visibility == null ? 1 : ch.visibility,
+                /* LÅSESKJERMEN ER IKKE APPENS. Android nullstiller kanalens
+                   `lockscreenVisibility` når det er appen som oppretter den
+                   (`PreferencesHelper.createNotificationChannel`: «Reset fields
+                   that apps aren't allowed to set»), så uansett hva som sendes
+                   inn — også pluginens egen PUBLIC-standard — står feltet igjen
+                   på VISIBILITY_NO_OVERRIDE (−1000). Fakes det bort, ville en
+                   test kunne love en låseskjermkontrakt telefonen ikke gir. */
+                visibility: -1000,
+                bedtVisibility: ch.visibility,
                 vibration: !!ch.vibration,
                 /* Pluginen rører aldri kanalens lyd når `sound` er tom, og en
                    Android-kanal har systemets vanlige varsellyd fra fødselen. */
@@ -1234,8 +1243,8 @@ async function run() {
   /* ================= 13) ANDROIDS EGEN VARSELKANAL ==================
      Et varsel som bare legger seg stille i varselpanelet er ikke et varsel om
      at en frist har utløpt. Alarmene har derfor sin EGEN Android-kanal, med
-     høy viktighet, offentlig låseskjerm og vibrasjon — alt Android trenger for
-     å vise varselet som et heads-up.
+     høy viktighet og vibrasjon — det Android trenger for å vise varselet som et
+     heads-up. Låseskjermen er IKKE med: den kan en app ikke sette (se 13c2).
 
      Det er en FORESPØRSEL, ikke en garanti: brukeren, «Ikke forstyrr» og
      produsentens innstillinger har siste ord, og det er meningen. Det som
@@ -1283,9 +1292,17 @@ async function run() {
   log('13b: kanalen er ÉN, med Huskis’ egen stabile id',
     k1.kanaler.length === 1 && !!kanal && kanal.id === k1.chId && /\S/.test(k1.chId),
     JSON.stringify(k1.kanaler.map((k) => k.id)));
-  log('13c: … med HØY viktighet (4), offentlig låseskjerm (1) og vibrasjon',
-    !!kanal && kanal.importance === 4 && kanal.visibility === 1 && kanal.vibration === true,
+  log('13c: … med HØY viktighet (4) og vibrasjon',
+    !!kanal && kanal.importance === 4 && kanal.vibration === true,
     JSON.stringify(kanal));
+  /* LÅSESKJERMEN LOVES IKKE. Android nullstiller kanalens lockscreen-visibility
+     for en kanal appen selv oppretter, så et `visibility` herfra ville vært et
+     løfte telefonen ikke holder — og PUBLIC ville dessuten eksponert
+     påminnelsens tekst på en låst skjerm. Hva som vises der er brukerens egen
+     innstilling, med varselets PRIVATE som utgangspunkt. */
+  log('13c2: … og ingen låseskjermkontrakt: den ber ikke om det, og ville ikke fått det',
+    !!kanal && kanal.bedtVisibility === undefined && kanal.visibility === -1000,
+    JSON.stringify({ bedt: kanal && kanal.bedtVisibility, faktisk: kanal && kanal.visibility }));
   /* Ingen medbrakt lydfil: pluginen rører aldri kanalens lyd når `sound` er
      tom, og en Android-kanal har systemets vanlige varsellyd fra fødselen. */
   log('13d: … og Androids vanlige varsellyd, ikke en egen lydfil',
@@ -1540,9 +1557,9 @@ async function run() {
     JSON.stringify({ før: tomPlan.navn, nå: språk.kanal.name }));
   /* … og resten av kanalen står som den ble laget: Android oppdaterer bare
      navn og beskrivelse, og det er nettopp derfor id-en er versjonert. */
-  log('13v: … mens viktighet, låseskjerm og vibrasjon står urørt',
-    språk.kanal.importance === 4 && språk.kanal.visibility === 1 &&
-    språk.kanal.vibration === true, JSON.stringify(språk.kanal));
+  log('13v: … mens viktighet og vibrasjon står urørt',
+    språk.kanal.importance === 4 && språk.kanal.vibration === true,
+    JSON.stringify(språk.kanal));
 
   await ctxK.close();
 

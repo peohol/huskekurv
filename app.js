@@ -13291,7 +13291,17 @@
      Kanalen er en FORESPØRSEL, ikke en garanti. Android eier presentasjonen:
      brukeren kan skru kanalen ned i systeminnstillingene, «Ikke forstyrr» kan
      holde den tilbake, og produsentene har sine egne regler. Huskis ber om
-     høy viktighet, offentlig låseskjerm og vibrasjon — resten er systemets.
+     høy viktighet og vibrasjon — resten er systemets.
+
+     LÅSESKJERMEN BER VI IKKE OM, for det kan vi ikke. Android nullstiller
+     kanalens `lockscreenVisibility` når det er APPEN som oppretter den — se
+     `PreferencesHelper.createNotificationChannel` i AOSP, der linjen står under
+     kommentaren «Reset fields that apps aren't allowed to set». Feltet er
+     brukerens, ikke vårt. Hva som vises på en låst skjerm følger derfor av
+     enhetens egen innstilling, med varselets `VISIBILITY_PRIVATE` (satt av
+     pluginen) som utgangspunkt — og det er den trygge veien: en påminnelse er
+     et objektnavn, og det skal ikke tvinges fram på en låst telefon som en
+     bieffekt av at varselet skal være synlig.
 
      Og det er MED VILJE bare det: ingen `fullScreenIntent`, ingen
      USE_FULL_SCREEN_INTENT, ingen TURN_SCREEN_ON og ingen wake lock. De hører
@@ -13358,7 +13368,6 @@
         name: tr('notif.android.channelName'),
         description: tr('notif.android.channelDesc'),
         importance: 4,          // IMPORTANCE_HIGH — lyd, og heads-up når Android tillater det
-        visibility: 1,          // VISIBILITY_PUBLIC — varselet vises på låseskjermen
         vibration: true,
       }) : null))
       .catch((e) => {

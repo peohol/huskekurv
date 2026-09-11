@@ -953,17 +953,29 @@ krever et eget skjema for — skal appen ikke be om.
 #### Varselkanalen: heads-up, og ikke mer enn det
 
 Varslene har sin **egen Android-kanal**, og den er satt opp slik at Android
-normalt viser dem som et **heads-up** — banneret som legger seg over skjermen —
-og på låseskjermen:
+normalt viser dem som et **heads-up**: banneret som legger seg over skjermen.
 
 | Egenskap | Verdi | Hvorfor |
 |---|---|---|
 | `id` | `huskis-notif-v1` | stabil og VERSJONERT; se migreringen under |
 | `importance` | `4` (IMPORTANCE_HIGH) | lyd, og heads-up når Android tillater det |
-| `visibility` | `1` (PUBLIC) | varselet vises på låseskjermen, ikke som «Huskis: varsel» |
 | `vibration` | `true` | telefonen skal kunne ligge med lyden av |
 | lyd | Androids vanlige varsellyd | ingen medbrakt lydfil |
 | navn/beskrivelse | `notif.android.channelName` / `…Desc` | brukerrettet tekst, og den følger appspråket (docs/sprak.md) |
+
+**Låseskjermen står ikke i tabellen, og det er ikke en forglemmelse.** En app
+kan ikke sette kanalens `lockscreenVisibility`: Android nullstiller feltet når
+det er appen som oppretter kanalen — i AOSP står linjen i
+`PreferencesHelper.createNotificationChannel`, under kommentaren «Reset fields
+that apps aren't allowed to set». Det gjelder også pluginens egen
+PUBLIC-standard. Hva som vises på en låst skjerm er derfor brukerens egen
+innstilling, med varselets `VISIBILITY_PRIVATE` (satt av pluginen) som
+utgangspunkt.
+
+Det er også den trygge veien: et Huskis-varsel bærer objektets navn, og PUBLIC
+ville tvunget den teksten fram på en låst telefon. Skulle full tekst på
+låseskjermen noen gang bli et produktkrav, er det en egen avgjørelse — ikke en
+bieffekt av at varselet skal være synlig.
 
 Lyden er ikke satt, og det er et VALG: pluginen rører bare kanalens lyd når et
 `sound` sendes inn, og en Android-kanal har systemets vanlige varsellyd fra
@@ -1028,8 +1040,8 @@ om den.
 #### Migreringen til kanalen
 
 **Android låser en kanals viktighet i det den opprettes.** `createChannel` på en
-kanal som allerede finnes oppdaterer BARE navn og beskrivelse — viktighet,
-låseskjerm og vibrasjon står som de ble laget. Det er derfor id-en er
+kanal som allerede finnes oppdaterer BARE navn og beskrivelse — viktighet og
+vibrasjon står som de ble laget. Det er derfor id-en er
 versjonert: skal innstillingene noensinne endres, må kanalen få en NY id.
 
 En installasjon som oppgraderes har alarmer som ble armert før kanalen fantes,
@@ -1761,7 +1773,8 @@ De to henger sammen på nøyaktig ett punkt, og ellers ikke:
   passerer med appen i forgrunnen, at terskelen da er ute av den framtidige
   native planen, at den armerte alarmen avlyses — og at raden likevel står i
   historikken. Og VARSELKANALEN: at den opprettes med HØY viktighet, offentlig
-  låseskjerm og vibrasjon, at hvert varsel planlegges eksplisitt på den, at den
+  vibrasjon — og at den IKKE lover en låseskjermkontrakt Android ikke lar en app
+  sette — at hvert varsel planlegges eksplisitt på den, at den
   finnes FØR den første alarmen armeres, at `getPending()` ikke bærer noen
   `channelId` — premisset for at migreringen tar hele planen — at en
   installasjon med alarmer fra før kanalen får dem flyttet ved å planlegges på
