@@ -55,6 +55,14 @@
         diffen — et systemvarsel i tillegg er IKKE et ferdigkriterium. Er appen
         ikke åpen, er alarmen sikkerhetsnettet, og den skal være armert på
         forhånd. Klokka får faktisk passere terskelen her.
+    13. Androids egen varselkanal: den opprettes med HØY viktighet, offentlig
+        låseskjerm og vibrasjon, hvert varsel planlegges eksplisitt på den, og
+        den finnes FØR den første alarmen armeres. Og migreringen: en
+        installasjon med alarmer fra før kanalen fantes får dem planlagt på nytt
+        — uten dubletter, uten en mistet framtid — mens gjentatt synk og nye
+        omstarter ikke gjør noe mer. Til slutt at heads-up ikke har dratt med
+        seg en eneste ny tillatelse: ingen fullskjerm, ingen skjerm-på, ingen
+        presise alarmer.
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -120,12 +128,39 @@ function fakePlattform() {
      varsel står altså igjen i `getPending()` mens alarmen er borte, og
      adapterens diff må tåle det. Fakes den bort, beviser en test noe
      telefonen ikke gjør. */
+  /* LAGRINGEN OVERLEVER EN OMSTART, som pluginens egen gjør: alarmer,
+     lagrede rader, leverte varsler, kanalene telefonen har fått — og
+     tillatelsen. Uten det ville en «appoppgradering» (en ny sidelasting) sett
+     ut som en helt ny telefon, og en test av MIGRERING bevist ingenting.
+     `sessionStorage`, så konteksten fortsatt er testens egen. */
+  const LN_LAGER = 'hk-fake-ln';
+  const lagret = (() => {
+    try { return JSON.parse(sessionStorage.getItem(LN_LAGER) || 'null'); } catch (e) { return null; }
+  })() || {};
   window.__kanal = { schedule: [], cancel: [], pending: [], alarmer: [], levert: [],
+    /* Kanalene som er opprettet på «telefonen», og en logg over kallene i den
+       rekkefølgen de kom — testen bruker den til å se at kanalen fantes FØR
+       det første varselet ble planlagt. Loggen er øktens, ikke telefonens. */
+    kanaler: [], logg: [],
     perm: q.get('perm') || 'prompt', spurt: 0, vist: [], meldt: [] };
+  ['pending', 'alarmer', 'levert', 'kanaler'].forEach((k) => {
+    if (Array.isArray(lagret[k])) window.__kanal[k] = lagret[k];
+  });
+  if (!q.get('perm') && lagret.perm) window.__kanal.perm = lagret.perm;
+  window.__kanal.lagre = function () {
+    try {
+      sessionStorage.setItem(LN_LAGER, JSON.stringify({
+        pending: window.__kanal.pending, alarmer: window.__kanal.alarmer,
+        levert: window.__kanal.levert, kanaler: window.__kanal.kanaler,
+        perm: window.__kanal.perm,
+      }));
+    } catch (e) { /* full lagring: testen mister bare omstart-troverdigheten */ }
+  };
   // Kalles av testen: alarmen ringte. Raden blir stående i lagringen.
   window.__kanal.lever = function (id) {
     window.__kanal.levert.push(id);
     window.__kanal.alarmer = window.__kanal.alarmer.filter((n) => n.id !== id);
+    window.__kanal.lagre();
   };
 
   /* Ett RPC-kall kan tvinges til å feile: `window.__kanal.rpcFeil = '<navn>'`.
@@ -173,17 +208,71 @@ function fakePlattform() {
           requestPermissions: async () => {
             window.__kanal.spurt++;
             window.__kanal.perm = window.__kanal.svar || 'granted';
+            window.__kanal.lagre();
             return { display: window.__kanal.perm };
           },
-          getPending: async () => ({ notifications: window.__kanal.pending.slice() }),
+          /* `getPending()` er NOTIFICATION_STORE gjengitt slik pluginen selv
+             gjør det (`buildLocalNotificationPendingList`): id, tekst, tidspunkt,
+             `extra` og de to exact-flaggene. INGEN `channelId` — pluginen lagrer
+             det appen sendte inn, og feltet er ikke med i svaret. Det er hele
+             grunnen til at migreringen ikke kan plukke ut «alarmene på den gamle
+             kanalen»: telefonen kan ikke svare på spørsmålet. */
+          getPending: async () => ({
+            notifications: window.__kanal.pending.map((n) => ({
+              id: n.id, title: n.title, body: n.body,
+              schedule: { at: n.at, repeats: false },
+              extra: n.extra, isExactNotification: n.isExactNotification,
+            })),
+          }),
+          createChannel: async (ch) => {
+            window.__kanal.logg.push('createChannel:' + ch.id);
+            const finnes = window.__kanal.kanaler.find((k) => k.id === ch.id);
+            /* ANDROID LÅSER KANALEN: `createNotificationChannel` på en kanal som
+               allerede finnes oppdaterer BARE navn og beskrivelse. Viktighet,
+               låseskjerm og vibrasjon står som de ble opprettet — og det er
+               nettopp derfor en heving av viktigheten krever en NY kanal-id. */
+            if (finnes) {
+              finnes.name = ch.name;
+              finnes.description = ch.description;
+            } else {
+              window.__kanal.kanaler.push({
+                id: ch.id, name: ch.name, description: ch.description,
+                importance: ch.importance == null ? 3 : ch.importance,
+                visibility: ch.visibility == null ? 1 : ch.visibility,
+                vibration: !!ch.vibration,
+                /* Pluginen rører aldri kanalens lyd når `sound` er tom, og en
+                   Android-kanal har systemets vanlige varsellyd fra fødselen. */
+                sound: ch.sound ? ch.sound : 'default',
+              });
+            }
+            window.__kanal.lagre();
+          },
           schedule: async (o) => {
+            window.__kanal.logg.push('schedule:' + o.notifications.length);
             window.__kanal.schedule.push(o.notifications);
             o.notifications.forEach((n) => {
-              window.__kanal.pending.push({ id: n.id });
-              window.__kanal.alarmer.push({ id: n.id, at: n.schedule.at });
+              /* Samme id igjen ERSTATTER: pluginen skriver lagringsraden på
+                 id-en (`appendNotifications`) og avlyser den gamle alarmen før
+                 den armerer den nye (`cancelTimerForNotification`). Ingen
+                 dublett — og det er det som gjør en ny planlegging til en trygg
+                 migrering. */
+              window.__kanal.pending = window.__kanal.pending.filter((x) => x.id !== n.id);
+              window.__kanal.alarmer = window.__kanal.alarmer.filter((x) => x.id !== n.id);
+              window.__kanal.levert = window.__kanal.levert.filter((x) => x !== n.id);
+              window.__kanal.pending.push({ id: n.id, title: n.title, body: n.body,
+                at: n.schedule.at, extra: n.extra,
+                isExactNotification: n.isExactNotification });
+              /* KANALEN BAKES INN NÅR ALARMEN ARMERES: pluginen bygger hele
+                 `Notification`-objektet i `schedule()` og legger det ferdige
+                 objektet i alarmen. Kanalen til en armert alarm kan derfor ikke
+                 endres — den må settes på nytt. */
+              window.__kanal.alarmer.push({ id: n.id, at: n.schedule.at,
+                kanal: n.channelId || 'default' });
             });
+            window.__kanal.lagre();
           },
           cancel: async (o) => {
+            window.__kanal.logg.push('cancel:' + o.notifications.length);
             window.__kanal.cancel.push(o.notifications);
             const vekk = new Set(o.notifications.map((n) => n.id));
             window.__kanal.alarmer = window.__kanal.alarmer.filter((n) => !vekk.has(n.id));
@@ -192,6 +281,7 @@ function fakePlattform() {
             const levert = new Set(window.__kanal.levert);
             window.__kanal.pending = window.__kanal.pending.filter(
               (n) => !vekk.has(n.id) || levert.has(n.id));
+            window.__kanal.lagre();
           },
           addListener: async (navn, fn) => {
             if (navn === 'localNotificationActionPerformed') window.__kanal.trykk = fn;
@@ -1105,8 +1195,266 @@ async function run() {
   log('12f: … mens raden står i historikken, så varselet ikke er tapt',
     etterpå.rad.length === 1 && etterpå.rad[0].at === grense.at,
     JSON.stringify(etterpå.rad));
+  /* 12g) OG REGELEN HOLDER MED HØYPRIORITETSKANALEN. Alarmen som ble avlyst
+     her sto på Huskis' egen kanal, den som ber Android om et heads-up. Det er
+     nettopp derfor avlysningen er regelen: kanalen gjør systemvarselet MER
+     synlig, og et som kom i tillegg til toasten ville vært to varslinger om
+     det samme. Heads-up gjelder når appen ikke er der til å vise noe selv. */
+  const forgrunnsKanal = await pf.evaluate(() => ({
+    lagt: window.__kanal.schedule.flat().map((n) => n.channelId),
+    ch: window.__huskis.NATIVE_CH_ID,
+  }));
+  log('12g: … og regelen holder selv om alarmen sto på høyprioritetskanalen',
+    forgrunnsKanal.lagt.length > 0 &&
+    forgrunnsKanal.lagt.every((c) => c === forgrunnsKanal.ch) &&
+    etterpå.toaster.length === 1 && etterpå.avlyst.indexOf(armertId) !== -1,
+    JSON.stringify({ kanaler: forgrunnsKanal.lagt, toaster: etterpå.toaster.length }));
 
   await ctxF.close();
+
+  /* ================= 13) ANDROIDS EGEN VARSELKANAL ==================
+     Et varsel som bare legger seg stille i varselpanelet er ikke et varsel om
+     at en frist har utløpt. Alarmene har derfor sin EGEN Android-kanal, med
+     høy viktighet, offentlig låseskjerm og vibrasjon — alt Android trenger for
+     å vise varselet som et heads-up.
+
+     Det er en FORESPØRSEL, ikke en garanti: brukeren, «Ikke forstyrr» og
+     produsentens innstillinger har siste ord, og det er meningen. Det som
+     prøves her er derfor Huskis' halvdel — at kanalen ber om det den skal, at
+     hvert varsel faktisk planlegges på den, og at kanalen finnes FØR den
+     første alarmen armeres.
+
+     Og migreringen, som er det egentlige arbeidet: en installasjon som
+     allerede har alarmer, fikk dem armert før kanalen fantes. Android låser en
+     kanals viktighet i det den opprettes, så de gamle alarmene kan ikke løftes
+     over — de må planlegges på nytt. `getPending()` kan ikke fortelle hvilken
+     kanal en alarm står på (svaret bærer ikke feltet), så migreringen tar hele
+     planen, én gang per kanal-id, og må tåle å bli kjørt om igjen. */
+  const ctxK = await nyKontekst(browser);
+  const pk = await ctxK.newPage();
+  pk.on('pageerror', (e) => errs.push('kanal: ' + e.message));
+  const KURL = BASE + '/?mock=1&ch=native';
+  await seed(pk, KURL, buildDB(due));
+
+  log('13a: ingen kanal opprettes av seg selv — først når brukeren slår varslene på',
+    (await pk.evaluate(() => window.__kanal.kanaler.length)) === 0);
+
+  await pk.evaluate(() => window.__huskis.setNotifChannel(true));
+  await pk.waitForFunction(() => window.__kanal.schedule.length > 0,
+    null, { timeout: 8000, polling: 100 });
+  await pk.waitForTimeout(300);
+
+  const k1 = await pk.evaluate(async () => {
+    const ln = window.Capacitor.Plugins.LocalNotifications;
+    const pending = await ln.getPending();
+    return {
+      chId: window.__huskis.NATIVE_CH_ID,
+      kanaler: window.__kanal.kanaler,
+      logg: window.__kanal.logg.slice(),
+      lagt: window.__kanal.schedule.flat().map((n) => ({
+        id: n.id, kanal: n.channelId,
+        fullScreen: n.fullScreenIntent, forgrunn: n.foreground, lyd: n.sound })),
+      alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, kanal: n.kanal })),
+      pendingFelter: (pending.notifications || []).map((n) => Object.keys(n).sort().join(',')),
+      merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+    };
+  });
+  const kanal = k1.kanaler[0];
+  log('13b: kanalen er ÉN, med Huskis’ egen stabile id',
+    k1.kanaler.length === 1 && !!kanal && kanal.id === k1.chId && /\S/.test(k1.chId),
+    JSON.stringify(k1.kanaler.map((k) => k.id)));
+  log('13c: … med HØY viktighet (4), offentlig låseskjerm (1) og vibrasjon',
+    !!kanal && kanal.importance === 4 && kanal.visibility === 1 && kanal.vibration === true,
+    JSON.stringify(kanal));
+  /* Ingen medbrakt lydfil: pluginen rører aldri kanalens lyd når `sound` er
+     tom, og en Android-kanal har systemets vanlige varsellyd fra fødselen. */
+  log('13d: … og Androids vanlige varsellyd, ikke en egen lydfil',
+    !!kanal && kanal.sound === 'default' &&
+    k1.lagt.every((n) => n.lyd === undefined), JSON.stringify({ kanal: kanal && kanal.sound }));
+  log('13e: kanalen har et navn og en beskrivelse — teksten brukeren ser i systeminnstillingene',
+    !!kanal && /\S/.test(kanal.name || '') && /\S/.test(kanal.description || ''),
+    JSON.stringify({ navn: kanal && kanal.name, tekst: kanal && kanal.description }));
+  log('13f: HVERT native varsel planlegges eksplisitt på den kanalen',
+    k1.lagt.length > 0 && k1.lagt.every((n) => n.kanal === k1.chId),
+    JSON.stringify(k1.lagt.map((n) => n.kanal)));
+  /* Kanalen bakes inn i alarmen når den armeres, og kan ikke endres etterpå.
+     Derfor er REKKEFØLGEN et krav, ikke en detalj. */
+  log('13g: kanalen fantes FØR det første varselet ble planlagt',
+    k1.logg.indexOf('createChannel:' + k1.chId) === 0 &&
+    k1.logg.filter((x) => /^schedule:/.test(x)).length > 0 &&
+    k1.logg.findIndex((x) => /^createChannel:/.test(x)) <
+      k1.logg.findIndex((x) => /^schedule:/.test(x)), JSON.stringify(k1.logg));
+  log('13h: … og ingenting i et Huskis-varsel ber om fullskjerm eller egen prioritet',
+    k1.lagt.every((n) => n.fullScreen === undefined && n.forgrunn === undefined));
+  /* PREMISSET for migreringen: telefonen kan ikke svare på hvilken kanal en
+     alarm står på. `getPending()` bærer ikke feltet — pluginen lagrer det appen
+     sendte inn, og en gammel Huskis sendte ingen kanal i det hele tatt. */
+  log('13i: `getPending()` bærer INGEN channelId — kanalen kan ikke leses av telefonen',
+    k1.pendingFelter.length > 0 && k1.pendingFelter.every((f) => f.indexOf('channelId') === -1),
+    JSON.stringify(k1.pendingFelter[0]));
+  log('13j: enheten er merket med kanalen alarmene står på',
+    k1.merke === k1.chId, String(k1.merke));
+
+  /* ---------- 13k–13n) MIGRERING: en installasjon fra før kanalen ----------
+     Riggen er telefonen slik en eldre Huskis etterlot den: de samme alarmene,
+     armert på pluginens `default`-kanal, uten at Huskis-kanalen finnes og uten
+     merket som sier hvor alarmene står.
+
+     Først uten omstart, så migreringen kan måles ALENE: hva gjør Huskis med en
+     telefon som har alarmer på feil kanal? */
+  const rigg = (slettKanal) => pk.evaluate((slett) => {
+    window.__kanal.alarmer.forEach((n) => { n.kanal = 'default'; });
+    // Kanalen selv finnes bare i den riggen som også starter appen på nytt: en
+    // gammel installasjon har den ikke, og økten som alt har opprettet den
+    // husker det.
+    if (slett) window.__kanal.kanaler.length = 0;
+    window.__kanal.logg.length = 0;
+    window.__kanal.schedule.length = 0;
+    window.__kanal.cancel.length = 0;
+    window.__kanal.lagre();
+    localStorage.removeItem(window.__huskis.NATIVE_CH_KEY);
+    return {
+      alarmer: window.__kanal.alarmer.map((n) => n.id).sort(),
+      tider: window.__kanal.alarmer.map((n) => n.at).sort(),
+      kanaler: window.__kanal.alarmer.map((n) => n.kanal),
+    };
+  }, slettKanal);
+  const førMig = await rigg(false);
+  log('13k: riggen er en telefon med alarmer på den GAMLE kanalen',
+    førMig.alarmer.length > 0 && førMig.kanaler.every((k) => k === 'default'),
+    JSON.stringify({ alarmer: førMig.alarmer.length, kanaler: førMig.kanaler }));
+
+  await pk.evaluate(() => window.__huskis.syncNotifChannel());
+  await pk.waitForTimeout(400);
+  const mig1 = await pk.evaluate(() => ({
+    chId: window.__huskis.NATIVE_CH_ID,
+    logg: window.__kanal.logg.slice(),
+    alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, at: n.at, kanal: n.kanal })),
+    lagt: window.__kanal.schedule.flat().map((n) => ({ id: n.id, kanal: n.channelId })),
+    avlyst: window.__kanal.cancel.flat().map((n) => n.id),
+    kanaler: window.__kanal.kanaler,
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+  }));
+  log('13l: en uendret plan er IKKE «ingenting å gjøre» når kanalen er en annen',
+    mig1.lagt.length === førMig.alarmer.length && mig1.lagt.every((n) => n.kanal === mig1.chId),
+    JSON.stringify({ lagt: mig1.lagt.length, av: førMig.alarmer.length }));
+  /* Alarmen settes PÅ NYTT, den avlyses ikke først: pluginen erstatter den
+     gamle alarmen på den samme id-en selv, og et «avlys, så planlegg» ville
+     mistet alarmen om appen døde imellom. */
+  log('13m: … alarmene flyttes ved å planlegges på nytt, og det er HELE operasjonen',
+    mig1.avlyst.length === 0 && mig1.logg.length === 1 &&
+    /^schedule:/.test(mig1.logg[0] || ''), JSON.stringify(mig1.logg));
+  log('13n: … og telefonen står igjen med NØYAKTIG de samme alarmene, på den nye kanalen',
+    JSON.stringify(mig1.alarmer.map((n) => n.id).sort()) === JSON.stringify(førMig.alarmer) &&
+    JSON.stringify(mig1.alarmer.map((n) => n.at).sort()) === JSON.stringify(førMig.tider) &&
+    mig1.alarmer.every((n) => n.kanal === mig1.chId) &&
+    mig1.kanaler.length === 1 && mig1.kanaler[0].importance === 4 &&
+    mig1.merke === mig1.chId,
+    JSON.stringify({ før: førMig.alarmer.length, etter: mig1.alarmer.length,
+      merke: mig1.merke }));
+
+  /* ---------- 13o–13p) … og den samme migreringen over en APPOPPGRADERING ----
+     Det er slik den faktisk kommer: en ny versjon starter for første gang, med
+     telefonens alarmer allerede liggende fra den forrige. */
+  const førOmstart = await rigg(true);
+  await pk.goto(KURL);                       // appoppgradering: appen starter på nytt
+  await pk.waitForFunction(() => {
+    const H = window.__huskis;
+    return H && H.authUser && H.state.universes.length > 0 && !!H.notifPrefs;
+  }, null, { timeout: 15000, polling: 200 });
+  await pk.waitForFunction((n) => window.__kanal.alarmer.length === n &&
+    window.__kanal.alarmer.every((a) => a.kanal !== 'default'),
+    førOmstart.alarmer.length, { timeout: 15000, polling: 200 }).catch(() => {});
+  await pk.waitForTimeout(500);
+
+  const mig = await pk.evaluate(() => ({
+    chId: window.__huskis.NATIVE_CH_ID,
+    kanaler: window.__kanal.kanaler,
+    logg: window.__kanal.logg.slice(),
+    alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, at: n.at, kanal: n.kanal })),
+    pending: window.__kanal.pending.map((n) => n.id).sort(),
+    lagt: window.__kanal.schedule.flat().map((n) => ({ id: n.id, kanal: n.channelId })),
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+    plan: window.__huskis.planNotifications(window.__huskis.state, Date.now(),
+      window.__huskis.notifPrefs).map((r) => window.__huskis.nativeNotifId(
+        window.__huskis.nativeNotifSig(r))).sort(),
+  }));
+  log('13o: en oppgradert installasjon får alarmene over på den nye kanalen ved oppstart',
+    mig.alarmer.length > 0 && mig.alarmer.every((n) => n.kanal === mig.chId) &&
+    mig.lagt.length > 0 && mig.lagt.every((n) => n.kanal === mig.chId) &&
+    mig.merke === mig.chId, JSON.stringify(mig.alarmer.map((n) => n.kanal)));
+  // … og kanalen ble laget FØR den første alarmen — også her, der den ikke
+  // fantes fra før.
+  log('13o2: … og kanalen ble opprettet før migreringen planla noe',
+    mig.logg.indexOf('createChannel:' + mig.chId) !== -1 &&
+    mig.logg.findIndex((x) => /^createChannel:/.test(x)) <
+      mig.logg.findIndex((x) => /^schedule:/.test(x)), JSON.stringify(mig.logg));
+  log('13p: … de SAMME alarmene, uten dubletter og uten en mistet framtid',
+    JSON.stringify(mig.alarmer.map((n) => n.id).sort()) === JSON.stringify(førOmstart.alarmer) &&
+    JSON.stringify(mig.alarmer.map((n) => n.at).sort()) === JSON.stringify(førOmstart.tider) &&
+    JSON.stringify(mig.pending) === JSON.stringify(mig.plan) &&
+    mig.alarmer.length === mig.plan.length && mig.kanaler.length === 1,
+    JSON.stringify({ før: førOmstart.alarmer.length, etter: mig.alarmer.length,
+      plan: mig.plan.length }));
+
+  /* ---------- 13q–13r) GJENTATT SYNK OG OMSTART ER IDEMPOTENT ---------- */
+  await pk.evaluate(() => {
+    window.__kanal.schedule.length = 0;
+    window.__kanal.cancel.length = 0;
+    window.__kanal.logg.length = 0;
+  });
+  for (let i = 0; i < 3; i++) await cycle(pk);
+  await pk.evaluate(() => window.__huskis.syncNotifChannel());
+  await pk.waitForTimeout(400);
+  const idem1 = await pk.evaluate(() => ({
+    lagt: window.__kanal.schedule.flat().length,
+    avlyst: window.__kanal.cancel.flat().length,
+    kanaler: window.__kanal.kanaler.length,
+    alarmer: window.__kanal.alarmer.map((n) => n.id).sort(),
+  }));
+  log('13q: gjentatt synk etter migreringen rører ingenting — den kjøres ÉN gang',
+    idem1.lagt === 0 && idem1.avlyst === 0 && idem1.kanaler === 1 &&
+    JSON.stringify(idem1.alarmer) === JSON.stringify(mig.alarmer.map((n) => n.id).sort()),
+    JSON.stringify(idem1));
+
+  await pk.goto(KURL);                       // og en omstart til, nå uten noe å migrere
+  await pk.waitForFunction(() => {
+    const H = window.__huskis;
+    return H && H.authUser && H.state.universes.length > 0 && !!H.notifPrefs;
+  }, null, { timeout: 15000, polling: 200 });
+  for (let i = 0; i < 2; i++) await cycle(pk);
+  await pk.waitForTimeout(600);
+  const idem2 = await pk.evaluate(() => ({
+    alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, at: n.at, kanal: n.kanal })),
+    kanaler: window.__kanal.kanaler.length,
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+  }));
+  log('13r: … og en ny omstart etterlater de samme alarmene på den samme kanalen',
+    idem2.kanaler === 1 && idem2.merke === mig.chId &&
+    JSON.stringify(idem2.alarmer.map((n) => n.id).sort()) ===
+      JSON.stringify(mig.alarmer.map((n) => n.id).sort()) &&
+    JSON.stringify(idem2.alarmer.map((n) => n.at).sort()) ===
+      JSON.stringify(mig.alarmer.map((n) => n.at).sort()) &&
+    idem2.alarmer.every((n) => n.kanal === mig.chId), JSON.stringify(idem2));
+
+  await ctxK.close();
+
+  /* ---------- 13s–13u) INGEN NY TILLATELSE HAR SNEKET SEG INN ----------
+     Heads-up er en kanal med høy viktighet, og INGENTING mer. De mekanismene
+     som eier skjermen — fullskjerm-varsler, «slå på skjermen», presise alarmer
+     — hører til alarmklokker og innkommende anrop, koster hver sin gjennomgang
+     i Google Play, og skal ikke inn bakveien med denne endringen. */
+  const manifest = fs.readFileSync(
+    path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+  const appSrc = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  log('13s: Huskis ber ikke om USE_FULL_SCREEN_INTENT eller TURN_SCREEN_ON',
+    !/USE_FULL_SCREEN_INTENT/.test(manifest) && !/TURN_SCREEN_ON/.test(manifest) &&
+    !/WAKE_LOCK/.test(manifest));
+  log('13t: SCHEDULE_EXACT_ALARM er fortsatt trukket tilbake, og varslene er upresise',
+    /SCHEDULE_EXACT_ALARM"\s*\n?\s*tools:node="remove"/.test(manifest) &&
+    /isExactNotification:\s*false/.test(appSrc));
+  log('13u: koden setter ingen fullScreenIntent og tar ingen wake lock',
+    !/fullScreenIntent\s*:/.test(appSrc) && !/wakeLock|WakeLock|requestWakeLock/.test(appSrc));
 
   /* ================= Nettleser: uten avsendernøkkel ================= */
   const ctxU = await nyKontekst(browser);

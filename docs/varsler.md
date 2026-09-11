@@ -731,6 +731,12 @@ døgn. Overskriftene «I dag»/«I går» har sine egne nøkler med stor forboks
 (`notif.day.*`), fordi de er overskrifter og ikke setningsledd.
 Se [`sprak.md`](sprak.md).
 
+To tekster står UTENFOR Huskis og følger likevel appspråket: navnet og
+beskrivelsen på Androids varselkanal (`notif.android.channelName` og
+`…channelDesc`), som brukeren møter i telefonens systeminnstillinger. De
+skrives på nytt når språket byttes — det er det eneste `createChannel` kan
+oppdatere på en kanal som allerede finnes (se «Varselkanalen»).
+
 ## De eksterne kanalene
 
 De fire preferansene styrer HENDELSEN, ikke visningen. De to eksterne kanalene
@@ -878,8 +884,14 @@ To presiseringer, fordi de er lette å lese feil:
 At Android likevel skulle rekke å levere før runden avlyser, er ikke en feil —
 det er et kappløp vi ikke styrer, og et ekstra systemvarsel er ufarlig. Men
 **et systemvarsel i forgrunnen er ikke et ferdigkriterium**, og skal ikke
-tvinges fram: `foreground`-flagg, egen kanal-importance eller en ekstra
-levering ville gitt nøyaktig den doble varslingen regelen finnes for å unngå.
+tvinges fram: et `foreground`-flagg på varselet eller en ekstra levering ville
+gitt nøyaktig den doble varslingen regelen finnes for å unngå.
+
+Varselkanalens høye viktighet er ikke en slik tvang, og endrer ingenting her.
+Den bestemmer hvordan Android PRESENTERER et varsel som faktisk blir levert —
+og et varsel som er avlyst blir ikke levert. Regelen bæres av diffen, ikke av
+at kanalen er stillferdig: det er nettopp fordi systemvarselet nå er mer
+påtrengende at det ikke skal komme oppå en toast om det samme.
 
 **Web push er ikke symmetrisk her, og kan ikke være det.** Der eier SERVEREN
 sendingen: leveringen ligger i utboksen med `due_at` og går ut når den
@@ -930,6 +942,88 @@ telefonen ikke i dvale, og alarmene fyrer som planlagt. Dette er
 plattformoppførsel, ikke en feil i Huskis, og det er prisen for å slippe en
 tillatelse Google Play krever et eget skjema for. En tillatelse Huskis ikke trenger — og som Google Play
 krever et eget skjema for — skal appen ikke be om.
+
+#### Varselkanalen: heads-up, og ikke mer enn det
+
+Varslene har sin **egen Android-kanal**, og den er satt opp slik at Android
+normalt viser dem som et **heads-up** — banneret som legger seg over skjermen —
+og på låseskjermen:
+
+| Egenskap | Verdi | Hvorfor |
+|---|---|---|
+| `id` | `huskis-notif-v1` | stabil og VERSJONERT; se migreringen under |
+| `importance` | `4` (IMPORTANCE_HIGH) | lyd, og heads-up når Android tillater det |
+| `visibility` | `1` (PUBLIC) | varselet vises på låseskjermen, ikke som «Huskis: varsel» |
+| `vibration` | `true` | telefonen skal kunne ligge med lyden av |
+| lyd | Androids vanlige varsellyd | ingen medbrakt lydfil |
+| navn/beskrivelse | `notif.android.channelName` / `…Desc` | brukerrettet tekst, og den følger appspråket (docs/sprak.md) |
+
+Lyden er ikke satt, og det er et VALG: pluginen rører bare kanalens lyd når et
+`sound` sendes inn, og en Android-kanal har systemets vanlige varsellyd fra
+fødselen. En egen lydfil ville vært en fil til å vedlikeholde uten at noen har
+bedt om den.
+
+**Hvert varsel planlegges eksplisitt med `channelId`**, og **kanalen opprettes
+før den første alarmen** — den lages allerede i det brukeren slår varslene på,
+så den står i Androids innstillinger fra første stund, og igjen før en runde
+planlegger noe. Rekkefølgen er et krav, ikke en detalj: pluginen
+bygger hele `Notification`-objektet — kanalen inkludert — i det samme kallet
+som armerer alarmen, og legger det ferdige objektet i alarmen. Uten `channelId`
+havner varselet på pluginens egen `default`-kanal, som lages med
+IMPORTANCE_DEFAULT og altså legger seg stille i varselpanelet.
+
+**HIGH er en FORESPØRSEL, ikke en garanti.** Android eier presentasjonen:
+brukeren kan skru kanalen ned i systeminnstillingene, «Ikke forstyrr» kan holde
+den tilbake, og produsentenes egne strømsparings- og varselregler kan gjøre det
+samme. Huskis ber om høy viktighet; om det faktisk blir et heads-up, er
+systemets avgjørelse. Derfor finnes det heller **ingen egen Huskis-innstilling
+for dette** — knappene står i Androids varselinnstillinger for appen, der
+brukeren allerede leter etter dem, og de gjelder kanalen.
+
+**Og det er med vilje bare en kanal.** Ingen `fullScreenIntent`, ingen
+USE_FULL_SCREEN_INTENT, ingen TURN_SCREEN_ON, ingen wake lock, ingen ny
+alarmtillatelse — og alarmene er fortsatt UPRESISE. De mekanismene hører til
+alarmklokker og innkommende anrop: de eier skjermen og vekker brukeren. Huskis'
+terskler er «fristen er utløpt» og «begynner innen en uke»; de skal være
+synlige, ikke uunngåelige. Hver av tillatelsene koster dessuten sin egen
+gjennomgang i Google Play, og en app som ikke trenger en tillatelse skal ikke be
+om den.
+
+#### Migreringen til kanalen
+
+**Android låser en kanals viktighet i det den opprettes.** `createChannel` på en
+kanal som allerede finnes oppdaterer BARE navn og beskrivelse — viktighet,
+låseskjerm og vibrasjon står som de ble laget. Det er derfor id-en er
+versjonert: skal innstillingene noensinne endres, må kanalen få en NY id.
+
+En installasjon som oppgraderes har alarmer som ble armert før kanalen fantes,
+og de bærer den gamle kanalen med seg — objektet ligger ferdig bygget i
+alarmen, og kan ikke endres etterpå. `getPending()` kan ikke hjelpe oss å
+plukke ut nettopp dem: svaret bærer id, tekst, tidspunkt, `extra` og
+exact-flaggene, men **ingen `channelId`** — pluginen lagrer det appen sendte
+inn, og en eldre Huskis sendte ingen kanal i det hele tatt.
+
+Derfor er migreringen én regel, og den gjelder HELE planen:
+
+> Står ikke enhetens merke (`hk-notif-android-channel`) på gjeldende kanal-id,
+> er ingen alarm «allerede planlagt». Hele planen planlegges på nytt, og merket
+> skrives etterpå.
+
+- **Ingen dubletter.** Alarmen har den samme id-en, og pluginen avlyser den
+  gamle alarmen for den id-en selv før den armerer den nye.
+- **Ingenting kan gå tapt.** Det er en ren PLANLEGGING, ikke «avlys, så
+  planlegg» — den rekkefølgen ville etterlatt telefonen uten alarmen om appen
+  døde imellom.
+- **Idempotent.** Merket skrives først når runden har vært gjennom broen, så en
+  runde som feilet gjentas i stedet for å bli hoppet over; og når merket står,
+  gjør neste runde ingenting. En enhet uten alarmer er ferdig migrert med det
+  samme — alt som planlegges etterpå bærer kanalen uansett.
+- **Signaturen hopper ikke over den.** En enhet som skal migreres svarer `null`
+  på `sig(plan)` («spør meg hver gang»): en uendret plan er ikke det samme som
+  ingenting å gjøre når alarmene står på feil kanal.
+
+Låst av `tests/notif-channels.test.js` 13, som gjør begge veiene: migreringen
+alene i en kjørende app, og den samme migreringen over en appoppgradering.
 
 Ikonene står under «Ikonene i et systemvarsel».
 
@@ -1624,7 +1718,15 @@ De to henger sammen på nøyaktig ett punkt, og ellers ikke:
   var armert på forhånd (bakgrunnskontrakten), at toasten kommer når terskelen
   passerer med appen i forgrunnen, at terskelen da er ute av den framtidige
   native planen, at den armerte alarmen avlyses — og at raden likevel står i
-  historikken.
+  historikken. Og VARSELKANALEN: at den opprettes med HØY viktighet, offentlig
+  låseskjerm og vibrasjon, at hvert varsel planlegges eksplisitt på den, at den
+  finnes FØR den første alarmen armeres, at `getPending()` ikke bærer noen
+  `channelId` — premisset for at migreringen tar hele planen — at en
+  installasjon med alarmer fra før kanalen får dem flyttet ved å planlegges på
+  nytt (ingen avlysning, ingen dubletter, ingen mistet framtid), både i en
+  kjørende app og over en appoppgradering, at gjentatt synk og nye omstarter
+  ikke gjør noe mer, og at ingen ny tillatelse har sneket seg inn: ingen
+  fullskjerm, ingen skjerm-på, ingen presise alarmer.
 - `tests/push-crypto.test.js` — VAPID-signaturen og RFC 8291-krypteringen, mot
   et fast vektor fra `http_ece` og med signaturen faktisk verifisert.
 - `tests/notif-modal.test.js` — knappen og badgen, modalen, nyeste øverst,

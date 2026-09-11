@@ -161,7 +161,7 @@ function buildDB(due, opts) {
 function fakePlattform() {
   const q = new URLSearchParams(location.search);
   const ch = q.get('ch');
-  window.__kanal = { schedule: [], cancel: [], pending: [], alarmer: [],
+  window.__kanal = { schedule: [], cancel: [], pending: [], alarmer: [], kanaler: [],
     perm: q.get('perm') || 'granted', spurt: 0, kall: {}, broKall: 0,
     hold: null, holdAlle: null, holdKall: null, holdt: [],
     /* Fra oppstart, ikke etterpå: oppstartens egen statusrunde er den mest
@@ -259,6 +259,10 @@ function fakePlattform() {
             return { display: 'granted' };
           },
           getPending: async () => ({ notifications: window.__kanal.pending.slice() }),
+          // Varselkanalen opprettes før den første alarmen planlegges
+          // (docs/varsler.md). Her er den bare en del av broen som må finnes —
+          // innholdet i den er tests/notif-channels.test.js 13.
+          createChannel: async (ch) => { window.__kanal.kanaler.push(ch.id); },
           schedule: async (o) => {
             window.__kanal.schedule.push(o.notifications);
             o.notifications.forEach((n) => {
