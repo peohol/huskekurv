@@ -1212,6 +1212,7 @@ async function run() {
      det samme. Heads-up gjelder når appen ikke er der til å vise noe selv. */
   const forgrunnsKanal = await pf.evaluate(() => ({
     lagt: window.__kanal.schedule.flat().map((n) => n.channelId),
+    prio: window.__kanal.schedule.flat().map((n) => n.foreground),
     ch: window.__huskis.NATIVE_CH_ID,
   }));
   log('12g: … og regelen holder selv om alarmen sto på høyprioritetskanalen',
@@ -1219,6 +1220,14 @@ async function run() {
     forgrunnsKanal.lagt.every((c) => c === forgrunnsKanal.ch) &&
     etterpå.toaster.length === 1 && etterpå.avlyst.indexOf(armertId) !== -1,
     JSON.stringify({ kanaler: forgrunnsKanal.lagt, toaster: etterpå.toaster.length }));
+  /* `foreground: true` er Androids PRIORITET, ikke iOS-ens «vis selv om appen
+     er åpen»: pluginen gjør bare `setPriority(PRIORITY_HIGH)` av det. Alarmen
+     her bar flagget — og ble likevel avlyst da appen selv presenterte
+     varselet. Regelen ligger i diffen, ikke i et stille varsel. */
+  log('12h: … og heller ikke fordi varselet bærer høy prioritet',
+    forgrunnsKanal.prio.length > 0 && forgrunnsKanal.prio.every((f) => f === true) &&
+    etterpå.avlyst.indexOf(armertId) !== -1 && etterpå.toaster.length === 1,
+    JSON.stringify({ prioritet: forgrunnsKanal.prio, toaster: etterpå.toaster.length }));
 
   await ctxF.close();
 
@@ -1295,8 +1304,15 @@ async function run() {
     k1.logg.filter((x) => /^schedule:/.test(x)).length > 0 &&
     k1.logg.findIndex((x) => /^createChannel:/.test(x)) <
       k1.logg.findIndex((x) => /^schedule:/.test(x)), JSON.stringify(k1.logg));
-  log('13h: … og ingenting i et Huskis-varsel ber om fullskjerm eller egen prioritet',
-    k1.lagt.every((n) => n.fullScreen === undefined && n.forgrunn === undefined));
+  /* Prioriteten er MED, og den er for Android 7 (API 24–25): der finnes ikke
+     kanaler, så det er notifikasjonens egen prioritet som avgjør heads-up.
+     Feltet heter `foreground` etter iOS-betydningen; på Android gjør det kun
+     `setPriority(PRIORITY_HIGH)`, som Android 8+ ser bort fra. Fullskjerm er
+     det fortsatt ingenting som ber om. */
+  log('13h: … varselet bærer høy prioritet for Android 7, og ingenting ber om fullskjerm',
+    k1.lagt.length > 0 && k1.lagt.every((n) => n.forgrunn === true) &&
+    k1.lagt.every((n) => n.fullScreen === undefined),
+    JSON.stringify(k1.lagt.map((n) => n.forgrunn)));
   /* PREMISSET for migreringen: telefonen kan ikke svare på hvilken kanal en
      alarm står på. `getPending()` bærer ikke feltet — pluginen lagrer det appen
      sendte inn, og en gammel Huskis sendte ingen kanal i det hele tatt. */
@@ -1528,47 +1544,86 @@ async function run() {
     språk.kanal.importance === 4 && språk.kanal.visibility === 1 &&
     språk.kanal.vibration === true, JSON.stringify(språk.kanal));
 
-  /* ---------- 13w) ET OS UTEN KANALER STOPPER INGENTING ----------
+  await ctxK.close();
+
+  /* ---------- 13w–13y) ET OS UTEN KANALER STOPPER INGENTING ----------
      Android under 8 (minSdk er 24) har ikke kanaler i det hele tatt, og
-     pluginen svarer `unavailable`. Der er `channelId` et felt som ses bort
-     fra, og varselet skal komme fram som før. Denne står SIST i denne
-     konteksten: svaret kan ikke endre seg mens appen kjører, og huskes. */
-  await settTid(pk, id.LA, 'due', due);
-  await pk.waitForTimeout(600);
-  await rigg(true);
-  await pk.evaluate(() => { window.__kanal.kanalFeil = 'UNAVAILABLE'; });
-  await pk.evaluate(() => window.__huskis.syncNotifChannel());
-  await pk.waitForTimeout(500);
-  const gammeltOS = await pk.evaluate(() => ({
+     pluginen svarer `unavailable`. Der er `channelId` et felt pluginen ser bort
+     fra, mens den høye PRIORITETEN på varselet er det som gjelder — og
+     varselet skal komme fram som før.
+
+     EGEN KONTEKST, og det er ikke pynt: `ensureNativeChannel` memoiserer en
+     kanal som er opprettet, så en økt som alt har lyktes spør ikke igjen. Kjørt
+     der ville testen aldri nådd `UNAVAILABLE`-grenen, og vært grønn uansett hva
+     den grenen gjorde. Her er appen fersk, og sjekken krever at
+     `createChannel` faktisk BLE forsøkt. */
+  const ctxG = await nyKontekst(browser);
+  const pg = await ctxG.newPage();
+  pg.on('pageerror', (e) => errs.push('gammeltOS: ' + e.message));
+  await seed(pg, KURL, buildDB(due));
+  await pg.evaluate(() => { window.__kanal.kanalFeil = 'UNAVAILABLE'; window.__kanal.lagre(); });
+  await pg.evaluate(() => window.__huskis.setNotifChannel(true));
+  await pg.waitForFunction(() => window.__kanal.alarmer.length > 0,
+    null, { timeout: 10000, polling: 100 }).catch(() => {});
+  await pg.waitForTimeout(400);
+  const gammeltOS = await pg.evaluate(() => ({
+    chId: window.__huskis.NATIVE_CH_ID,
+    logg: window.__kanal.logg.slice(),
     kanaler: window.__kanal.kanaler.length,
-    lagt: window.__kanal.schedule.flat().length,
+    lagt: window.__kanal.schedule.flat().map((n) => ({ kanal: n.channelId, prio: n.foreground })),
     alarmer: window.__kanal.alarmer.length,
     plan: window.__huskis.planNotifications(window.__huskis.state, Date.now(),
       window.__huskis.notifPrefs).length,
     merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
   }));
-  log('13w: et Android uten kanaler får varslene sine likevel',
-    gammeltOS.kanaler === 0 && gammeltOS.plan > 0 &&
-    gammeltOS.lagt === gammeltOS.plan && gammeltOS.alarmer === gammeltOS.plan &&
-    gammeltOS.merke !== null, JSON.stringify(gammeltOS));
+  log('13w: kanalen BLE forsøkt opprettet, og OS-et svarte at den ikke finnes',
+    gammeltOS.logg.indexOf('createChannel:' + gammeltOS.chId) !== -1 &&
+    gammeltOS.logg.findIndex((x) => /^createChannel:/.test(x)) <
+      gammeltOS.logg.findIndex((x) => /^schedule:/.test(x)) &&
+    gammeltOS.kanaler === 0, JSON.stringify(gammeltOS.logg));
+  log('13x: … og varslene legges likevel, med kanal og prioritet på seg',
+    gammeltOS.plan > 0 && gammeltOS.lagt.length === gammeltOS.plan &&
+    gammeltOS.alarmer === gammeltOS.plan && gammeltOS.merke === gammeltOS.chId &&
+    gammeltOS.lagt.every((n) => n.kanal === gammeltOS.chId && n.prio === true),
+    JSON.stringify({ plan: gammeltOS.plan, lagt: gammeltOS.lagt.length,
+      merke: gammeltOS.merke }));
+  /* Svaret kan ikke endre seg mens appen kjører, så det huskes: neste runde
+     skal ikke koste en tur over broen for å få det samme svaret igjen. */
+  await pg.evaluate(() => {
+    window.__kanal.logg.length = 0;
+    window.__kanal.schedule.length = 0;
+    localStorage.removeItem(window.__huskis.NATIVE_CH_KEY);   // tvinger en full runde
+  });
+  await pg.evaluate(() => window.__huskis.syncNotifChannel());
+  await pg.waitForTimeout(400);
+  const igjen = await pg.evaluate(() => ({
+    logg: window.__kanal.logg.slice(),
+    alarmer: window.__kanal.alarmer.length,
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+  }));
+  log('13y: … og «finnes ikke» spørres ikke om på nytt i den samme økten',
+    igjen.logg.every((x) => !/^createChannel:/.test(x)) &&
+    igjen.alarmer === gammeltOS.plan && igjen.merke === gammeltOS.chId,
+    JSON.stringify(igjen));
 
-  await ctxK.close();
+  await ctxG.close();
 
-  /* ---------- 13x–13z) INGEN NY TILLATELSE HAR SNEKET SEG INN ----------
-     Heads-up er en kanal med høy viktighet, og INGENTING mer. De mekanismene
+  /* ---------- 13z1–13z3) INGEN NY TILLATELSE HAR SNEKET SEG INN ----------
+     Heads-up er en kanal med høy viktighet — og på Android 7, som ikke har
+     kanaler, varselets egen prioritet. INGENTING mer. De mekanismene
      som eier skjermen — fullskjerm-varsler, «slå på skjermen», presise alarmer
      — hører til alarmklokker og innkommende anrop, koster hver sin gjennomgang
      i Google Play, og skal ikke inn bakveien med denne endringen. */
   const manifest = fs.readFileSync(
     path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
   const appSrc = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
-  log('13x: Huskis ber ikke om USE_FULL_SCREEN_INTENT eller TURN_SCREEN_ON',
+  log('13z1: Huskis ber ikke om USE_FULL_SCREEN_INTENT eller TURN_SCREEN_ON',
     !/USE_FULL_SCREEN_INTENT/.test(manifest) && !/TURN_SCREEN_ON/.test(manifest) &&
     !/WAKE_LOCK/.test(manifest));
-  log('13y: SCHEDULE_EXACT_ALARM er fortsatt trukket tilbake, og varslene er upresise',
+  log('13z2: SCHEDULE_EXACT_ALARM er fortsatt trukket tilbake, og varslene er upresise',
     /SCHEDULE_EXACT_ALARM"\s*\n?\s*tools:node="remove"/.test(manifest) &&
     /isExactNotification:\s*false/.test(appSrc));
-  log('13z: koden setter ingen fullScreenIntent og tar ingen wake lock',
+  log('13z3: koden setter ingen fullScreenIntent og tar ingen wake lock',
     !/fullScreenIntent\s*:/.test(appSrc) && !/wakeLock|WakeLock|requestWakeLock/.test(appSrc));
 
   /* ================= Nettleser: uten avsendernøkkel ================= */

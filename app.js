@@ -13501,6 +13501,20 @@
         /* Kanalen EKSPLISITT på hvert varsel. Uten feltet velger pluginen sin
            egen `default`-kanal, og da er vi tilbake til et stille varsel. */
         channelId: NATIVE_CH_ID,
+        /* … og PRIORITETEN, for Android 7 (API 24–25, som minSdk fortsatt
+           slipper inn). Der finnes kanaler ikke i det hele tatt, så hele
+           kanalen over er uten virkning — det er notifikasjonens egen prioritet
+           som avgjør om systemet viser den som et heads-up.
+
+           Feltet heter `foreground`, og navnet er iOS-ens: der betyr det «vis
+           varselet selv om appen er i forgrunnen». PÅ ANDROID GJØR DET KUN ÉN
+           TING — `setPriority(PRIORITY_HIGH)` i stedet for `PRIORITY_DEFAULT`
+           (pluginens `LocalNotificationManager.buildNotification`). Det er
+           altså ikke en levering til: Android 8+ ser bort fra prioriteten (der
+           er det kanalens viktighet som gjelder), og produktregelen om ÉN
+           synlig varsling bæres av diffen, som avlyser den armerte alarmen i
+           det terskelen passerer med appen åpen (docs/varsler.md). */
+        foreground: true,
       }));
       if (nye.length) await ln.schedule({ notifications: nye });
       if (migrer) setNativeChannelDone();

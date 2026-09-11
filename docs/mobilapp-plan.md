@@ -2752,9 +2752,12 @@ offentlig låseskjerm (1) og vibrasjon, slik at Android normalt viser dem som
 heads-up og på låseskjermen. Det er en forespørsel, ikke en garanti: brukeren,
 «Ikke forstyrr» og produsentens innstillinger har siste ord — og de justeres
 der, i Androids varselinnstillinger for appen, ikke i en egen Huskis-bryter.
-Kanalen er den ENESTE mekanismen som er tatt i bruk for dette: ingen
-`fullScreenIntent`, ingen USE_FULL_SCREEN_INTENT, ingen TURN_SCREEN_ON, ingen
-wake lock og ingen presise alarmer. Id-en er versjonert fordi Android låser en
+Android 7 (API 24–25, som minSdk fortsatt slipper inn) har ingen kanaler i det
+hele tatt; der bærer varselet høy prioritet i stedet, som er det eneste som
+avgjør heads-up på den versjonen. Kanalen og prioriteten er de ENESTE
+mekanismene som er tatt i bruk for dette: ingen `fullScreenIntent`, ingen
+USE_FULL_SCREEN_INTENT, ingen TURN_SCREEN_ON, ingen wake lock og ingen presise
+alarmer. Id-en er versjonert fordi Android låser en
 kanals viktighet i det den opprettes; alarmer fra en installasjon som er eldre
 enn kanalen planlegges derfor på nytt én gang. Autoritativt:
 `docs/varsler.md`, «Varselkanalen».

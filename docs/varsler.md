@@ -886,14 +886,19 @@ To presiseringer, fordi de er lette å lese feil:
 At Android likevel skulle rekke å levere før runden avlyser, er ikke en feil —
 det er et kappløp vi ikke styrer, og et ekstra systemvarsel er ufarlig. Men
 **et systemvarsel i forgrunnen er ikke et ferdigkriterium**, og skal ikke
-tvinges fram: et `foreground`-flagg på varselet eller en ekstra levering ville
-gitt nøyaktig den doble varslingen regelen finnes for å unngå.
+tvinges fram: en ekstra levering, eller en diff som lot den passerte terskelen
+stå, ville gitt nøyaktig den doble varslingen regelen finnes for å unngå.
 
-Varselkanalens høye viktighet er ikke en slik tvang, og endrer ingenting her.
-Den bestemmer hvordan Android PRESENTERER et varsel som faktisk blir levert —
-og et varsel som er avlyst blir ikke levert. Regelen bæres av diffen, ikke av
-at kanalen er stillferdig: det er nettopp fordi systemvarselet nå er mer
-påtrengende at det ikke skal komme oppå en toast om det samme.
+**Hverken kanalen eller prioriteten er en slik tvang.** Begge bestemmer hvordan
+Android PRESENTERER et varsel som faktisk blir levert — og et varsel som er
+avlyst blir ikke levert. Regelen bæres av diffen, ikke av at varselet er
+stillferdig: det er nettopp fordi systemvarselet nå er mer påtrengende at det
+ikke skal komme oppå en toast om det samme.
+
+Én felle i navnene: feltet Huskis setter for prioritet heter `foreground`, og
+det er iOS-ens betydning («vis varselet selv om appen er i forgrunnen»). PÅ
+ANDROID GJØR DET KUN ÉN TING — `setPriority(PRIORITY_HIGH)`. Det er ikke en
+levering til, og det er ikke et valg om hva som skjer når appen er åpen.
 
 **Web push er ikke symmetrisk her, og kan ikke være det.** Der eier SERVEREN
 sendingen: leveringen ligger i utboksen med `due_at` og går ut når den
@@ -965,8 +970,9 @@ Lyden er ikke satt, og det er et VALG: pluginen rører bare kanalens lyd når et
 fødselen. En egen lydfil ville vært en fil til å vedlikeholde uten at noen har
 bedt om den.
 
-**Hvert varsel planlegges eksplisitt med `channelId`**, og **kanalen opprettes
-før noe planlegges** — første steg i hver speiling, ikke bare i de rundene som
+**Hvert varsel planlegges eksplisitt med `channelId`**, og — for Android 7 —
+**med høy prioritet på varselet selv**, og **kanalen opprettes før noe
+planlegges** — første steg i hver speiling, ikke bare i de rundene som
 har en alarm å legge inn. Rekkefølgen er et krav, ikke en detalj: pluginen
 bygger hele `Notification`-objektet — kanalen inkludert — i det samme kallet
 som armerer alarmen, og legger det ferdige objektet i alarmen. Uten `channelId`
@@ -979,6 +985,14 @@ kanal som finnes. Et språkbytte når dermed Androids innstillinger også på en
 telefon som ikke har en eneste alarm å planlegge. Kallet er memoisert per
 språk, så det koster én tur over broen per oppstart eller språkbytte.
 
+**Android 7 (API 24–25) har ingen kanaler**, og minSdk er 24. Der er hele
+kanalen uten virkning, og det er varselets EGEN prioritet som avgjør om
+systemet viser det som et heads-up. Pluginen setter `PRIORITY_HIGH` bare når
+notifikasjonen bærer `foreground: true`, ellers `PRIORITY_DEFAULT` — så det
+feltet settes på hvert varsel. Navnet er iOS-ens, men på Android gjør feltet
+KUN dette ene, og Android 8+ ser bort fra prioriteten til fordel for kanalens
+viktighet. Se «Én synlig varsling» for hvorfor det ikke rører produktregelen.
+
 To unntak, og de er begge bevisste:
 
 - **En NEDRIGGING lager ingen kanal.** Tas planen ned — brukeren slo av
@@ -990,8 +1004,9 @@ To unntak, og de er begge bevisste:
   ville gitt stumme alarmer — og et merke og en signatur som sier «ferdig».
   Feilen kastes videre, signaturen står urørt, og neste runde gjør hele jobben.
   Det ene svaret som IKKE stopper noe er `UNAVAILABLE`/`UNIMPLEMENTED`: det er
-  Android under 8 (minSdk er 24), der kanaler ikke finnes og `channelId` er et
-  felt NotificationCompat ser bort fra. Varselet kommer fram som før.
+  Android under 8, der kanaler ikke finnes og `channelId` er et felt pluginen
+  ser bort fra. Varselet kommer fram som før — med prioriteten, som er det som
+  gjelder der. Svaret kan ikke endre seg mens appen kjører, så det huskes.
 
 **HIGH er en FORESPØRSEL, ikke en garanti.** Android eier presentasjonen:
 brukeren kan skru kanalen ned i systeminnstillingene, «Ikke forstyrr» kan holde
@@ -1755,8 +1770,10 @@ De to henger sammen på nøyaktig ett punkt, og ellers ikke:
   ikke gjør noe mer, at en kanal som ikke lot seg opprette verken gir varsler
   eller et merke — mens neste runde gjør hele jobben — at et språkbytte når
   systeminnstillingene selv uten en eneste alarm, at et Android uten kanaler får
-  varslene sine likevel, og at ingen ny tillatelse har sneket seg inn: ingen
-  fullskjerm, ingen skjerm-på, ingen presise alarmer.
+  varslene sine likevel — med et `createChannel` som FAKTISK ble forsøkt, i en
+  fersk app, så grenen ikke kan være grønn av et memo — og at ingen ny
+  tillatelse har sneket seg inn: ingen fullskjerm, ingen skjerm-på, ingen
+  presise alarmer.
 - `tests/push-crypto.test.js` — VAPID-signaturen og RFC 8291-krypteringen, mot
   et fast vektor fra `http_ece` og med signaturen faktisk verifisert.
 - `tests/notif-modal.test.js` — knappen og badgen, modalen, nyeste øverst,
