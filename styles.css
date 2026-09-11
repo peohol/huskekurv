@@ -6277,10 +6277,135 @@ body.note-editing .corner-controls { display: none; }
 .note-history-actions > .btn { min-height: 38px; }
 .note-history-keep.is-on { font-weight: 800; color: var(--accent); }
 .note-history-foot { justify-content: flex-end; }
+
+/* ------------------------------------------------------------
+   VERSJONSSAMMENLIGNING (docs/notater-plan.md, «Versjonssammenligning»)
+
+   Ingen ny kontroll og ingen ny modal: bryteren mellom «Hele versjonen» og
+   «Endringer» er appens egen segmenterte bryter (`.seg`), og diffen tegnes i
+   det SAMME arket som forhåndsvisningen (`.note-doc`).
+
+   TRE ROLLER, TRE TOKENS SOM ALLEREDE SNUR MED DRAKTEN: det som kom til er
+   grønt (`--primary-ink` på `--primary-soft`), det som falt bort er rødt
+   (`--danger-ink` på `--danger-soft`), og det som bare byttet formatering er
+   notatgult (`--note-ink`) med en stiplet strek. En blokk som ble FLYTTET er
+   ingen av delene — ingenting ble borte — og står derfor dempet, med en
+   kantstripe i aksentfargen. Ingen nye fargeverdier: kontrastkontrakten i
+   docs/design-system.md gjelder som den er.
+
+   FARGEN ER ALDRI DEN ENESTE BÆREREN. Hver endret linje har en usynlig
+   merkelapp foran seg som skjermleseren leser («Lagt til: …»), det som kom til
+   ligger i `<ins>` og det som falt bort i `<del>`, og strek-under/gjennom
+   skiller de to også uten farge (docs/tilgjengelighet.md).
+   ------------------------------------------------------------ */
+/* Bryteren tar 44 px, som alt annet man trykker på. `.seg` tegner selv de 3 px
+   luft rundt segmentene, så flaten blir 50 px høy og segmentene nøyaktig 44. */
+.note-history-views { align-self: flex-start; max-width: 100%; }
+.note-history-views .seg-btn { min-height: 44px; padding: 6px 16px; }
+
+.note-diff-summary {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  color: var(--ink-soft);
+  overflow-wrap: break-word;
+}
+.note-diff-summary.is-none { font-weight: 600; font-style: italic; }
+.note-diff-title-row {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-weight: 800;
+  overflow-wrap: break-word;
+}
+.note-diff-title-label {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-soft);
+}
+/* Linjene som ikke er endret står med, men dempet: uten dem kunne man ikke se
+   HVOR i notatet endringen skjedde. */
+.note-diff-doc .note-diff-line { position: relative; }
+.note-diff-doc .note-diff-line.is-same { color: var(--ink-soft); }
+.note-diff-doc .note-diff-line.is-add,
+.note-diff-doc .note-diff-line.is-del,
+.note-diff-doc .note-diff-line.is-chg,
+.note-diff-doc .note-diff-line.is-fmt,
+.note-diff-doc .note-diff-line.is-move {
+  border-radius: var(--radius-sm);
+  padding-inline: 6px;
+  margin-inline: -6px;
+}
+.note-diff-doc .note-diff-line.is-add { box-shadow: inset 3px 0 0 0 var(--primary); }
+.note-diff-doc .note-diff-line.is-del { box-shadow: inset 3px 0 0 0 var(--danger); }
+.note-diff-doc .note-diff-line.is-chg { box-shadow: inset 3px 0 0 0 var(--accent); }
+.note-diff-doc .note-diff-line.is-fmt { box-shadow: inset 3px 0 0 0 var(--note-ink); }
+.note-diff-doc .note-diff-line.is-move {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+  color: var(--ink-soft);
+  font-style: italic;
+}
+/* Listepunktene beholder sin egen kule/nummerering: en punktliste skal LESES
+   som en liste også når bare ett av punktene er endret. */
+.note-diff-doc .note-diff-list { margin: 0; padding-left: 1.4em; }
+
+/* «avsnitt → overskrift 2»: en liten, rolig etikett — den forklarer linjen,
+   den er ikke en del av teksten. */
+.note-diff-kind {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--wash);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  font-style: normal;
+  color: var(--ink-soft);
+  vertical-align: middle;
+}
+
+.note-diff-ins,
+.note-diff-del,
+.note-diff-fmt { border-radius: 3px; padding: 0 2px; }
+.note-diff-ins {
+  background: var(--primary-soft);
+  color: var(--primary-ink);
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+.note-diff-del {
+  background: var(--danger-soft);
+  color: var(--danger-ink);
+  text-decoration: line-through;
+  text-decoration-thickness: 2px;
+}
+.note-diff-fmt {
+  color: var(--note-ink);
+  text-decoration: underline dotted;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+
 /* På telefon er innrykket under raden dyrt: teksten skal ha bredden. */
 @media (max-width: 560px) {
   .note-history-body { padding-left: 10px; }
   .note-history-doc { max-height: 34vh; }
+  /* Bryteren tar hele bredden i stedet for å bli klemt sammen — og etiketten
+     BRYTES i stedet for å bli klippet. `.seg-btn` er `nowrap` fordi de andre
+     bryterne har korte ord; her er ordene lengre, og de er ulike på hvert
+     språk. Et klippet segment er verre enn et som går over to linjer. */
+  .note-history-views { align-self: stretch; display: grid; }
+  .note-history-views .seg-btn {
+    padding: 6px 8px;
+    white-space: normal;
+    line-height: 1.15;
+    text-align: center;
+  }
 }
 
 /* Koblingsraden i notatkortets kropp — chipen under utdraget. */

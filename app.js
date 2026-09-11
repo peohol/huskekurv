@@ -20230,11 +20230,573 @@
     noteVersionTimer = null;
   }
 
+  /* ---------------- VERSJONSSAMMENLIGNING ----------------
+     Historikken svarte på HVA notatet inneholdt. Den svarte ikke på hva som er
+     ANNERLEDES nå — og det er dét man leter etter rett før man gjenoppretter:
+     forsvant avsnittet mitt, eller ble det bare flyttet?
+
+     SAMMENLIGNINGEN GJØRES PÅ DOKUMENTMODELLEN, aldri på editorens DOM eller på
+     generert HTML. Modellen er den ene formen begge sidene finnes i: bildet i
+     historikken ER `{v, blocks}`, og «nå» leses ut som det samme. En diff på
+     markup ville dessuten sett formatering og struktur som tekst, og en tom
+     `<br>` som en endring.
+
+     ENHETEN ER DEN FLATE BLOKKEN — `noteDocToFlat`, den samme oppdelingen
+     samskrivingen bruker: ett avsnitt, én overskrift, én skillelinje ELLER ETT
+     LISTEPUNKT per rad. Da er et listepunkt som ble lagt til én endring, ikke
+     «hele lista er endret».
+
+     TRE LAG, og rekkefølgen er hele poenget:
+
+       1. BLOKKENE mot hverandre, med tekst + type som nøkkel. Små biter
+          sammenlignes eksakt (LCS); store ankres på blokker som finnes ÉN gang
+          på hver side (patience) og deles opp der. Uten det ville en setning
+          lagt til øverst kunne skjøvet resten ut av takt og malt hele notatet
+          som endret.
+       2. PARING: en slettet og en innsatt blokk som ligner nok på hverandre er
+          ikke to blokker — det er ÉN som ble endret. Da kan tredje lag vise
+          hva som skjedde inne i den.
+       3. TEGNENE, ord for ord, inne i det parede. Ord som står igjen med ULIK
+          markering (fet, kursiv, understrek, hevet, senket, lenke) er en
+          FORMATERINGSENDRING, ikke en omskriving.
+
+     FLYTTING er det som blir igjen: en slettet og en innsatt blokk med nøyaktig
+     samme innhold, i hver sin ende av notatet, er den samme blokken flyttet.
+     Begge stedene merkes «flyttet» — ikke rødt og grønt, for ingenting ble
+     borte.
+
+     DIFFEN SKRIVER INGENTING. Den leser to dokumenter og bygger noder; den rører
+     verken CRDT-en, projeksjonen, historikken eller synk-køen. Å SE en forskjell
+     er lesing, og krever nøyaktig den lesetilgangen historikken selv krever.
+
+     OG DEN ER ANONYM, som resten av historikken: den sier hva som er
+     annerledes, aldri hvem som gjorde det. `author_id` når fortsatt aldri
+     klienten. */
+
+  // Tabellen i den eksakte LCS-en er n×m. Over dette ankres det i stedet.
+  const NOTE_DIFF_CELL_CAP = 40000;
+  // Hvor likt to blokker må være for å leses som ÉN endret blokk.
+  const NOTE_DIFF_PAIR_MIN = 0.34;
+  // Over dette antallet kombinasjoner pares det på posisjon i stedet for på
+  // beste likhet: paringen er kvadratisk, og en helt utskiftet side skal ikke
+  // koste sekunder.
+  const NOTE_DIFF_PAIR_CAP = 400;
+  /* Tegn-for-tegn-likheten gjelder bare der den KORTESTE siden er på et par ord
+     (se `noteDiffRatio`): høyst så mange biter (ord + mellomrom) på den korte
+     siden, høyst så mange tegn på hver, og tegnene må dekke minst så mye av den
+     korteste siden. */
+  const NOTE_DIFF_SHORT_WORDS = 3;
+  const NOTE_DIFF_CHAR_CAP = 120;
+  const NOTE_DIFF_SHORT_COVER = 0.7;
+  const NOTE_DIFF_SEP = '\u0000';
+  const NOTE_DIFF_MARK_KEYS = {
+    b: 'notes.markBold', i: 'notes.markItalic', u: 'notes.markUnderline',
+    sup: 'notes.markSuper', sub: 'notes.markSub', url: 'notes.markLink',
+  };
+  /* Blokktypenes egne navn. En blokk som BYTTET type — et avsnitt som ble en
+     overskrift — er en endring man ellers ikke kan se: teksten står jo der. */
+  const NOTE_DIFF_BLOCK_KEYS = {
+    p: 'notes.blockP', h1: 'notes.blockH1', h2: 'notes.blockH2', h3: 'notes.blockH3',
+    ul: 'notes.blockUl', ol: 'notes.blockOl', hr: 'notes.blockHr',
+  };
+
+  /* Eksakt LCS med tabell. Kvadratisk, så den kalles bare på biter som er små
+     nok (`NOTE_DIFF_CELL_CAP`). */
+  function noteDiffExact(a, b, i0, i1, j0, j1, out) {
+    const n = i1 - i0, m = j1 - j0;
+    const w = m + 1;
+    const L = new Int32Array((n + 1) * w);
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        L[i * w + j] = a[i0 + i] === b[j0 + j]
+          ? L[(i + 1) * w + j + 1] + 1
+          : Math.max(L[(i + 1) * w + j], L[i * w + j + 1]);
+      }
+    }
+    let i = 0, j = 0;
+    while (i < n && j < m) {
+      if (a[i0 + i] === b[j0 + j]) { out.push({ t: '=', ai: i0 + i, bi: j0 + j }); i++; j++; }
+      else if (L[(i + 1) * w + j] >= L[i * w + j + 1]) { out.push({ t: '-', ai: i0 + i }); i++; }
+      else { out.push({ t: '+', bi: j0 + j }); j++; }
+    }
+    while (i < n) { out.push({ t: '-', ai: i0 + i }); i++; }
+    while (j < m) { out.push({ t: '+', bi: j0 + j }); j++; }
+  }
+
+  /* ANKRENE: elementer som finnes NØYAKTIG ÉN gang på hver side er de eneste
+     som ikke kan forveksles, og den lengste stigende følgen av dem er ryggraden
+     i sammenligningen (patience-metoden). Alt mellom to ankre sammenlignes for
+     seg — det er dét som hindrer at en endring ett sted forplanter seg. */
+  function noteDiffAnchors(a, b, i0, i1, j0, j1) {
+    const ca = new Map(), cb = new Map();
+    for (let i = i0; i < i1; i++) ca.set(a[i], (ca.get(a[i]) || 0) + 1);
+    for (let j = j0; j < j1; j++) cb.set(b[j], (cb.get(b[j]) || 0) + 1);
+    const hvor = new Map();
+    for (let j = j0; j < j1; j++) if (cb.get(b[j]) === 1 && ca.get(b[j]) === 1) hvor.set(b[j], j);
+    const par = [];
+    for (let i = i0; i < i1; i++) {
+      if (ca.get(a[i]) !== 1) continue;
+      const j = hvor.get(a[i]);
+      if (j != null) par.push([i, j]);
+    }
+    if (!par.length) return [];
+    // Lengste stigende delfølge på b-indeksen — O(k log k).
+    const haler = [], hale = [], før = new Array(par.length).fill(-1);
+    par.forEach((p, k) => {
+      let lo = 0, hi = haler.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (haler[mid] < p[1]) lo = mid + 1; else hi = mid; }
+      haler[lo] = p[1];
+      hale[lo] = k;
+      før[k] = lo > 0 ? hale[lo - 1] : -1;
+    });
+    const ut = [];
+    for (let k = hale[hale.length - 1]; k >= 0; k = før[k]) ut.push(par[k]);
+    return ut.reverse();
+  }
+
+  /* Selve sammenligningen: felles start og slutt skrelles av først (den
+     vanligste endringen er én blokk midt i et notat som ellers står stille),
+     og det som blir igjen tas eksakt om det er lite nok, ellers ankret. */
+  function noteDiffCore(a, b, i0, i1, j0, j1, out) {
+    while (i0 < i1 && j0 < j1 && a[i0] === b[j0]) { out.push({ t: '=', ai: i0, bi: j0 }); i0++; j0++; }
+    const hale = [];
+    while (i1 > i0 && j1 > j0 && a[i1 - 1] === b[j1 - 1]) { i1--; j1--; hale.push({ t: '=', ai: i1, bi: j1 }); }
+    const n = i1 - i0, m = j1 - j0;
+    if (!n || !m) {
+      for (let i = i0; i < i1; i++) out.push({ t: '-', ai: i });
+      for (let j = j0; j < j1; j++) out.push({ t: '+', bi: j });
+    } else if (n * m <= NOTE_DIFF_CELL_CAP) {
+      noteDiffExact(a, b, i0, i1, j0, j1, out);
+    } else {
+      const ankre = noteDiffAnchors(a, b, i0, i1, j0, j1);
+      if (!ankre.length) {
+        for (let i = i0; i < i1; i++) out.push({ t: '-', ai: i });
+        for (let j = j0; j < j1; j++) out.push({ t: '+', bi: j });
+      } else {
+        let pi = i0, pj = j0;
+        ankre.forEach((p) => {
+          noteDiffCore(a, b, pi, p[0], pj, p[1], out);
+          out.push({ t: '=', ai: p[0], bi: p[1] });
+          pi = p[0] + 1; pj = p[1] + 1;
+        });
+        noteDiffCore(a, b, pi, i1, pj, j1, out);
+      }
+    }
+    for (let k = hale.length - 1; k >= 0; k--) out.push(hale[k]);
+  }
+  function noteDiffSeq(a, b) {
+    const ut = [];
+    noteDiffCore(a, b, 0, a.length, 0, b.length, ut);
+    return ut;
+  }
+
+  /* ---- Ord og markeringer ----
+     ORDET er enheten inne i en blokk: tegn for tegn ville gitt en diff som
+     lyser opp halve ord, og hele blokken ville vært for grovt. Mellomrom er
+     sine egne biter, så teksten kan settes sammen igjen nøyaktig.
+
+     MARKERINGEN er en egenskap ved TEGNENE, ikke ved biten den tilfeldigvis
+     ligger i: å gjøre ett ord fett deler én kjøring i tre uten å endre ett
+     eneste tegn. Signaturen er derfor per tegn. */
+  const noteDiffAttrSig = (run) =>
+    NOTE_MARKS.map((m) => (run && run[m] ? '1' : '0')).join('') + '|' + ((run && run.url) || '');
+  const noteDiffAttrUrl = (sig) => String(sig || '').split('|').slice(1).join('|');
+  /* Blokken som TEKST pluss én markeringssignatur per TEGN — ikke som en liste
+     av kjøringer. Det er dét som gjør at «nøkkelen.» kjennes igjen som det
+     samme ordet etter at «nøkkelen» ble fett: kjøringene ble tre der de var én,
+     men teksten er den samme, og markeringen er en egenskap ved tegnene.
+     Sammenligningen går på teksten; markeringene leses etterpå, over de samme
+     tegnene. */
+  function noteDiffWords(runs) {
+    let text = '';
+    const attrs = [];
+    (runs || []).forEach((r) => {
+      const a = noteDiffAttrSig(r);
+      const s = String((r && r.s) || '');
+      text += s;
+      for (let i = 0; i < s.length; i++) attrs.push(a);
+    });
+    const words = [];
+    let at = 0;
+    text.split(/(\s+)/).forEach((s) => {
+      if (!s) return;
+      words.push({ s, at });
+      at += s.length;
+    });
+    return { text, attrs, words };
+  }
+  // Hvor likt to blokker er: 0 (ingenting felles) til 1 (identiske).
+  function noteDiffRatio(wa, wb) {
+    if (!wa.words.length && !wb.words.length) return 1;
+    if (!wa.words.length || !wb.words.length) return 0;
+    let like = 0;
+    noteDiffSeq(wa.words.map((w) => w.s), wb.words.map((w) => w.s))
+      .forEach((o) => { if (o.t === '=') like++; });
+    const r = (2 * like) / (wa.words.length + wb.words.length);
+    if (r >= NOTE_DIFF_PAIR_MIN) return r;
+    /* KORTE BLOKKER har for få ord til at ordlikhet sier noe. Et listepunkt som
+       gikk fra «Melk» til «Melkesjokolade» deler ikke ett eneste ORD, og ville
+       blitt lest som ett slettet og ett nytt punkt. Da måles TEGNENE i stedet.
+
+       To vakter, og begge trengs. Tegnlikhet er en dårlig dommer så snart det
+       finnes ord å måle på: to setninger som ikke har noe med hverandre å gjøre
+       deler likevel en mengde bokstaver (MÅLT: «Denne skal flyttes.» mot
+       «Melkesjokolade» ga 0,42 — over terskelen). Derfor gjelder den bare
+       BLOKKER PÅ ET PAR ORD, og tegnene må dekke det meste av den korteste
+       siden, ikke bare være strødd utover den. */
+    if (Math.min(wa.words.length, wb.words.length) > NOTE_DIFF_SHORT_WORDS) return r;
+    if (wa.text.length > NOTE_DIFF_CHAR_CAP || wb.text.length > NOTE_DIFF_CHAR_CAP) return r;
+    let tegn = 0;
+    noteDiffSeq(wa.text.split(''), wb.text.split(''))
+      .forEach((o) => { if (o.t === '=') tegn++; });
+    const minst = Math.min(wa.text.length, wb.text.length);
+    if (!minst || tegn / minst < NOTE_DIFF_SHORT_COVER) return r;
+    return Math.max(r, (2 * tegn) / (wa.text.length + wb.text.length));
+  }
+  /* Ord for ord inne i én blokk. Ord som står igjen på BEGGE sider, men med
+     ulik markering over de samme tegnene, blir «~» — en formateringsendring,
+     ikke en omskriving. */
+  function noteDiffInline(gamle, nye) {
+    const A = noteDiffWords(gamle), B = noteDiffWords(nye);
+    const deler = [];
+    const legg = (k, s, a, fra) => {
+      const f = deler[deler.length - 1];
+      if (f && f.k === k && f.a === a && f.fra === (fra || '')) { f.s += s; return; }
+      deler.push({ k, s, a, fra: fra || '' });
+    };
+    /* Én bit tekst, delt der markeringen skifter. Med `andre` sammenlignes de
+       to sidenes markering tegn for tegn over den SAMME teksten. */
+    const bit = (k, s, attrs, off, andre, offB) => {
+      let i = 0;
+      while (i < s.length) {
+        const a = attrs[off + i] || '';
+        const b = andre ? (andre[offB + i] || '') : a;
+        let j = i + 1;
+        while (j < s.length && (attrs[off + j] || '') === a
+               && (!andre || (andre[offB + j] || '') === b)) j++;
+        if (!andre || a === b) legg(k, s.slice(i, j), b, '');
+        else legg('~', s.slice(i, j), b, a);
+        i = j;
+      }
+    };
+    noteDiffSeq(A.words.map((w) => w.s), B.words.map((w) => w.s)).forEach((o) => {
+      if (o.t === '-') { const w = A.words[o.ai]; bit('-', w.s, A.attrs, w.at, null, 0); return; }
+      if (o.t === '+') { const w = B.words[o.bi]; bit('+', w.s, B.attrs, w.at, null, 0); return; }
+      const x = A.words[o.ai], y = B.words[o.bi];
+      bit('=', y.s, A.attrs, x.at, B.attrs, y.at);
+    });
+    return deler;
+  }
+  /* Hele blokken med ÉN merking — en linje som ble lagt til, fjernet eller
+     flyttet. Delt bare der markeringen skifter, så teksten ikke faller fra
+     hverandre i ett merke per ord. */
+  function noteDiffWhole(runs, k) {
+    const W = noteDiffWords(runs);
+    const deler = [];
+    let i = 0;
+    while (i < W.text.length) {
+      const a = W.attrs[i] || '';
+      let j = i + 1;
+      while (j < W.text.length && (W.attrs[j] || '') === a) j++;
+      deler.push({ k, s: W.text.slice(i, j), a, fra: '' });
+      i = j;
+    }
+    return deler;
+  }
+  /* Markeringene som skiller to signaturer, med appens egne ord OG MED RETNING.
+     Uten retningen ville en fjernet utheving stått som «fet» under en overskrift
+     som sier «ny formatering» — altså det motsatte av det som skjedde. Den som
+     ser skjermen kan lese seg til det av at teksten ikke lenger ER fet; den som
+     ikke ser den har bare denne setningen. */
+  function noteDiffMarkChange(fra, til) {
+    const les = (sig) => {
+      const flagg = String(sig || '').split('|')[0] || '';
+      const ut = {};
+      NOTE_MARKS.forEach((m, i) => { if (flagg[i] === '1') ut[m] = 1; });
+      if (noteDiffAttrUrl(sig)) ut.url = 1;
+      return ut;
+    };
+    const a = les(fra), b = les(til);
+    const lagtTil = [], fjernet = [];
+    Object.keys(NOTE_DIFF_MARK_KEYS).forEach((m) => {
+      if (!!a[m] === !!b[m]) return;
+      (b[m] ? lagtTil : fjernet).push(tr(NOTE_DIFF_MARK_KEYS[m]));
+    });
+    // Samme markeringer, men en annen adresse: lenken ble BYTTET — verken lagt
+    // til eller fjernet.
+    const byttet = (!lagtTil.length && !fjernet.length
+      && noteDiffAttrUrl(fra) !== noteDiffAttrUrl(til)) ? [tr(NOTE_DIFF_MARK_KEYS.url)] : [];
+    const deler = [];
+    if (lagtTil.length) deler.push(tr('notes.diffFormatAdded', { marks: lagtTil.join(', ') }));
+    if (fjernet.length) deler.push(tr('notes.diffFormatRemoved', { marks: fjernet.join(', ') }));
+    if (byttet.length) deler.push(tr('notes.diffFormatSwapped', { marks: byttet.join(', ') }));
+    return deler.length ? tr('notes.diffFormatOn', { marks: deler.join(', ') })
+      : tr('notes.diffFormatted');
+  }
+
+  /* ---- Blokkene ----
+     Nøkkelen er TYPE + TEKST, ikke markeringene: et avsnitt som bare ble fett
+     skal kjennes igjen som det samme avsnittet, ikke som ett slettet og ett
+     nytt. Formateringen fanges av tredje lag i stedet. */
+  const noteDiffKey = (f) => f.t + NOTE_DIFF_SEP + noteRunsText(f.runs);
+  /* Den FULLE signaturen — markeringene med. Brukes bare til å kjenne igjen en
+     blokk som ble FLYTTET, der ingenting skal ha endret seg. */
+  const noteDiffFullKey = (f) => f.t + NOTE_DIFF_SEP
+    + (f.runs || []).map((r) => noteDiffAttrSig(r) + NOTE_DIFF_SEP + (r.s || '')).join(NOTE_DIFF_SEP);
+
+  /* To dokumenter inn, én liste linjer ut. Hver linje er én flat blokk med en
+     `kind`: `same`, `add`, `del`, `chg`, `fmt` eller `move`, og `parts` er
+     inline-bitene den tegnes av. */
+  function noteDocDiff(gammelDoc, nyDoc) {
+    const A = noteDocToFlat(sanitizeNoteDoc(gammelDoc));
+    const B = noteDocToFlat(sanitizeNoteDoc(nyDoc));
+    const ops = noteDiffSeq(A.map(noteDiffKey), B.map(noteDiffKey));
+
+    // 2. PARING, i hver sammenhengende bolk av slettinger og innsettinger.
+    const paret = new Map();      // ai → bi
+    const parBak = new Map();     // bi → ai
+    const ordA = new Map(), ordB = new Map();
+    const ordFor = (kart, liste, i) => {
+      if (!kart.has(i)) kart.set(i, noteDiffWords(liste[i].runs));
+      return kart.get(i);
+    };
+    for (let k = 0; k < ops.length;) {
+      if (ops[k].t === '=') { k++; continue; }
+      const dels = [], adds = [];
+      let e = k;
+      while (e < ops.length && ops[e].t !== '=') {
+        if (ops[e].t === '-') dels.push(ops[e].ai); else adds.push(ops[e].bi);
+        e++;
+      }
+      // Paringen er kvadratisk; over taket pares det på posisjon i stedet.
+      const grovt = dels.length * adds.length > NOTE_DIFF_PAIR_CAP;
+      let sisteAdd = -1;
+      dels.forEach((ai, di) => {
+        let best = -1, beste = NOTE_DIFF_PAIR_MIN;
+        const wa = ordFor(ordA, A, ai);
+        const prøv = (bi) => {
+          if (bi <= sisteAdd || parBak.has(bi)) return;
+          const s = noteDiffRatio(wa, ordFor(ordB, B, bi));
+          if (s >= beste) { beste = s; best = bi; }
+        };
+        if (grovt) { if (adds[di] != null) prøv(adds[di]); }
+        else adds.forEach(prøv);
+        if (best < 0) return;
+        paret.set(ai, best);
+        parBak.set(best, ai);
+        sisteAdd = best;
+      });
+      k = e;
+    }
+
+    /* 3. FLYTTING: det som er igjen, og som finnes ORDRETT på den andre siden,
+       ble ikke slettet og lagt til — det ble flyttet. Bare blokker med TEKST:
+       to tomme avsnitt eller to skillelinjer er like uten å ha noe med
+       hverandre å gjøre, og «flyttet» ville vært en påstand om ingenting. */
+    const flyttet = new Map(), flyttetBak = new Map();
+    const kanFlyttes = (f) => !!noteRunsText(f.runs).trim();
+    const ledige = new Map();
+    ops.forEach((o) => {
+      if (o.t !== '+' || parBak.has(o.bi) || !kanFlyttes(B[o.bi])) return;
+      const n = noteDiffFullKey(B[o.bi]);
+      if (!ledige.has(n)) ledige.set(n, []);
+      ledige.get(n).push(o.bi);
+    });
+    ops.forEach((o) => {
+      if (o.t !== '-' || paret.has(o.ai) || !kanFlyttes(A[o.ai])) return;
+      const kø = ledige.get(noteDiffFullKey(A[o.ai]));
+      if (!kø || !kø.length) return;
+      const bi = kø.shift();
+      flyttet.set(o.ai, bi);
+      flyttetBak.set(bi, o.ai);
+    });
+
+    // 4. Linjene, i den rekkefølgen de skal leses.
+    const linjer = [];
+    const tell = { add: 0, del: 0, chg: 0, fmt: 0, move: 0 };
+    const leggPar = (ai, bi) => {
+      const a = A[ai], b = B[bi];
+      const deler = noteDiffInline(a.runs, b.runs);
+      const typeByttet = a.t !== b.t;
+      const harTekst = deler.some((d) => d.k === '-' || d.k === '+');
+      const harFmt = deler.some((d) => d.k === '~');
+      const kind = (harTekst || typeByttet) ? 'chg' : (harFmt ? 'fmt' : 'same');
+      if (kind !== 'same') tell[kind]++;
+      linjer.push({ kind, t: b.t, fra: typeByttet ? a.t : '', parts: deler });
+    };
+    const leggEn = (f, k, kind) => {
+      linjer.push({
+        kind, t: f.t, fra: '',
+        parts: noteDiffWhole(f.runs, k),
+      });
+      if (kind !== 'move') tell[kind]++;
+    };
+    for (let k = 0; k < ops.length;) {
+      if (ops[k].t === '=') { leggPar(ops[k].ai, ops[k].bi); k++; continue; }
+      const dels = [], adds = [];
+      let e = k;
+      while (e < ops.length && ops[e].t !== '=') {
+        if (ops[e].t === '-') dels.push(ops[e].ai); else adds.push(ops[e].bi);
+        e++;
+      }
+      let di = 0, ai = 0;
+      while (di < dels.length || ai < adds.length) {
+        const d = di < dels.length ? dels[di] : -1;
+        const parTil = d >= 0 ? paret.get(d) : undefined;
+        if (parTil != null) {
+          while (ai < adds.length && adds[ai] < parTil) {
+            const bi = adds[ai++];
+            leggEn(B[bi], flyttetBak.has(bi) ? '=' : '+', flyttetBak.has(bi) ? 'move' : 'add');
+          }
+          leggPar(d, parTil);
+          di++;
+          if (ai < adds.length && adds[ai] === parTil) ai++;
+          continue;
+        }
+        if (d >= 0) {
+          leggEn(A[d], flyttet.has(d) ? '=' : '-', flyttet.has(d) ? 'move' : 'del');
+          di++;
+          continue;
+        }
+        const bi = adds[ai++];
+        leggEn(B[bi], flyttetBak.has(bi) ? '=' : '+', flyttetBak.has(bi) ? 'move' : 'add');
+      }
+      k = e;
+    }
+    // En blokk som ble FLYTTET telles én gang, ikke to (den står to steder).
+    tell.move = flyttet.size;
+    const endret = tell.add + tell.del + tell.chg + tell.fmt + tell.move;
+    return { lines: linjer, counts: tell, changed: endret };
+  }
+
+  /* Tittelen er et navn, ikke en blokk (docs/notater-plan.md), og sammenlignes
+     for seg — ord for ord, med den samme motoren. */
+  function noteTitleDiff(gammel, ny) {
+    const a = String(gammel || ''), b = String(ny || '');
+    if (a === b) return null;
+    return noteDiffInline([{ s: a }], [{ s: b }]);
+  }
+
+  /* ---- Diffen som NODER ----
+     Samme regel som forhåndsvisningen ved siden av: nodene bygges, aldri
+     markup. Et notat er brukerinnhold, og en diff av det er det også. */
+  const NOTE_DIFF_KIND_KEYS = {
+    add: 'notes.diffAdded', del: 'notes.diffRemoved', chg: 'notes.diffChanged',
+    fmt: 'notes.diffFormatted', move: 'notes.diffMoved',
+  };
+  /* Merkelappen på en linje som er endret. Fargen er for øyet; DENNE er for
+     skjermleseren, og den leses FØRST i linjen (docs/tilgjengelighet.md). */
+  function noteDiffTag(tekst) {
+    const s = document.createElement('span');
+    s.className = 'visually-hidden note-diff-tag';
+    s.textContent = tekst + ': ';
+    return s;
+  }
+  // Den samme merkelappen, men som en parentes ETTER biten den gjelder.
+  function noteDiffNote(tekst) {
+    const s = document.createElement('span');
+    s.className = 'visually-hidden note-diff-note';
+    s.textContent = ' (' + tekst + ')';
+    return s;
+  }
+  // Én inline-bit: teksten med sine egne markeringer, pakket i det den ER.
+  function noteDiffPartNode(part) {
+    const run = { s: part.s };
+    const flagg = String(part.a || '').split('|')[0] || '';
+    NOTE_MARKS.forEach((m, i) => { if (flagg[i] === '1') run[m] = 1; });
+    const url = noteDiffAttrUrl(part.a);
+    if (url) run.url = url;
+    const inner = noteRunNode(run);
+    if (part.k === '=') return inner;
+    if (part.k === '~') {
+      const tekst = noteDiffMarkChange(part.fra, part.a);
+      const span = document.createElement('span');
+      span.className = 'note-diff-fmt';
+      span.title = tekst;                 // for den som peker
+      span.appendChild(inner);
+      /* … og for den som IKKE ser: den stiplede streken bærer ingenting for en
+         skjermleser, og hvilken markering som kom eller gikk finnes ikke i
+         teksten. Merknaden står ETTER biten, som en parentes. */
+      span.appendChild(noteDiffNote(tekst));
+      return span;
+    }
+    const el = document.createElement(part.k === '+' ? 'ins' : 'del');
+    el.className = part.k === '+' ? 'note-diff-ins' : 'note-diff-del';
+    el.appendChild(inner);
+    return el;
+  }
+  function noteDiffLineNode(line, erPunkt) {
+    const tag = erPunkt ? 'li'
+      : (line.t === 'hr' ? 'div'
+        : (NOTE_TEXT_BLOCKS.indexOf(line.t) === -1 ? 'p' : line.t));
+    const node = document.createElement(tag);
+    node.className = 'note-diff-line is-' + line.kind;
+    node.dataset.diff = line.kind;
+    if (line.kind !== 'same') node.appendChild(noteDiffTag(tr(NOTE_DIFF_KIND_KEYS[line.kind])));
+    /* TO ENDRINGER SOM IKKE KAN SES I TEKSTEN får en liten etikett: en blokk
+       som BYTTET TYPE (diffen viser den nye siden, så et avsnitt som ble en
+       overskrift ser bare ut som en overskrift), og en blokk som ble FLYTTET
+       (den står ordrett begge steder — ingenting er merket inne i den). */
+    const etikett = line.kind === 'move' ? tr('notes.diffMoved')
+      : (line.fra ? tr('notes.diffBlockChanged', {
+        from: tr(NOTE_DIFF_BLOCK_KEYS[line.fra] || NOTE_DIFF_BLOCK_KEYS.p),
+        to: tr(NOTE_DIFF_BLOCK_KEYS[line.t] || NOTE_DIFF_BLOCK_KEYS.p),
+      }) : '');
+    if (etikett) {
+      const chip = document.createElement('span');
+      chip.className = 'note-diff-kind';
+      chip.textContent = etikett;
+      node.appendChild(chip);
+    }
+    if (line.t === 'hr') { node.appendChild(document.createElement('hr')); return node; }
+    line.parts.forEach((p) => node.appendChild(noteDiffPartNode(p)));
+    // En tom blokk må ha høyde, som i editoren og i forhåndsvisningen.
+    if (!line.parts.length) node.appendChild(document.createElement('br'));
+    return node;
+  }
+  /* Linjene inn i et ark. Listepunkter samles tilbake til ekte `ul`/`ol` mens
+     de tegnes, så en punktliste fortsatt LESES som en liste — også når bare ett
+     av punktene er endret. */
+  function noteDiffIntoEl(el, res) {
+    el.textContent = '';
+    let liste = null, listeType = '';
+    res.lines.forEach((line) => {
+      const erPunkt = line.t === 'ul' || line.t === 'ol';
+      if (!erPunkt || listeType !== line.t) { liste = null; listeType = ''; }
+      if (erPunkt && !liste) {
+        liste = document.createElement(line.t);
+        liste.className = 'note-diff-list';
+        listeType = line.t;
+        el.appendChild(liste);
+      }
+      (erPunkt ? liste : el).appendChild(noteDiffLineNode(line, erPunkt));
+    });
+    if (!el.childNodes.length) el.appendChild(document.createElement('p'));
+  }
+  // «3 lagt til, 1 fjernet …» — tallene er der for å si om det er verdt å lete.
+  function noteDiffSummary(res, tittelEndret) {
+    const deler = [];
+    if (tittelEndret) deler.push(tr('notes.diffTitleChanged'));
+    const legg = (n, key) => { if (n) deler.push(tr(key, { count: n })); };
+    legg(res.counts.add, 'notes.diffCountAdded');
+    legg(res.counts.del, 'notes.diffCountRemoved');
+    legg(res.counts.chg, 'notes.diffCountChanged');
+    legg(res.counts.move, 'notes.diffCountMoved');
+    legg(res.counts.fmt, 'notes.diffCountFormatted');
+    return deler;
+  }
+
   /* ---------------- Historikk-modalen ----------------
      Én modal, én liste, ingen ny modaltype. Radene er et trekkspill som resten
      av appen: hodet er tidspunktet, tegntallet og et utdrag, og den ÅPNE raden
      viser hele dokumentet skrivebeskyttet — rendret node for node av den samme
-     `noteDocIntoEl` editoren bruker, aldri som markup. */
+     `noteDocIntoEl` editoren bruker, aldri som markup.
+
+     Den åpne raden har TO VISNINGER, valgt med appens egen segmenterte bryter:
+     hele versjonen, og ENDRINGENE mot notatet slik det er nå (se
+     «Versjonssammenligning» over). Fortsatt én modal og én rad — en egen
+     sammenlign-modal ville vært en ny plass å navigere til, en ny fokusfelle og
+     en ny måte å lukke noe på, for det samme innholdet. */
   const noteHistoryModal = document.getElementById('note-history-modal');
   const noteHistoryTitleEl = document.getElementById('note-history-title-text');
   const noteHistoryHeadIcon = document.getElementById('note-history-head-icon');
@@ -20242,7 +20804,10 @@
   const noteHistoryNoteEl = document.getElementById('note-history-note');
   const noteHistoryCloseBtn = document.getElementById('note-history-close');
   const noteHistoryKeepBtn = document.getElementById('note-history-snapshot');
-  // { id, versions, pinMax, openId, doc, status } mens modalen står åpen
+  /* Mens modalen står åpen:
+       id, versions, pinMax, status, painted — listen og hva den er malt for;
+       openId, doc                          — raden som er åpen, og bildet i den;
+       view, now, nowSig, nowBusy, diff     — visningen, «nå»-siden og diffen. */
   let noteHistoryCtx = null;
 
   const noteHistoryOpen = () => !!noteHistoryModal && !noteHistoryModal.hidden;
@@ -20250,8 +20815,14 @@
   function openNoteHistory(id) {
     const n = findNoteById(id);
     if (!noteHistoryModal || !n) return;
+    /* `view` er hvilken av de to visningene den ÅPNE raden står i — hele
+       versjonen, eller endringene mot notatet slik det er nå. Den følger
+       modalen, ikke raden: den som sammenligner én versjon vil som regel
+       sammenligne den neste også. `now` er «nå»-siden av sammenligningen, og
+       `diff` er den utregnede diffen for den åpne raden. */
     noteHistoryCtx = { id, versions: null, pinMax: 0, openId: null, doc: null,
-                       status: 'loading', painted: null };
+                       status: 'loading', painted: null,
+                       view: 'full', now: null, nowSig: '', nowBusy: false, diff: null };
     if (noteHistoryHeadIcon) noteHistoryHeadIcon.innerHTML = ICONS.history;
     noteHistoryTitleEl.textContent = tr('notes.historyFor',
       { name: quoted(noteDisplayTitle(n)) });
@@ -20287,7 +20858,24 @@
     if (!client || !authUser) { ctx.status = 'offline'; paintNoteHistory(); return; }
     /* TILSTANDEN SOM GJELDER NÅ SKAL STÅ ØVERST i listen. Uten dette bildet
        ville en gjenoppretting hatt en vei inn og ingen vei ut: det man forlot
-       finnes ikke i historikken før noen har bedt om et bilde av det. */
+       finnes ikke i historikken før noen har bedt om et bilde av det.
+
+       «NÅ»-SIDEN AV SAMMENLIGNINGEN LESES MED DEN SAMME FUNKSJONEN, rett før
+       bildet tas — ikke med en egen utregning ved siden av.
+       `noteAuthoritativeState` er den ene veien til tilstanden som gjelder:
+       økten når editoren står åpen og frøet er avklart, ellers loggens rader
+       PLUSS enhetens lokale kopi og det som ennå ligger i køen.
+
+       Men det er en EGEN lesing, og det er med vilje. Bildet leser tilstanden
+       inne i sin egen serialiserte kjede, slik at raden som legges inn alltid
+       er den ferskeste — den regelen røres ikke. Og en REN LESER tar ikke noe
+       bilde i det hele tatt (`can_edit_content`), men skal likevel kunne
+       sammenligne: uten denne lesingen ville hun stått uten en «nå»-side. */
+    const nå = await noteAuthoritativeState(ctx.id);
+    if (noteHistoryCtx !== ctx) return;
+    ctx.now = nå;
+    ctx.nowSig = nå ? noteVersionSig(nå.title, nå.doc) : '';
+    ctx.diff = null;
     await captureNoteVersion(ctx.id, {});
     if (noteHistoryCtx !== ctx) return;
     try {
@@ -20323,10 +20911,17 @@
     if (noteHistoryKeepBtn) noteHistoryKeepBtn.hidden = !kanSkrive;
     /* FOKUS OVERLEVER AT LISTEN MALES OM. Å åpne en rad bygger listen på nytt,
        og uten dette falt fokus til <body> — så neste Tab startet øverst i
-       modalen igjen (docs/tilgjengelighet.md, «Fokus»). */
+       modalen igjen (docs/tilgjengelighet.md, «Fokus»).
+
+       Og det er ikke nok å komme tilbake til RADEN: en rad har flere kontroller
+       nå (visningsbryteren, «Gjenopprett», «Behold denne»), og å bytte visning
+       ville kastet fokus opp til radhodet igjen. Hver kontroll bærer derfor et
+       `data-fkey`, og fokus går tilbake til den SAMME kontrollen — radhodet er
+       bare fallet tilbake når kontrollen ikke finnes lenger. */
     const aktiv = document.activeElement;
     const rad = aktiv && aktiv.closest ? aktiv.closest('.note-history-row') : null;
     const tilbake = rad ? rad.dataset.id : null;
+    const fkey = rad && aktiv.dataset ? (aktiv.dataset.fkey || '') : '';
     noteHistoryListEl.innerHTML = '';
     if (ctx.status !== 'ok') {
       noteHistoryNoteEl.hidden = false;
@@ -20345,8 +20940,77 @@
     });
     if (!tilbake) return;
     const igjen = noteHistoryListEl.querySelector('.note-history-row[data-id="' + tilbake + '"]');
-    const hode = igjen && igjen.querySelector('.note-history-head');
-    if (hode) { try { hode.focus(); } catch (e) { /* ignorer */ } }
+    if (!igjen) return;
+    const mål = (fkey && igjen.querySelector('[data-fkey="' + fkey + '"]'))
+      || igjen.querySelector('.note-history-head');
+    if (mål) { try { mål.focus(); } catch (e) { /* ignorer */ } }
+  }
+
+  /* Visningsbryteren i en åpen rad: hele versjonen ↔ endringene mot notatet
+     slik det er nå. Ingen ny kontrolltype — det er appens egen segmenterte
+     bryter (`.seg`), den samme som Lister ↔ Notater og søkets scopevalg. */
+  const NOTE_HISTORY_VIEWS = ['full', 'diff'];
+  function setNoteHistoryView(view) {
+    const ctx = noteHistoryCtx;
+    if (!ctx || NOTE_HISTORY_VIEWS.indexOf(view) === -1 || ctx.view === view) return;
+    ctx.view = view;
+    paintNoteHistory();
+    if (view === 'diff') ensureNoteDiffNow(ctx, true);
+  }
+  /* «NÅ» MÅ VÆRE NÅ, OGSÅ ETTER AT MODALEN ÅPNET. `loadNoteHistory` leser
+     tilstanden når listen hentes, men en medforfatter kan skrive mens
+     historikken står oppe: da oppdaterer live-hentingen editoren uten at noe
+     rører denne modalen, og sammenligningen ville fortsatt målt mot et bilde
+     fra i sted. Listen hentes bare på nytt av en SKRIVING (gjenoppretting,
+     merking) — og en ren leser har ingen av delene.
+
+     Tilstanden leses derfor på nytt hver gang brukeren ber om sammenligningen:
+     når «Endringer» velges, og når en rad åpnes mens den visningen står. Er
+     den uendret, skjer ingenting — en ommaling for ingenting ville flyttet
+     fokus ut av kontrollen man nettopp brukte. */
+  async function ensureNoteDiffNow(ctx, påNytt) {
+    if (ctx.nowBusy || (ctx.now && !påNytt)) return;
+    ctx.nowBusy = true;
+    let st = null;
+    try { st = await noteAuthoritativeState(ctx.id); } catch (e) { /* under */ }
+    if (noteHistoryCtx !== ctx) return;
+    ctx.nowBusy = false;
+    /* KOM LESINGEN IKKE FRAM, FINNES DET INGEN «NÅ» Å SAMMENLIGNE MED. Å la
+       det forrige svaret bli stående ville vært å presentere en tilstand fra i
+       sted som den gjeldende — uten at noe sa fra, og uten at brukeren kan se
+       forskjell på en fersk diff og en foreldet. En diff mot noe utdatert er
+       verre enn ingen diff: sammenligningen tømmes, og feltet sier hvorfor.
+
+       VERSJONEN som er hentet (`ctx.doc`) røres ikke — den kan fortsatt leses i
+       sin helhet, og den er ikke avhengig av hva som gjelder nå. */
+    if (!st) {
+      if (!ctx.now) return;
+      ctx.now = null;
+      ctx.nowSig = '';
+      ctx.diff = null;
+      paintNoteHistory();
+      return;
+    }
+    const sig = noteVersionSig(st.title, st.doc);
+    if (ctx.nowSig === sig) return;
+    ctx.now = st;
+    ctx.nowSig = sig;
+    ctx.diff = null;
+    paintNoteHistory();
+  }
+  /* Diffen regnes ut ÉN gang per (rad, nå-tilstand) og gjenbrukes ved hver
+     ommaling: listen males om på hver synk-runde, og et dokument skal ikke
+     sammenlignes på nytt hvert femte sekund. */
+  function noteHistoryDiff(ctx) {
+    if (!ctx.doc || !ctx.now) return null;
+    if (ctx.diff && ctx.diff.id === ctx.openId) return ctx.diff;
+    const res = noteDocDiff(ctx.doc.doc, ctx.now.doc);
+    ctx.diff = {
+      id: ctx.openId,
+      res,
+      title: noteTitleDiff(ctx.doc.title, ctx.now.title),
+    };
+    return ctx.diff;
   }
 
   function noteHistoryRow(ctx, v, erNyeste, kanSkrive) {
@@ -20404,6 +21068,7 @@
     text.textContent = v.excerpt ? quoted(v.excerpt) : tr('notes.historyNoText');
     head.appendChild(text);
 
+    head.dataset.fkey = 'head';
     head.addEventListener('click', () => toggleNoteHistoryRow(v.id));
     row.appendChild(head);
 
@@ -20411,15 +21076,9 @@
 
     const body = document.createElement('div');
     body.className = 'note-history-body';
-    const tittel = document.createElement('p');
-    tittel.className = 'note-history-doc-title';
-    tittel.textContent = (ctx.doc && ctx.doc.title) || tr('common.noName');
-    body.appendChild(tittel);
-    const ark = document.createElement('div');
-    ark.className = 'note-doc note-history-doc';
-    if (ctx.doc && ctx.doc.doc) { noteDocIntoEl(ark, ctx.doc.doc); noteApplyIndent(ark); }
-    else ark.textContent = tr('notes.historyLoading');
-    body.appendChild(ark);
+    body.appendChild(noteHistoryViewSeg(ctx));
+    if (ctx.view === 'diff') noteHistoryDiffInto(body, ctx);
+    else noteHistoryFullInto(body, ctx);
 
     const actions = document.createElement('div');
     actions.className = 'note-history-actions';
@@ -20429,12 +21088,14 @@
       gjen.className = 'btn btn-solid btn-accent btn-small note-history-restore';
       gjen.textContent = tr('notes.historyRestore');
       gjen.disabled = !ctx.doc;
+      gjen.dataset.fkey = 'restore';
       gjen.addEventListener('click', () => restoreNoteVersion(ctx.id, v.id));
       actions.appendChild(gjen);
 
       const keep = document.createElement('button');
       keep.type = 'button';
       keep.className = 'btn btn-ghost btn-small note-history-keep' + (v.pinned ? ' is-on' : '');
+      keep.dataset.fkey = 'keep';
       keep.setAttribute('aria-pressed', v.pinned ? 'true' : 'false');
       keep.textContent = tr(v.pinned ? 'notes.historyUnkeep' : 'notes.historyKeep');
       keep.addEventListener('click', () => toggleNoteVersionKeep(ctx.id, v.id, !v.pinned));
@@ -20445,15 +21106,106 @@
     return row;
   }
 
+  /* Bryteren mellom de to visningene. Den står i BEGGE tilfeller — også for en
+     ren leser: å se hva som er annerledes er lesing, akkurat som å bla i
+     historikken (docs/rettigheter-og-deling.md del 14). */
+  function noteHistoryViewSeg(ctx) {
+    const seg = document.createElement('div');
+    seg.className = 'seg note-history-views';
+    seg.setAttribute('role', 'tablist');
+    seg.setAttribute('aria-label', tr('notes.diffViewLabel'));
+    NOTE_HISTORY_VIEWS.forEach((view) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'seg-btn';
+      b.setAttribute('role', 'tab');
+      b.dataset.view = view;
+      b.dataset.fkey = 'view-' + view;
+      b.textContent = tr(view === 'diff' ? 'notes.diffView' : 'notes.fullView');
+      b.addEventListener('click', () => setNoteHistoryView(view));
+      seg.appendChild(b);
+    });
+    // Piltaster i en tablist (WAI-ARIA), som hovedbryteren og søkets scopevelger.
+    seg.addEventListener('keydown', (ev) => {
+      const steg = ev.key === 'ArrowRight' ? 1 : ev.key === 'ArrowLeft' ? -1 : 0;
+      if (!steg) return;
+      ev.preventDefault();
+      const i = NOTE_HISTORY_VIEWS.indexOf(noteHistoryCtx ? noteHistoryCtx.view : 'full');
+      const neste = NOTE_HISTORY_VIEWS[(i + steg + NOTE_HISTORY_VIEWS.length)
+        % NOTE_HISTORY_VIEWS.length];
+      setNoteHistoryView(neste);
+      /* Fokus følger VALGET, ikke tasten. Listen males om av byttet, og
+         gjenopprettingen setter fokus tilbake på den kontrollen som HADDE det —
+         her det gamle segmentet, som nettopp mistet tabbstoppet sitt. */
+      const b = noteHistoryListEl.querySelector(
+        '.note-history-row.is-open .note-history-views .seg-btn[data-view="' + neste + '"]');
+      if (b) { try { b.focus(); } catch (e) { /* ignorer */ } }
+    });
+    paintSeg(seg, '.seg-btn', (b) => b.dataset.view === ctx.view);
+    return seg;
+  }
+
+  // HELE VERSJONEN: tittelen og dokumentet, skrivebeskyttet, som før.
+  function noteHistoryFullInto(body, ctx) {
+    const tittel = document.createElement('p');
+    tittel.className = 'note-history-doc-title';
+    tittel.textContent = (ctx.doc && ctx.doc.title) || tr('common.noName');
+    body.appendChild(tittel);
+    const ark = document.createElement('div');
+    ark.className = 'note-doc note-history-doc';
+    if (ctx.doc && ctx.doc.doc) { noteDocIntoEl(ark, ctx.doc.doc); noteApplyIndent(ark); }
+    else ark.textContent = tr('notes.historyLoading');
+    body.appendChild(ark);
+  }
+
+  /* ENDRINGENE: hele notatet slik det ser ut nå, med det som kom til, det som
+     falt bort, det som ble skrevet om og det som bare byttet formatering
+     merket i teksten. Konteksten står med — å bare vise de endrede linjene
+     ville gjort det umulig å se HVOR i notatet endringen skjedde. */
+  function noteHistoryDiffInto(body, ctx) {
+    const note = document.createElement('p');
+    note.className = 'note-diff-summary';
+    body.appendChild(note);
+    if (!ctx.doc) { note.textContent = tr('notes.historyLoading'); return; }
+    if (!ctx.now) { note.textContent = tr('notes.diffUnavailable'); return; }
+    const d = noteHistoryDiff(ctx);
+    const deler = noteDiffSummary(d.res, !!d.title);
+    if (!deler.length) {
+      note.textContent = tr('notes.diffNone');
+      note.classList.add('is-none');
+    } else {
+      note.textContent = tr('notes.diffSummary', { parts: deler.join(', ') });
+    }
+    if (d.title) {
+      const rad = document.createElement('p');
+      rad.className = 'note-diff-title-row';
+      const merke = document.createElement('span');
+      merke.className = 'note-diff-title-label';
+      merke.textContent = tr('notes.diffTitleLabel');
+      rad.appendChild(merke);
+      d.title.forEach((p) => rad.appendChild(noteDiffPartNode(p)));
+      body.appendChild(rad);
+    }
+    const ark = document.createElement('div');
+    ark.className = 'note-doc note-history-doc note-diff-doc';
+    noteDiffIntoEl(ark, d.res);
+    noteApplyIndent(ark);
+    body.appendChild(ark);
+  }
+
   /* Dokumentet hentes FØRST når raden åpnes: listen bærer utdraget og
      tegntallet, ikke seksti dokumenter. */
   async function toggleNoteHistoryRow(versionId) {
     const ctx = noteHistoryCtx;
     if (!ctx) return;
-    if (ctx.openId === versionId) { ctx.openId = null; ctx.doc = null; paintNoteHistory(); return; }
+    if (ctx.openId === versionId) {
+      ctx.openId = null; ctx.doc = null; ctx.diff = null; paintNoteHistory(); return;
+    }
     ctx.openId = versionId;
     ctx.doc = null;
+    ctx.diff = null;
     paintNoteHistory();
+    if (ctx.view === 'diff') ensureNoteDiffNow(ctx, true);
     const client = acli();
     if (!client) return;
     try {
@@ -27944,6 +28696,12 @@
     // Historikken (docs/notater-plan.md, «Historikk»)
     captureNoteVersion, openNoteHistory, closeNoteHistory, restoreNoteVersion,
     loadNoteHistory, pushNoteDrafts, queueNoteDraft,
+    /* VERSJONSSAMMENLIGNING (docs/notater-plan.md). Selve diffen er en REN
+       funksjon av to dokumenter, og eksponeres for seg: da kan randtilfellene
+       — tomt dokument, ren innsetting, flytting, formatering — stilles direkte
+       som spørsmål, uten å gå veien om modalen for hvert av dem. */
+    noteDocDiff, noteTitleDiff, noteDiffIntoEl, setNoteHistoryView,
+    noteAuthoritativeState,
     // Køen av strandede utkast: den ENESTE kopien mellom at frøet kastes og
     // at serveren har bekreftet bildet (se noteKeepStrandedDraft).
     get noteDraftsInfo() {
@@ -27958,6 +28716,12 @@
         status: c ? c.status : null,
         openId: c ? c.openId : null,
         versions: c && c.versions ? c.versions.slice() : null,
+        view: c ? c.view : null,
+        // «Nå»-siden av sammenligningen, slik testene kan bevise at den er den
+        // AUTORITATIVE tilstanden og ikke projeksjonen.
+        nowText: c && c.now ? noteDocText(c.now.doc) : null,
+        nowTitle: c && c.now ? c.now.title : null,
+        counts: c && c.diff ? c.diff.res.counts : null,
       };
     },
     get noteLiveInfo() {

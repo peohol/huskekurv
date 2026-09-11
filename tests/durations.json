@@ -47,6 +47,7 @@
   "tests/notes-lifecycle-links.test.js": 14,
   "tests/notes-sharing.test.js": 30,
   "tests/notes-tab.test.js": 30,
+  "tests/notes-version-diff.test.js": 27,
   "tests/notif-channels.test.js": 91,
   "tests/notif-modal.test.js": 35,
   "tests/notif-native-devices.test.js": 13,

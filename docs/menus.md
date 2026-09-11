@@ -473,9 +473,11 @@ appen (`.obj-menu-btn` → `#obj-menu`), med de radene notatsiden faktisk har:
 De to kopieringsradene krever ingen skriverett: kopiering er lesing, så de står
 også i et skrivebeskyttet notat, der verktøylinjen er borte
 ([`notater-plan.md`](notater-plan.md), «Utklippstavlen»). **Historikk** er
-lesing av samme grunn og står derfor også der — men å GJENOPPRETTE en versjon
-krever skriverett, og den knappen finnes bare inne i modalen
-([`notater-plan.md`](notater-plan.md), «Historikk»).
+lesing av samme grunn og står derfor også der — det gjelder både å lese en
+versjon og å SAMMENLIGNE den med notatet slik det er nå. Å GJENOPPRETTE en
+versjon krever derimot skriverett, og den knappen finnes bare inne i modalen
+([`notater-plan.md`](notater-plan.md), «Historikk» og
+«Versjonssammenligning»).
 
 Notatet har menyen både på kortet og i editorens verktøylinje (`#note-menu-btn`),
 så et åpent notat ikke er en blindvei. **Deling ligger i den vanlige menyen på

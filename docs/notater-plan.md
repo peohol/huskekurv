@@ -467,7 +467,8 @@ egen datoordbok), tegntallet og et utdrag, og den åpne raden viser hele
 dokumentet skrivebeskyttet — rendret node for node av den samme funksjonen
 editoren bruker, aldri som markup. Tegntallet er der for det ene tilfellet
 historikken finnes for: raden som er MYE kortere enn den før den er den man
-leter etter.
+leter etter. Den åpne raden har i tillegg en bryter mellom hele versjonen og
+ENDRINGENE mot notatet slik det er nå — se «Versjonssammenligning».
 
 **Historikken er ANONYM**, som loggen: `note_versions.author_id` når aldri
 klienten. Hvem som skrev hva i et delt notat er mer enn lesetilgangen lover.
@@ -490,6 +491,179 @@ Det ene unntaket er et STRANDET UTKAST (se «Sanntids samskriving»): der er
 bildet den eneste kopien, og da køes det på enheten til serveren har bekreftet
 det. Regelen over gjelder alt annet — det er forskjellen på et bilde vi kan ta
 igjen senere og et vi ikke kan.
+
+## Versjonssammenligning
+
+Historikken svarte på HVA notatet inneholdt. Den svarte ikke på hva som er
+ANNERLEDES nå — og det er dét man lurer på rett før man gjenoppretter:
+forsvant avsnittet mitt, eller ble det bare flyttet?
+
+**Det er den samme raden og den samme modalen.** Åpner man en historikkrad,
+står det en segmentert bryter øverst i den — appens egen `.seg`, den samme som
+Lister ↔ Notater og søkets scopevalg — med to visninger: **«Hele versjonen»**,
+som før, og **«Endringer»**. Ingen ny modal, ingen ny kontrolltype. Valget
+følger MODALEN, ikke raden: den som sammenligner én versjon vil som regel
+sammenligne den neste også.
+
+**Endringene vises i HELE notatet, ikke som løsrevne biter.** Det som kom til
+siden versjonen er grønt og understreket, det som falt bort er rødt og
+gjennomstreket, og det som bare byttet formatering har en stiplet strek i
+notatgult. Det uendrede står med, dempet — uten det kunne man ikke se HVOR i
+notatet endringen skjedde. Øverst står en oppsummering («2 lagt til, 1 skrevet
+om»), fordi tallene sier om det er verdt å lete.
+
+**Retningen er fast:** den valgte versjonen er FØR, notatet slik det er nå er
+ETTER. «Lagt til» betyr derfor «kom til etter denne versjonen».
+
+**To endringer kan ikke SES i teksten, og får ord i stedet.** En blokk som
+byttet type står med «avsnitt → overskrift 2» — diffen viser den nye siden, så
+et avsnitt som ble en overskrift ser bare ut som en overskrift. Og en blokk som
+bare byttet PLASS står med «Flyttet» begge steder, dempet i stedet for rødt og
+grønt: ingenting ble borte.
+
+**Fargen er aldri den eneste bæreren.** Hver endret linje har en usynlig
+merkelapp foran seg som skjermleseren leser først («Lagt til: …»), det som kom
+til ligger i `<ins>` og det som falt bort i `<del>`, og strek-under mot
+strek-gjennom skiller de to også uten farge. Bryteren er en `tablist` med
+piltaster og 44 px berøringsflate, og fokus blir stående på den kontrollen man
+trykket når listen males om — ikke på radhodet.
+
+**En formateringsendring sier hvilken VEI den gikk** — «fet lagt til», «lenke
+fjernet», «lenke endret» — og den står som en usynlig merknad rett etter biten
+den gjelder, ikke bare i hjelpeteksten. Den som ser skjermen kan lese seg til
+retningen av at teksten ikke lenger ER fet; den som ikke ser den har bare denne
+setningen, og «ny formatering: fet» ville da sagt det motsatte av det som
+skjedde.
+
+### Hvordan diffen regnes ut
+
+**Sammenligningen går på DOKUMENTMODELLEN** (`{v, blocks}`), aldri på editorens
+DOM eller på generert HTML. Modellen er den ene formen begge sidene finnes i:
+et bilde i historikken ER modellen. En diff på markup ville dessuten sett
+formatering og struktur som tekst.
+
+**Enheten er den FLATE blokken** — `noteDocToFlat`, den samme oppdelingen
+samskrivingen bruker: ett avsnitt, én overskrift, én skillelinje eller ETT
+LISTEPUNKT per rad. Da er et listepunkt som ble lagt til én endring, ikke «hele
+lista er endret».
+
+**Tre lag, og rekkefølgen er poenget:**
+
+1. **Blokkene** mot hverandre, med type + tekst som nøkkel — ikke markeringene,
+   så et avsnitt som bare ble fett kjennes igjen som det samme avsnittet. Små
+   biter sammenlignes eksakt (LCS med tabell); store ankres på blokker som
+   finnes ÉN gang på hver side og deles opp der (patience-metoden). Det er dét
+   som hindrer at en setning lagt til øverst skyver resten ut av takt og maler
+   hele notatet som endret.
+2. **Paring:** en slettet og en innsatt blokk som ligner nok på hverandre er
+   ikke to blokker — det er ÉN som ble skrevet om. Likheten måles på ord; er
+   den korteste siden på et par ord, måles TEGNENE i stedet, for «Melk» og
+   «Melkesjokolade» deler ikke ett eneste ord. Tegnlikheten er snever med vilje
+   (tegnene må dekke det meste av den korteste siden): to setninger uten noe
+   med hverandre å gjøre deler likevel en mengde bokstaver.
+3. **Ordene** inne i det parede. Markeringen er en egenskap ved TEGNENE, ikke
+   ved kjøringen de ligger i — å gjøre ett ord fett deler én kjøring i tre uten
+   å endre ett eneste tegn — så teksten sammenlignes for seg, og markeringene
+   leses etterpå over de samme tegnene. Ord som står igjen på begge sider med
+   ulik markering er en FORMATERINGSENDRING, ikke en omskriving.
+
+**Flytting er det som blir igjen:** en slettet og en innsatt blokk med nøyaktig
+samme innhold, i hver sin ende av notatet, er den samme blokken flyttet.
+
+**Tittelen sammenlignes for seg**, ord for ord med den samme motoren — den er
+et navn, ikke en blokk, og flettes som navn (se «Sanntids samskriving»).
+
+**Ingen ny avhengighet.** Alt over er noen få hundre linjer i `app.js`, bygget
+på dokumentmodellen som allerede fantes.
+
+### Hva som regnes som «Nå»
+
+**Den samme autoritative tilstanden resten av historikken bygger på**, lest med
+den samme funksjonen: `noteAuthoritativeState` gir enten den ÅPNE øktens CRDT
+(når frøet er avklart), eller — for et lukket notat — loggens rader PLUSS
+enhetens lokale kopi PLUSS det som ennå ligger i `noteOps`-køen. Projeksjonen
+(`notes.body`) brukes bare der notatet aldri er sådd. Ingen egen utregning ved
+siden av den historikken selv hviler på.
+
+Lesingen skjer hver gang modalen henter listen, rett før bildet av
+nå-tilstanden tas — men som en EGEN lesing, med vilje. Bildet leser tilstanden
+inne i sin egen serialiserte kjede, slik at raden som legges inn alltid er den
+ferskeste; den regelen røres ikke. Og en ren LESER tar ikke noe bilde i det hele
+tatt, men skal likevel kunne sammenligne.
+
+**Og «nå» må være nå, også en stund etter at modalen åpnet.** En medforfatter
+kan skrive mens historikken står oppe: da oppdaterer live-hentingen editoren
+uten at noe rører modalen, og listen hentes bare på nytt av en SKRIVING
+(gjenoppretting, merking) — som en ren leser ikke har. Tilstanden leses derfor
+på nytt hver gang brukeren BER om sammenligningen: når «Endringer» velges, og
+når en rad åpnes mens den visningen står. Er den uendret, males ingenting om;
+en ommaling for ingenting ville flyttet fokus ut av kontrollen man nettopp
+brukte.
+
+**Og kommer lesingen ikke fram, tømmes sammenligningen.** Å la det forrige
+svaret bli stående ville vært å presentere en tilstand fra i sted som den
+gjeldende — uten at noe sa fra, og uten at brukeren kan se forskjell på en fersk
+diff og en foreldet. Da er den ærlige visningen ingen diff: feltet sier i
+klartekst at det ikke finnes noe å sammenligne med ennå. VERSJONEN som er hentet
+røres ikke — den kan fortsatt leses i sin helhet, og den er ikke avhengig av hva
+som gjelder nå. Neste gang brukeren ber om sammenligningen, prøves lesingen
+igjen. Det samme gjelder en økt som ennå er uavklart.
+
+**Diffen SKRIVER INGENTING.** Den leser to dokumenter og bygger noder — den
+rører verken CRDT-en, projeksjonen, loggen, historikken eller synk-køen, og den
+inngår ikke i en gjenoppretting: å gjenopprette gir fortsatt nøyaktig den
+valgte versjonen, gjennom CRDT-en som før.
+
+### Rettigheter og personvern
+
+Å se en forskjell er LESING, og krever nøyaktig den lesetilgangen historikken
+selv krever (`can_read_note`). En ren LESER får derfor bryteren og
+sammenligningen, og fortsatt verken «Gjenopprett», «Behold denne» eller «Lagre
+versjon nå» — og legger ikke igjen et eneste bilde ved å bla. Ingen nye
+RPC-er, ingen nye tabeller, ingen nye grants: diffen regnes ut av det klienten
+allerede har lov til å hente.
+
+**Og den er ANONYM, som resten av historikken.** Den sier hva som er
+annerledes, aldri hvem som gjorde det: `author_id` når fortsatt aldri klienten,
+og det finnes verken fjernmarkører eller mer detaljert tilstedeværelse.
+
+### Testdekning
+
+`tests/notes-version-diff.test.js` er den autoritative testen, og den har to
+halvdeler.
+
+**Algoritmen stilles som RENE funksjonskall** — `noteDocDiff` og
+`noteTitleDiff` er funksjoner av to dokumenter, så hvert randtilfelle kan felles
+for seg: identiske dokumenter, tomt dokument på én og på begge sider, rent
+tillegg, ren sletting, endring inne i én blokk, tittel, formatering (også når
+markeringen deler en kjøring i tre uten å endre ett eneste tegn), en lenke som
+peker et nytt sted, punktliste og nummerert liste, flere endringer samtidig, en
+blokk som ble flyttet (og et TOMT avsnitt som ikke påstås flyttet), overskrifter,
+skillelinje, en blokk som byttet type, ett ord som ble til en setning, to korte
+blokker som bare deler bokstaver — og at en setning lagt til øverst i et notat
+på 40 linjer lar de 40 stå urørt.
+
+**UI-et kjøres i ekte nettleser, desktop OG mobil:** bryteren og at raden
+starter på hele versjonen, endringene tegnet node for node, oppsummeringen,
+merkelappen skjermleseren leser først, RETNINGEN på en formateringsendring
+(lagt til, fjernet, byttet), 44 px berøringsflate, piltastene,
+`tablist`-semantikken, at fokus blir stående på kontrollen man trykket og følger
+VALGET ved piltast, at det ikke skrives verken i loggen, i historikken eller i
+notatet av å sammenligne, at en gjenoppretting fortsatt gir nøyaktig den valgte
+versjonen, og at markeringene henter fargen fra drakten i både lys og mørk.
+
+**Og de fem tilfellene der «Nå» er det vanskelige:** historikk åpnet fra et
+LUKKET notat, «Nå» med enhetens usendte kø (leveringen nektes, så køen blir
+stående mens historikken kan hentes), en medforfatter som skriver MENS
+sammenligningen står åpen (testen rører aldri listen — den bytter visning, som
+en bruker gjør), en ren leser som ser diffen uten å få skriverettigheter, uten å
+legge igjen et bilde, og som likevel ser det som kom til etter at modalen åpnet,
+og en lesing som IKKE kommer fram: da skal sammenligningen tømmes og si hvorfor,
+mens versjonen fortsatt kan leses. Tilbakekalt tilgang midt i en sammenligning
+lukker historikken.
+
+Regresjonene fra historikk-runden står uendret i `tests/notes-history.test.js`,
+`tests/notes-collab.test.js` og `tests/notes-sharing.test.js`.
 
 ## Globalt søk
 
@@ -1059,6 +1233,63 @@ uttynningen, tilbakekalling, kaskade og kontosletting),
 tar bilde av den samme tilstanden samtidig ender med ett bilde) og en ny
 RPC-vakt i `tests/db-contract.test.js`.
 
+### PR 7 — Versjonssammenligning: hva er annerledes nå?
+
+**Mål:** Den som ser en historikkversjon skal ikke bare kunne LESE hva notatet
+inneholdt, men tydelig se hva som er forskjellig fra notatet slik det gjelder
+nå — før hen eventuelt gjenoppretter.
+
+Omfang: en diff på dokumentmodellen, en visningsbryter i den eksisterende
+historikkraden, og regresjonsvern for at «Nå» fortsatt er den autoritative
+tilstanden.
+
+Status: **gjennomført**. Hvordan det virker står i «Versjonssammenligning», som
+er den autoritative beskrivelsen; her er bare det som er verdt å vite om
+VALGENE:
+
+- **Ingen ny modal og ingen ny kontrolltype.** Sammenligningen er en ANDRE
+  VISNING av raden som allerede fantes, valgt med appens egen segmenterte
+  bryter. En egen «sammenlign»-modal ville betydd en ny plass å navigere til,
+  en ny fokusfelle og en ny måte å lukke noe på — for det samme innholdet.
+- **Diffen går på dokumentmodellen, ikke på DOM eller HTML.** Modellen er den
+  ene formen begge sidene finnes i, den er stabil, og den kjenner forskjell på
+  struktur og tekst. En diff på markup ville lest en tom `<br>` som en endring.
+- **Ingen tung avhengighet.** Tre lag — blokker, paring, ord — bygget på
+  dokumentmodellen som allerede fantes. Den eksakte sammenligningen er
+  kvadratisk og brukes bare på små biter; store dokumenter ankres på blokker
+  som finnes én gang på hver side. Et bibliotek ville kostet mer enn det løste,
+  og ville uansett ikke kjent Huskis' egen modell.
+- **Markeringen er en egenskap ved TEGNENE.** Å gjøre ett ord fett deler én
+  kjøring i tre uten å endre ett eneste tegn; leses markeringen som en egenskap
+  ved kjøringen, blir «nøkkelen.» og «nøkkelen» + «.» to ulike ord, og en ren
+  formateringsendring står som slettet og lagt til igjen. Teksten sammenlignes
+  derfor for seg, og markeringene leses over de samme tegnene.
+- **«Nå» leses med `noteAuthoritativeState`** — den samme funksjonen
+  historikken alt hvilte på, ikke en parallell utregning, og aldri projeksjonen
+  alene. Lesingen er likevel EGEN, ikke gjenbrukt fra bildet som tas: bildet må
+  lese inne i sin egen serialiserte kjede for å være det ferskeste, og en ren
+  leser tar ikke noe bilde i det hele tatt, men skal likevel kunne
+  sammenligne.
+- **Diffen er en VISNING.** Den skriver ingenting, og den inngår ikke i en
+  gjenoppretting: å gjenopprette gir fortsatt nøyaktig den valgte versjonen.
+- **Forfatteren er fortsatt ikke med.** Å vise HVEM som gjorde endringen er det
+  samme produktvalget som før — hvem som får se hvem — og hører ikke til her.
+
+Dekket av `tests/notes-version-diff.test.js` (ny: de elleve randtilfellene i
+algoritmen som rene funksjonskall — identisk, tomt på én og begge sider, rent
+tillegg, ren sletting, endring inne i en blokk, tittel, formatering, lenke,
+lister, flere samtidig, flytting, overskrift, skillelinje, blokk som byttet
+type, og at en endring tidlig ikke maler resten av notatet som endret — pluss
+UI-et: bryteren, endringene tegnet node for node, berøringsflaten, piltastene,
+fokus som overlever ommalingen, at det ikke skrives noe som helst av å
+sammenligne, at gjenoppretting fortsatt gir den valgte versjonen, lys og mørk
+drakt, historikk fra et lukket notat, «Nå» med enhetens usendte kø, samskriving
+mens historikken står åpen, en ren leser, og tilbakekalt tilgang midt i en
+sammenligning; desktop og mobil), og av regresjonene i
+`tests/notes-history.test.js`, `tests/notes-collab.test.js` og
+`tests/notes-sharing.test.js` som står uendret.
+
+
 ## Prinsipper for gjennomføring
 
 - Bygg vertikale leveranser som kan testes end-to-end.
@@ -1092,26 +1323,32 @@ databasekontrakten; døp dem ikke om.
 | PR 4 — Kopiering og innliming | **Gjennomført** |
 | PR 5 — Sanntids samskriving | **Gjennomført** |
 | PR 6 — Historikk | **Gjennomført** |
+| PR 7 — Versjonssammenligning | **Gjennomført** |
 
 **Leveranseplanen er gjennomført.** Notatene er en hel del av appen: de kan
 deles på alle tre nivåene med den samme serverhåndhevede modellen som listene,
 flere kan skrive i det samme notatet samtidig, det som ble borte kan hentes
-tilbake fra historikken, de har arkiv og søppelkasse, de finnes i det felles
-søket, de kan kobles til listesiden, og de oppfører seg som resten av appen på
+tilbake fra historikken — og man ser hva som er annerledes før man gjør det —
+de har arkiv og søppelkasse, de finnes i det felles søket, de kan kobles til
+listesiden, og de oppfører seg som resten av appen på
 telefon — tastatur, fokus, berøringsflater, den sikre sonen og systemets
 tilbakeknapp.
 
-**Det som gjenstår er egne leveranser, ikke restarbeid:**
+**Det planlagte arbeidet med Notater er dermed FULLFØRT.** Det finnes ikke et
+teknisk neste steg i denne planen — ingen halvferdig del, ingen kjent mangel som
+venter på en runde til. Kommer det mer, er det fordi noen tar et nytt
+PRODUKTVALG, ikke fordi noe står igjen.
+
+**Tre ting er bevisst UTENFOR, og er ikke restarbeid:**
 
 - `object_links` kan bære flere typer per side enn de seks som finnes i dag —
-  men bare de seks er koblingsbare nå.
-- Samskrivingen viser AT noen andre skriver, ikke HVOR, og historikken viser HVA
-  notatet inneholdt, ikke HVEM som skrev det. Begge deler er den samme
-  avgrensningen: å navngi noen krever en avklaring av hvem som får se hvem — et
-  eget produktvalg, ikke restarbeid.
-- Historikken sammenligner ikke to bilder for brukeren. Å VISE forskjellen
-  mellom to versjoner («dette avsnittet forsvant her») er en egen funksjon med
-  sitt eget UI, ikke en detalj som mangler.
+  men bare de seks er koblingsbare nå. En syvende type er et produktvalg om hva
+  det gir mening å koble, ikke en manglende implementasjon.
+- Samskrivingen viser AT noen andre skriver, ikke HVOR, og historikken og
+  versjonssammenligningen viser HVA notatet inneholdt og hva som er annerledes
+  — aldri HVEM. Å navngi noen krever en avklaring av hvem som får se hvem: et
+  eget produktvalg om personvern i delte notater.
+- Import/eksport av notater som FILER. Se under.
 
 **Import/eksport av notater som filer er IKKE et neste steg.** Utklippstavlen
 dekker det brukeren faktisk trenger — notatet ut i et annet program og inn igjen
