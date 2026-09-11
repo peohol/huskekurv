@@ -686,6 +686,13 @@
                               'External notifications are off in previews. They are still listed here.'],
     'notif.channel.failed':  ['Varslene ble ikke slått på. Prøv igjen.',
                               'Notifications were not turned on. Try again.'],
+    /* Navnet og beskrivelsen på Huskis' egen varselkanal i Android. De vises i
+       telefonens systeminnstillinger, der brukeren kan justere lyd, vibrasjon
+       og hvor påtrengende varslene skal være — og de er brukerrettet tekst som
+       alt annet. Et språkbytte oppdaterer dem (app.js, `ensureNativeChannel`). */
+    'notif.android.channelName': ['Påminnelser', 'Reminders'],
+    'notif.android.channelDesc': ['Frister og oppstart du har bedt om å bli minnet på.',
+                                  'Deadlines and start times you asked to be reminded about.'],
     /* ---- Enheter og økter (konto-modalen, docs/accounts.md) ----
        To lister med hver sin betydning, og ordene skal holde dem fra
        hverandre: «innlogget» er tilgang til kontoen, «varsler på» er at

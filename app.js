@@ -13281,7 +13281,106 @@
     return out;
   }
 
-  /* ---------------- Android: lokale varsler på enheten ---------------- */
+  /* ---------------- Android: lokale varsler på enheten ----------------
+
+     VARSLENE HAR SIN EGEN KANAL PÅ ANDROID, og den er kanalen med HØY
+     viktighet. Uten en egen kanal havner alarmene på pluginens `default`, som
+     lages med IMPORTANCE_DEFAULT: varselet legger seg stille i varselpanelet,
+     uten å vise seg på skjermen. En frist som har utløpt skal komme FRAM.
+
+     Kanalen er en FORESPØRSEL, ikke en garanti. Android eier presentasjonen:
+     brukeren kan skru kanalen ned i systeminnstillingene, «Ikke forstyrr» kan
+     holde den tilbake, og produsentene har sine egne regler. Huskis ber om
+     høy viktighet og vibrasjon — resten er systemets.
+
+     LÅSESKJERMEN BER VI IKKE OM, for det kan vi ikke. Android nullstiller
+     kanalens `lockscreenVisibility` når det er APPEN som oppretter den — se
+     `PreferencesHelper.createNotificationChannel` i AOSP, der linjen står under
+     kommentaren «Reset fields that apps aren't allowed to set». Feltet er
+     brukerens, ikke vårt. Hva som vises på en låst skjerm følger derfor av
+     enhetens egen innstilling, med varselets `VISIBILITY_PRIVATE` (satt av
+     pluginen) som utgangspunkt — og det er den trygge veien: en påminnelse er
+     et objektnavn, og det skal ikke tvinges fram på en låst telefon som en
+     bieffekt av at varselet skal være synlig.
+
+     Og det er MED VILJE bare det: ingen `fullScreenIntent`, ingen
+     USE_FULL_SCREEN_INTENT, ingen TURN_SCREEN_ON og ingen wake lock. De hører
+     til alarmer og innkommende anrop — varsler som eier skjermen og våkner
+     brukeren. Huskis' terskler er «fristen er utløpt» og «begynner innen en
+     uke»; de skal være synlige, ikke uunngåelige. Tillatelsene koster dessuten
+     hver sin gjennomgang i Google Play, og en app som ikke trenger en
+     tillatelse skal ikke be om den (docs/varsler.md).
+
+     ID-EN ER VERSJONERT, og det er ikke kosmetikk: Android låser en kanals
+     viktighet i det den opprettes. `createChannel` på en kanal som finnes
+     oppdaterer bare navn og beskrivelse — viktigheten står. Skal innstillingene
+     noensinne endres, må kanalen få en NY id, og de planlagte alarmene flyttes
+     over (`nativeChannelPending` under). */
+  const NATIVE_CH_ID = 'huskis-notif-v1';
+  // Hvilken kanal enhetens alarmer faktisk står på. Skiller den seg fra
+  // NATIVE_CH_ID, er alarmene på telefonen eldre enn kanalen og skal flyttes.
+  const NATIVE_CH_KEY = 'hk-notif-android-channel';
+
+  function nativeChannelPending() {
+    try { return localStorage.getItem(NATIVE_CH_KEY) !== NATIVE_CH_ID; } catch (e) { return true; }
+  }
+  function setNativeChannelDone() {
+    try { localStorage.setItem(NATIVE_CH_KEY, NATIVE_CH_ID); } catch (e) { /* privat modus */ }
+  }
+
+  /* Kanalen skal finnes FØR en alarm planlegges: pluginen bygger hele
+     `Notification`-objektet — kanalen inkludert — i det samme kallet som armerer
+     alarmen, så en kanal som ikke finnes ennå gir et varsel uten kanalens
+     oppførsel.
+
+     Kallet er idempotent og gjøres derfor én gang per økt, ikke per alarm.
+     Unntaket er SPRÅKET: navnet og beskrivelsen står i Androids
+     systeminnstillinger, og de er brukerrettet tekst som alle andre
+     (docs/sprak.md). Et språkbytte lager derfor kanalen på nytt — det er
+     nøyaktig det `createChannel` KAN oppdatere på en kanal som finnes.
+
+     Lyden settes ikke: står `sound` tom, rører pluginen aldri kanalens lyd, og
+     en Android-kanal har systemets vanlige varsellyd fra fødselen. En egen
+     lydfil ville vært en fil til å vedlikeholde uten at noen ba om den.
+
+     EN FEIL HER STOPPER RUNDEN, med ett unntak. Et varsel som planlegges mot
+     en kanal som ikke finnes, blir aldri vist på Android 8+ — å svelge feilen
+     og planlegge likevel ville gitt stumme varsler, og et merke og en signatur
+     som sier «ferdig». Feilen kastes derfor videre: `syncNotifChannelOnce`
+     lar signaturen stå urørt, og neste runde gjør hele jobben.
+
+     Unntaket er `UNAVAILABLE`/`UNIMPLEMENTED`, som er Android UNDER 8 (minSdk
+     er 24): der finnes kanaler ikke i det hele tatt, `createChannel` svarer
+     `unavailable`, og `channelId` er et felt NotificationCompat ser bort fra.
+     Varselet kommer fram som før, og den feilen skal ikke koste alarmen. Den
+     kan heller ikke endre seg mens appen kjører, så den huskes. */
+  let nativeChJob = null;
+  let nativeChLang = null;
+  let nativeChGone = false;   // OS-et har ingen kanaler (Android 7)
+  function ensureNativeChannel(ln) {
+    if (nativeChGone) return Promise.resolve();
+    const lang = I18N.lang();
+    if (nativeChJob && nativeChLang === lang) return nativeChJob;
+    nativeChLang = lang;
+    nativeChJob = Promise.resolve()
+      .then(() => (typeof ln.createChannel === 'function' ? ln.createChannel({
+        id: NATIVE_CH_ID,
+        name: tr('notif.android.channelName'),
+        description: tr('notif.android.channelDesc'),
+        importance: 4,          // IMPORTANCE_HIGH — lyd, og heads-up når Android tillater det
+        vibration: true,
+      }) : null))
+      .catch((e) => {
+        // Memoet er for de gjentatte rundene i en økt som LYKTES; en runde som
+        // feilet skal prøves på nytt.
+        if (nativeChLang === lang) { nativeChJob = null; nativeChLang = null; }
+        const kode = (e && e.code) || '';
+        if (kode === 'UNAVAILABLE' || kode === 'UNIMPLEMENTED') { nativeChGone = true; return; }
+        throw e;
+      });
+    return nativeChJob;
+  }
+
   const androidChannel = {
     id: 'native',
     /* Kanalen eier planen sin SELV: alarmene ligger på telefonen, ingen server
@@ -13309,7 +13408,7 @@
       return true;
     },
     async disable() {
-      await this.sync([]);       // planen tas ned; tillatelsen beholdes
+      await this.sync([], true); // planen tas ned; tillatelsen beholdes
       return true;
     },
     /* Hva kanalen sist ble speilet med. Er den uendret, er det ingenting å
@@ -13318,8 +13417,15 @@
        for ingenting. Signaturen må derfor bære ALT alarmene avhenger av, og
        det er nøyaktig det `nativeNotifSig` gjør: nøkkel, tidspunkt og tekst.
        Et objekt som får nytt navn, eller et språkbytte, når dermed telefonen —
-       uten den ville teksten på en alarm som alt var planlagt frosset fast. */
-    sig(plan) { return plan.map(nativeNotifSig).join(','); },
+       uten den ville teksten på en alarm som alt var planlagt frosset fast.
+
+       `null` betyr «spør meg hver gang», og det er nøyaktig det en enhet som
+       ennå ikke er migrert skal si: alarmene står på en eldre kanal, og da er
+       en uendret plan ikke det samme som ingenting å gjøre. */
+    sig(plan) {
+      if (nativeChannelPending()) return null;
+      return plan.map(nativeNotifSig).join(',');
+    },
     /* Speiler planen ut på enheten: avlys det som ikke lenger står i den, og
        legg inn det som mangler. DIFFEN er hele poenget — uten den ville hver
        synk-runde lagt inn de samme varslene på nytt, og en endret frist ville
@@ -13328,16 +13434,57 @@
        Diffen går på ID-en, og ID-en er signaturen (se `nativeNotifSig`): et
        varsel som har flyttet seg i tid eller fått ny tekst er derfor et ANNET
        tall, og blir avlyst og lagt inn på nytt i den samme runden. */
-    async sync(plan) {
+    async sync(plan, nedrigging) {
       const ln = nativePlugins.LocalNotifications;
       if (!ln) return;
+      /* KANALEN FØRST, hver runde og ikke bare når noe skal planlegges.
+
+         Alarmen bærer kanalen med seg fra det øyeblikket den armeres, så den
+         må finnes før planleggingen — men kallet står her, foran hele runden,
+         av en grunn til: navnet og beskrivelsen er brukerrettet tekst, og et
+         SPRÅKBYTTE skal nå Androids innstillinger også på en telefon som ikke
+         har en eneste alarm å planlegge. Det er dessuten det ene `createChannel`
+         kan oppdatere på en kanal som finnes.
+
+         Kallet er memoisert per språk: første runde etter en oppstart eller et
+         språkbytte koster én tur over broen, resten ingenting.
+
+         En NEDRIGGING er unntaket: da tas planen ned — en kanal å vise varsler
+         i er det siste den runden trenger. */
+      if (!nedrigging) await ensureNativeChannel(ln);
       const vil = new Map();
       plan.forEach((r) => vil.set(nativeNotifId(nativeNotifSig(r)), r));
       const pending = await ln.getPending();
       const finnes = new Set(((pending && pending.notifications) || []).map((n) => Number(n.id)));
       const avlys = [...finnes].filter((id) => !vil.has(id)).map((id) => ({ id }));
       if (avlys.length) await ln.cancel({ notifications: avlys });
-      const nye = [...vil.entries()].filter(([id]) => !finnes.has(id)).map(([id, r]) => ({
+      /* MIGRERINGEN, og den er én linje: står alarmene på en eldre kanal, er
+         ingen av dem «allerede planlagt».
+
+         En oppgradert installasjon har alarmer som ble armert FØR kanalen
+         fantes, og de bærer den gamle kanalen med seg: pluginen bygger
+         `Notification`-objektet — kanalen inkludert — når alarmen settes, og
+         legger det ferdige objektet i alarmen. Kanalen til en armert alarm kan
+         derfor ikke endres; alarmen må settes på nytt.
+
+         `getPending()` kan ikke hjelpe oss å skille dem: svaret bærer id,
+         tekst, tidspunkt og `extra` — ingen `channelId`. Pluginens lagring har
+         den heller ikke, for den lagrer det appen sendte inn, og gamle Huskis
+         sendte ingen kanal. Derfor flyttes ALLE alarmene i planen, ikke et
+         utvalg, én gang per kanal-id.
+
+         Å planlegge på nytt er hele operasjonen. Pluginen avlyser den gamle
+         alarmen for den samme id-en selv før den armerer den nye, så det blir
+         verken dubletter eller et hull der alarmen er avlyst og den nye ennå
+         ikke satt — en «avlys, så planlegg» ville mistet alarmen om appen døde
+         imellom. Merket skrives etterpå, så en runde som feiler i broen
+         gjentas i stedet for å bli hoppet over.
+
+         En NEDRIGGING migrerer ingenting: den tar planen ned, og skal heller
+         ikke skrive merket — runden som bygger planen opp igjen er den som
+         faktisk setter alarmene på kanalen. */
+      const migrer = !nedrigging && nativeChannelPending();
+      const nye = [...vil.entries()].filter(([id]) => migrer || !finnes.has(id)).map(([id, r]) => ({
         id,
         title: notifExternalTitle(r),
         body: notifExternalBody(r),
@@ -13360,8 +13507,26 @@
            tidssonemottakeren leser NØYAKTIG dette feltet og regner om — se
            `notifWallClock`. */
         extra: { objType: r.obj_type, objId: r.obj_id, key: r.key, wall: notifWallClock(r.at) },
+        /* Kanalen EKSPLISITT på hvert varsel. Uten feltet velger pluginen sin
+           egen `default`-kanal, og da er vi tilbake til et stille varsel. */
+        channelId: NATIVE_CH_ID,
+        /* … og PRIORITETEN, for Android 7 (API 24–25, som minSdk fortsatt
+           slipper inn). Der finnes kanaler ikke i det hele tatt, så hele
+           kanalen over er uten virkning — det er notifikasjonens egen prioritet
+           som avgjør om systemet viser den som et heads-up.
+
+           Feltet heter `foreground`, og navnet er iOS-ens: der betyr det «vis
+           varselet selv om appen er i forgrunnen». PÅ ANDROID GJØR DET KUN ÉN
+           TING — `setPriority(PRIORITY_HIGH)` i stedet for `PRIORITY_DEFAULT`
+           (pluginens `LocalNotificationManager.buildNotification`). Det er
+           altså ikke en levering til: Android 8+ ser bort fra prioriteten (der
+           er det kanalens viktighet som gjelder), og produktregelen om ÉN
+           synlig varsling bæres av diffen, som avlyser den armerte alarmen i
+           det terskelen passerer med appen åpen (docs/varsler.md). */
+        foreground: true,
       }));
       if (nye.length) await ln.schedule({ notifications: nye });
+      if (migrer) setNativeChannelDone();
     },
   };
 
@@ -13931,13 +14096,21 @@
        ble speilet med, og `null` betyr «spør meg hver gang». Signaturen bærer
        kanal-id-en i tillegg, så et bytte av kanal aldri kan leses som
        «uendret». */
-    const egen = ch.sig(plan);
-    const sig = egen == null ? null : ch.id + '|' + egen;
-    if (sig !== null && sig === notifChSig) return;
+    const signatur = () => {
+      const egen = ch.sig(plan);
+      return egen == null ? null : ch.id + '|' + egen;
+    };
+    if (signatur() !== null && signatur() === notifChSig) return;
     try {
       if (await ch.state() !== 'on') return;
       await ch.sync(plan);
-      notifChSig = sig;
+      /* Signaturen leses PÅ NYTT etter speilingen, ikke før: runden kan ha
+         endret det den hviler på. Kanalmigreringen gjør nettopp det — den
+         svarer `null` («spør meg hver gang») så lenge alarmene står på en
+         eldre kanal, og er ferdig i det runden er over. Leste vi den bare på
+         forhånd, ville `null` blitt stående som «sist speilet med», og den
+         neste runden gått over pluginbroen for ingenting. */
+      notifChSig = signatur();
     } catch (e) {
       // Stille: neste runde prøver igjen — og signaturen står urørt, så den
       // gjør det med en gang og ikke først når planen endrer seg.
@@ -14073,7 +14246,9 @@
     notifChSig = null;
     notifPendingTarget = null;
     notifChannelTapped.clear();
-    if (androidChannel.supported()) androidChannel.sync([]).catch(() => {});
+    // Nedrigging (siste argument): planen tas ned, og en runde som rydder etter
+    // forrige bruker har ingen bruk for en varselkanal.
+    if (androidChannel.supported()) androidChannel.sync([], true).catch(() => {});
     notifRetryAt = 0;
     notifErrorLogged = false;
     notifPurged.clear();
@@ -28666,6 +28841,11 @@
     get pushRevokedHere() { return notifPushRevoked; },
     notifChannelWanted, setNotifChannelWanted, notifExternalLabels,
     androidChannel, webChannel,
+    /* Androids varselkanal: id-en alarmene planlegges med, og merket som sier
+       hvilken kanal enhetens alarmer STÅR på. Testene bruker dem til å rigge en
+       eldre installasjon (merket peker på en annen kanal) og til å lese at
+       migreringen faktisk fant sted. */
+    NATIVE_CH_ID, NATIVE_CH_KEY,
     get notifChState() { return notifChState; },
     get notifPlanTz() { return notifPlanTz; },
     get notifPushDevices() { return notifPushDevices; },

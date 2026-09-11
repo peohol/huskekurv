@@ -2747,6 +2747,24 @@ POST_NOTIFICATIONS (Android 13+) flettes derimot INN fra pluginen og skal det:
 den er selve varseltillatelsen, og adapteren ber om den bak et brukertrykk i
 varselinnstillingene — aldri ved oppstart.
 
+**Varslene har sin egen kanal**, `huskis-notif-v1`, med høy viktighet (4) og
+vibrasjon, slik at Android normalt viser dem som heads-up. Låseskjermen ber
+appen ikke om: Android nullstiller kanalens lockscreen-visibility for en kanal
+appen selv oppretter, så hva som vises på en låst skjerm er brukerens egen
+innstilling (med varselets PRIVATE som utgangspunkt). Heads-up er dessuten en
+forespørsel, ikke en garanti: brukeren,
+«Ikke forstyrr» og produsentens innstillinger har siste ord — og de justeres
+der, i Androids varselinnstillinger for appen, ikke i en egen Huskis-bryter.
+Android 7 (API 24–25, som minSdk fortsatt slipper inn) har ingen kanaler i det
+hele tatt; der bærer varselet høy prioritet i stedet, som er det eneste som
+avgjør heads-up på den versjonen. Kanalen og prioriteten er de ENESTE
+mekanismene som er tatt i bruk for dette: ingen `fullScreenIntent`, ingen
+USE_FULL_SCREEN_INTENT, ingen TURN_SCREEN_ON, ingen wake lock og ingen presise
+alarmer. Id-en er versjonert fordi Android låser en
+kanals viktighet i det den opprettes; alarmer fra en installasjon som er eldre
+enn kanalen planlegges derfor på nytt én gang. Autoritativt:
+`docs/varsler.md`, «Varselkanalen».
+
 ### Varselets to ikoner
 
 Statuslinje-ikonet er `ic_stat_huskis` (`res/drawable/`), og uten et
@@ -2784,6 +2802,15 @@ Android (Samsung, rein installasjon); resten står igjen.
       ([`varsler.md`](varsler.md), «Én synlig varsling»). Maskinelt låst av
       `tests/notif-channels.test.js` 12;
 - [x] med appen i bakgrunnen: Android-systemvarselet leveres;
+- [ ] … og det vises som HEADS-UP — banneret over skjermen. Kanalens høye
+      viktighet er en FORESPØRSEL, så dette er punktet bare en telefon kan svare
+      på: brukeren, «Ikke forstyrr» og produsentens innstillinger har siste ord.
+      Sjekk samtidig at kanalen («Påminnelser») står i Androids
+      varselinnstillinger for Huskis, med lyd og vibrasjon;
+- [ ] en OPPGRADERING fra en versjon uten kanalen: alarmer som alt var
+      planlagt kommer fortsatt, nå som heads-up, og bare ÉN gang. Migreringen
+      er maskinelt dekket av `tests/notif-channels.test.js` 13, men bare mot en
+      fake pluginbro;
 - [ ] med prosessen fjernet fra Recents: Android-systemvarselet leveres;
 - [ ] varsel etter en telefonrestart (pluginens `BOOT_COMPLETED`-mottaker skal
       stille opp igjen det som var planlagt);

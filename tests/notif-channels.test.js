@@ -55,6 +55,15 @@
         diffen — et systemvarsel i tillegg er IKKE et ferdigkriterium. Er appen
         ikke åpen, er alarmen sikkerhetsnettet, og den skal være armert på
         forhånd. Klokka får faktisk passere terskelen her.
+    13. Androids egen varselkanal: den opprettes med HØY viktighet og vibrasjon
+        — og uten et løfte om låseskjermen, som Android ikke lar en app sette —
+        hvert varsel planlegges eksplisitt på den, og
+        den finnes FØR den første alarmen armeres. Og migreringen: en
+        installasjon med alarmer fra før kanalen fantes får dem planlagt på nytt
+        — uten dubletter, uten en mistet framtid — mens gjentatt synk og nye
+        omstarter ikke gjør noe mer. Til slutt at heads-up ikke har dratt med
+        seg en eneste ny tillatelse: ingen fullskjerm, ingen skjerm-på, ingen
+        presise alarmer.
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -120,12 +129,40 @@ function fakePlattform() {
      varsel står altså igjen i `getPending()` mens alarmen er borte, og
      adapterens diff må tåle det. Fakes den bort, beviser en test noe
      telefonen ikke gjør. */
+  /* LAGRINGEN OVERLEVER EN OMSTART, som pluginens egen gjør: alarmer,
+     lagrede rader, leverte varsler, kanalene telefonen har fått — og
+     tillatelsen. Uten det ville en «appoppgradering» (en ny sidelasting) sett
+     ut som en helt ny telefon, og en test av MIGRERING bevist ingenting.
+     `sessionStorage`, så konteksten fortsatt er testens egen. */
+  const LN_LAGER = 'hk-fake-ln';
+  const lagret = (() => {
+    try { return JSON.parse(sessionStorage.getItem(LN_LAGER) || 'null'); } catch (e) { return null; }
+  })() || {};
   window.__kanal = { schedule: [], cancel: [], pending: [], alarmer: [], levert: [],
+    /* Kanalene som er opprettet på «telefonen», og en logg over kallene i den
+       rekkefølgen de kom — testen bruker den til å se at kanalen fantes FØR
+       det første varselet ble planlagt. Loggen er øktens, ikke telefonens. */
+    kanaler: [], logg: [],
     perm: q.get('perm') || 'prompt', spurt: 0, vist: [], meldt: [] };
+  ['pending', 'alarmer', 'levert', 'kanaler'].forEach((k) => {
+    if (Array.isArray(lagret[k])) window.__kanal[k] = lagret[k];
+  });
+  if (lagret.kanalFeil) window.__kanal.kanalFeil = lagret.kanalFeil;
+  if (!q.get('perm') && lagret.perm) window.__kanal.perm = lagret.perm;
+  window.__kanal.lagre = function () {
+    try {
+      sessionStorage.setItem(LN_LAGER, JSON.stringify({
+        pending: window.__kanal.pending, alarmer: window.__kanal.alarmer,
+        levert: window.__kanal.levert, kanaler: window.__kanal.kanaler,
+        perm: window.__kanal.perm, kanalFeil: window.__kanal.kanalFeil || null,
+      }));
+    } catch (e) { /* full lagring: testen mister bare omstart-troverdigheten */ }
+  };
   // Kalles av testen: alarmen ringte. Raden blir stående i lagringen.
   window.__kanal.lever = function (id) {
     window.__kanal.levert.push(id);
     window.__kanal.alarmer = window.__kanal.alarmer.filter((n) => n.id !== id);
+    window.__kanal.lagre();
   };
 
   /* Ett RPC-kall kan tvinges til å feile: `window.__kanal.rpcFeil = '<navn>'`.
@@ -173,17 +210,88 @@ function fakePlattform() {
           requestPermissions: async () => {
             window.__kanal.spurt++;
             window.__kanal.perm = window.__kanal.svar || 'granted';
+            window.__kanal.lagre();
             return { display: window.__kanal.perm };
           },
-          getPending: async () => ({ notifications: window.__kanal.pending.slice() }),
+          /* `getPending()` er NOTIFICATION_STORE gjengitt slik pluginen selv
+             gjør det (`buildLocalNotificationPendingList`): id, tekst, tidspunkt,
+             `extra` og de to exact-flaggene. INGEN `channelId` — pluginen lagrer
+             det appen sendte inn, og feltet er ikke med i svaret. Det er hele
+             grunnen til at migreringen ikke kan plukke ut «alarmene på den gamle
+             kanalen»: telefonen kan ikke svare på spørsmålet. */
+          getPending: async () => ({
+            notifications: window.__kanal.pending.map((n) => ({
+              id: n.id, title: n.title, body: n.body,
+              schedule: { at: n.at, repeats: false },
+              extra: n.extra, isExactNotification: n.isExactNotification,
+            })),
+          }),
+          createChannel: async (ch) => {
+            window.__kanal.logg.push('createChannel:' + ch.id);
+            /* Broen kan feile. `kanalFeil = true` er et hikst, mens
+               `kanalFeil = 'UNAVAILABLE'` er Android UNDER 8: der finnes
+               kanaler ikke, og pluginen svarer `call.unavailable()`, som
+               native-broen gjør om til en Error med `code` satt. */
+            if (window.__kanal.kanalFeil) {
+              const e = new Error('kanal-feil (test)');
+              if (typeof window.__kanal.kanalFeil === 'string') e.code = window.__kanal.kanalFeil;
+              throw e;
+            }
+            const finnes = window.__kanal.kanaler.find((k) => k.id === ch.id);
+            /* ANDROID LÅSER KANALEN: `createNotificationChannel` på en kanal som
+               allerede finnes oppdaterer BARE navn og beskrivelse. Viktighet og
+               vibrasjon står som de ble opprettet — og det er nettopp derfor en
+               heving av viktigheten krever en NY kanal-id. */
+            if (finnes) {
+              finnes.name = ch.name;
+              finnes.description = ch.description;
+            } else {
+              window.__kanal.kanaler.push({
+                id: ch.id, name: ch.name, description: ch.description,
+                importance: ch.importance == null ? 3 : ch.importance,
+                /* LÅSESKJERMEN ER IKKE APPENS. Android nullstiller kanalens
+                   `lockscreenVisibility` når det er appen som oppretter den
+                   (`PreferencesHelper.createNotificationChannel`: «Reset fields
+                   that apps aren't allowed to set»), så uansett hva som sendes
+                   inn — også pluginens egen PUBLIC-standard — står feltet igjen
+                   på VISIBILITY_NO_OVERRIDE (−1000). Fakes det bort, ville en
+                   test kunne love en låseskjermkontrakt telefonen ikke gir. */
+                visibility: -1000,
+                bedtVisibility: ch.visibility,
+                vibration: !!ch.vibration,
+                /* Pluginen rører aldri kanalens lyd når `sound` er tom, og en
+                   Android-kanal har systemets vanlige varsellyd fra fødselen. */
+                sound: ch.sound ? ch.sound : 'default',
+              });
+            }
+            window.__kanal.lagre();
+          },
           schedule: async (o) => {
+            window.__kanal.logg.push('schedule:' + o.notifications.length);
             window.__kanal.schedule.push(o.notifications);
             o.notifications.forEach((n) => {
-              window.__kanal.pending.push({ id: n.id });
-              window.__kanal.alarmer.push({ id: n.id, at: n.schedule.at });
+              /* Samme id igjen ERSTATTER: pluginen skriver lagringsraden på
+                 id-en (`appendNotifications`) og avlyser den gamle alarmen før
+                 den armerer den nye (`cancelTimerForNotification`). Ingen
+                 dublett — og det er det som gjør en ny planlegging til en trygg
+                 migrering. */
+              window.__kanal.pending = window.__kanal.pending.filter((x) => x.id !== n.id);
+              window.__kanal.alarmer = window.__kanal.alarmer.filter((x) => x.id !== n.id);
+              window.__kanal.levert = window.__kanal.levert.filter((x) => x !== n.id);
+              window.__kanal.pending.push({ id: n.id, title: n.title, body: n.body,
+                at: n.schedule.at, extra: n.extra,
+                isExactNotification: n.isExactNotification });
+              /* KANALEN BAKES INN NÅR ALARMEN ARMERES: pluginen bygger hele
+                 `Notification`-objektet i `schedule()` og legger det ferdige
+                 objektet i alarmen. Kanalen til en armert alarm kan derfor ikke
+                 endres — den må settes på nytt. */
+              window.__kanal.alarmer.push({ id: n.id, at: n.schedule.at,
+                kanal: n.channelId || 'default' });
             });
+            window.__kanal.lagre();
           },
           cancel: async (o) => {
+            window.__kanal.logg.push('cancel:' + o.notifications.length);
             window.__kanal.cancel.push(o.notifications);
             const vekk = new Set(o.notifications.map((n) => n.id));
             window.__kanal.alarmer = window.__kanal.alarmer.filter((n) => !vekk.has(n.id));
@@ -192,6 +300,7 @@ function fakePlattform() {
             const levert = new Set(window.__kanal.levert);
             window.__kanal.pending = window.__kanal.pending.filter(
               (n) => !vekk.has(n.id) || levert.has(n.id));
+            window.__kanal.lagre();
           },
           addListener: async (navn, fn) => {
             if (navn === 'localNotificationActionPerformed') window.__kanal.trykk = fn;
@@ -1105,8 +1214,434 @@ async function run() {
   log('12f: … mens raden står i historikken, så varselet ikke er tapt',
     etterpå.rad.length === 1 && etterpå.rad[0].at === grense.at,
     JSON.stringify(etterpå.rad));
+  /* 12g) OG REGELEN HOLDER MED HØYPRIORITETSKANALEN. Alarmen som ble avlyst
+     her sto på Huskis' egen kanal, den som ber Android om et heads-up. Det er
+     nettopp derfor avlysningen er regelen: kanalen gjør systemvarselet MER
+     synlig, og et som kom i tillegg til toasten ville vært to varslinger om
+     det samme. Heads-up gjelder når appen ikke er der til å vise noe selv. */
+  const forgrunnsKanal = await pf.evaluate(() => ({
+    lagt: window.__kanal.schedule.flat().map((n) => n.channelId),
+    prio: window.__kanal.schedule.flat().map((n) => n.foreground),
+    ch: window.__huskis.NATIVE_CH_ID,
+  }));
+  log('12g: … og regelen holder selv om alarmen sto på høyprioritetskanalen',
+    forgrunnsKanal.lagt.length > 0 &&
+    forgrunnsKanal.lagt.every((c) => c === forgrunnsKanal.ch) &&
+    etterpå.toaster.length === 1 && etterpå.avlyst.indexOf(armertId) !== -1,
+    JSON.stringify({ kanaler: forgrunnsKanal.lagt, toaster: etterpå.toaster.length }));
+  /* `foreground: true` er Androids PRIORITET, ikke iOS-ens «vis selv om appen
+     er åpen»: pluginen gjør bare `setPriority(PRIORITY_HIGH)` av det. Alarmen
+     her bar flagget — og ble likevel avlyst da appen selv presenterte
+     varselet. Regelen ligger i diffen, ikke i et stille varsel. */
+  log('12h: … og heller ikke fordi varselet bærer høy prioritet',
+    forgrunnsKanal.prio.length > 0 && forgrunnsKanal.prio.every((f) => f === true) &&
+    etterpå.avlyst.indexOf(armertId) !== -1 && etterpå.toaster.length === 1,
+    JSON.stringify({ prioritet: forgrunnsKanal.prio, toaster: etterpå.toaster.length }));
 
   await ctxF.close();
+
+  /* ================= 13) ANDROIDS EGEN VARSELKANAL ==================
+     Et varsel som bare legger seg stille i varselpanelet er ikke et varsel om
+     at en frist har utløpt. Alarmene har derfor sin EGEN Android-kanal, med
+     høy viktighet og vibrasjon — det Android trenger for å vise varselet som et
+     heads-up. Låseskjermen er IKKE med: den kan en app ikke sette (se 13c2).
+
+     Det er en FORESPØRSEL, ikke en garanti: brukeren, «Ikke forstyrr» og
+     produsentens innstillinger har siste ord, og det er meningen. Det som
+     prøves her er derfor Huskis' halvdel — at kanalen ber om det den skal, at
+     hvert varsel faktisk planlegges på den, og at kanalen finnes FØR den
+     første alarmen armeres.
+
+     Og migreringen, som er det egentlige arbeidet: en installasjon som
+     allerede har alarmer, fikk dem armert før kanalen fantes. Android låser en
+     kanals viktighet i det den opprettes, så de gamle alarmene kan ikke løftes
+     over — de må planlegges på nytt. `getPending()` kan ikke fortelle hvilken
+     kanal en alarm står på (svaret bærer ikke feltet), så migreringen tar hele
+     planen, én gang per kanal-id, og må tåle å bli kjørt om igjen. */
+  const ctxK = await nyKontekst(browser);
+  const pk = await ctxK.newPage();
+  pk.on('pageerror', (e) => errs.push('kanal: ' + e.message));
+  const KURL = BASE + '/?mock=1&ch=native';
+  await seed(pk, KURL, buildDB(due));
+
+  log('13a: ingen kanal opprettes av seg selv — først når brukeren slår varslene på',
+    (await pk.evaluate(() => window.__kanal.kanaler.length)) === 0,
+    await pk.evaluate(() => JSON.stringify(window.__kanal.logg)));
+
+  await pk.evaluate(() => window.__huskis.setNotifChannel(true));
+  await pk.waitForFunction(() => window.__kanal.schedule.length > 0,
+    null, { timeout: 8000, polling: 100 });
+  await pk.waitForTimeout(300);
+
+  const k1 = await pk.evaluate(async () => {
+    const ln = window.Capacitor.Plugins.LocalNotifications;
+    const pending = await ln.getPending();
+    return {
+      chId: window.__huskis.NATIVE_CH_ID,
+      kanaler: window.__kanal.kanaler,
+      logg: window.__kanal.logg.slice(),
+      lagt: window.__kanal.schedule.flat().map((n) => ({
+        id: n.id, kanal: n.channelId,
+        fullScreen: n.fullScreenIntent, forgrunn: n.foreground, lyd: n.sound })),
+      alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, kanal: n.kanal })),
+      pendingFelter: (pending.notifications || []).map((n) => Object.keys(n).sort().join(',')),
+      merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+    };
+  });
+  const kanal = k1.kanaler[0];
+  log('13b: kanalen er ÉN, med Huskis’ egen stabile id',
+    k1.kanaler.length === 1 && !!kanal && kanal.id === k1.chId && /\S/.test(k1.chId),
+    JSON.stringify(k1.kanaler.map((k) => k.id)));
+  log('13c: … med HØY viktighet (4) og vibrasjon',
+    !!kanal && kanal.importance === 4 && kanal.vibration === true,
+    JSON.stringify(kanal));
+  /* LÅSESKJERMEN LOVES IKKE. Android nullstiller kanalens lockscreen-visibility
+     for en kanal appen selv oppretter, så et `visibility` herfra ville vært et
+     løfte telefonen ikke holder — og PUBLIC ville dessuten eksponert
+     påminnelsens tekst på en låst skjerm. Hva som vises der er brukerens egen
+     innstilling, med varselets PRIVATE som utgangspunkt. */
+  log('13c2: … og ingen låseskjermkontrakt: den ber ikke om det, og ville ikke fått det',
+    !!kanal && kanal.bedtVisibility === undefined && kanal.visibility === -1000,
+    JSON.stringify({ bedt: kanal && kanal.bedtVisibility, faktisk: kanal && kanal.visibility }));
+  /* Ingen medbrakt lydfil: pluginen rører aldri kanalens lyd når `sound` er
+     tom, og en Android-kanal har systemets vanlige varsellyd fra fødselen. */
+  log('13d: … og Androids vanlige varsellyd, ikke en egen lydfil',
+    !!kanal && kanal.sound === 'default' &&
+    k1.lagt.every((n) => n.lyd === undefined), JSON.stringify({ kanal: kanal && kanal.sound }));
+  log('13e: kanalen har et navn og en beskrivelse — teksten brukeren ser i systeminnstillingene',
+    !!kanal && /\S/.test(kanal.name || '') && /\S/.test(kanal.description || ''),
+    JSON.stringify({ navn: kanal && kanal.name, tekst: kanal && kanal.description }));
+  log('13f: HVERT native varsel planlegges eksplisitt på den kanalen',
+    k1.lagt.length > 0 && k1.lagt.every((n) => n.kanal === k1.chId),
+    JSON.stringify(k1.lagt.map((n) => n.kanal)));
+  /* Kanalen bakes inn i alarmen når den armeres, og kan ikke endres etterpå.
+     Derfor er REKKEFØLGEN et krav, ikke en detalj. */
+  log('13g: kanalen fantes FØR det første varselet ble planlagt',
+    k1.logg.indexOf('createChannel:' + k1.chId) === 0 &&
+    k1.logg.filter((x) => /^schedule:/.test(x)).length > 0 &&
+    k1.logg.findIndex((x) => /^createChannel:/.test(x)) <
+      k1.logg.findIndex((x) => /^schedule:/.test(x)), JSON.stringify(k1.logg));
+  /* Prioriteten er MED, og den er for Android 7 (API 24–25): der finnes ikke
+     kanaler, så det er notifikasjonens egen prioritet som avgjør heads-up.
+     Feltet heter `foreground` etter iOS-betydningen; på Android gjør det kun
+     `setPriority(PRIORITY_HIGH)`, som Android 8+ ser bort fra. Fullskjerm er
+     det fortsatt ingenting som ber om. */
+  log('13h: … varselet bærer høy prioritet for Android 7, og ingenting ber om fullskjerm',
+    k1.lagt.length > 0 && k1.lagt.every((n) => n.forgrunn === true) &&
+    k1.lagt.every((n) => n.fullScreen === undefined),
+    JSON.stringify(k1.lagt.map((n) => n.forgrunn)));
+  /* PREMISSET for migreringen: telefonen kan ikke svare på hvilken kanal en
+     alarm står på. `getPending()` bærer ikke feltet — pluginen lagrer det appen
+     sendte inn, og en gammel Huskis sendte ingen kanal i det hele tatt. */
+  log('13i: `getPending()` bærer INGEN channelId — kanalen kan ikke leses av telefonen',
+    k1.pendingFelter.length > 0 && k1.pendingFelter.every((f) => f.indexOf('channelId') === -1),
+    JSON.stringify(k1.pendingFelter[0]));
+  log('13j: enheten er merket med kanalen alarmene står på',
+    k1.merke === k1.chId, String(k1.merke));
+
+  /* ---------- 13k–13n) MIGRERING: en installasjon fra før kanalen ----------
+     Riggen er telefonen slik en eldre Huskis etterlot den: de samme alarmene,
+     armert på pluginens `default`-kanal, uten at Huskis-kanalen finnes og uten
+     merket som sier hvor alarmene står.
+
+     Først uten omstart, så migreringen kan måles ALENE: hva gjør Huskis med en
+     telefon som har alarmer på feil kanal? */
+  const rigg = (slettKanal) => pk.evaluate((slett) => {
+    window.__kanal.alarmer.forEach((n) => { n.kanal = 'default'; });
+    // Kanalen selv finnes bare i den riggen som også starter appen på nytt: en
+    // gammel installasjon har den ikke, og økten som alt har opprettet den
+    // husker det.
+    if (slett) window.__kanal.kanaler.length = 0;
+    window.__kanal.logg.length = 0;
+    window.__kanal.schedule.length = 0;
+    window.__kanal.cancel.length = 0;
+    window.__kanal.lagre();
+    localStorage.removeItem(window.__huskis.NATIVE_CH_KEY);
+    return {
+      alarmer: window.__kanal.alarmer.map((n) => n.id).sort(),
+      tider: window.__kanal.alarmer.map((n) => n.at).sort(),
+      kanaler: window.__kanal.alarmer.map((n) => n.kanal),
+    };
+  }, slettKanal);
+  const førMig = await rigg(false);
+  log('13k: riggen er en telefon med alarmer på den GAMLE kanalen',
+    førMig.alarmer.length > 0 && førMig.kanaler.every((k) => k === 'default'),
+    JSON.stringify({ alarmer: førMig.alarmer.length, kanaler: førMig.kanaler }));
+
+  await pk.evaluate(() => window.__huskis.syncNotifChannel());
+  await pk.waitForTimeout(400);
+  const mig1 = await pk.evaluate(() => ({
+    chId: window.__huskis.NATIVE_CH_ID,
+    logg: window.__kanal.logg.slice(),
+    alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, at: n.at, kanal: n.kanal })),
+    lagt: window.__kanal.schedule.flat().map((n) => ({ id: n.id, kanal: n.channelId })),
+    avlyst: window.__kanal.cancel.flat().map((n) => n.id),
+    kanaler: window.__kanal.kanaler,
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+  }));
+  log('13l: en uendret plan er IKKE «ingenting å gjøre» når kanalen er en annen',
+    mig1.lagt.length === førMig.alarmer.length && mig1.lagt.every((n) => n.kanal === mig1.chId),
+    JSON.stringify({ lagt: mig1.lagt.length, av: førMig.alarmer.length }));
+  /* Alarmen settes PÅ NYTT, den avlyses ikke først: pluginen erstatter den
+     gamle alarmen på den samme id-en selv, og et «avlys, så planlegg» ville
+     mistet alarmen om appen døde imellom. */
+  log('13m: … alarmene flyttes ved å planlegges på nytt, og det er HELE operasjonen',
+    mig1.avlyst.length === 0 && mig1.logg.length === 1 &&
+    /^schedule:/.test(mig1.logg[0] || ''), JSON.stringify(mig1.logg));
+  log('13n: … og telefonen står igjen med NØYAKTIG de samme alarmene, på den nye kanalen',
+    JSON.stringify(mig1.alarmer.map((n) => n.id).sort()) === JSON.stringify(førMig.alarmer) &&
+    JSON.stringify(mig1.alarmer.map((n) => n.at).sort()) === JSON.stringify(førMig.tider) &&
+    mig1.alarmer.every((n) => n.kanal === mig1.chId) &&
+    mig1.kanaler.length === 1 && mig1.kanaler[0].importance === 4 &&
+    mig1.merke === mig1.chId,
+    JSON.stringify({ før: førMig.alarmer.length, etter: mig1.alarmer.length,
+      merke: mig1.merke }));
+
+  /* ---------- 13o–13p) … og den samme migreringen over en APPOPPGRADERING ----
+     Det er slik den faktisk kommer: en ny versjon starter for første gang, med
+     telefonens alarmer allerede liggende fra den forrige. */
+  const førOmstart = await rigg(true);
+  await pk.goto(KURL);                       // appoppgradering: appen starter på nytt
+  await pk.waitForFunction(() => {
+    const H = window.__huskis;
+    return H && H.authUser && H.state.universes.length > 0 && !!H.notifPrefs;
+  }, null, { timeout: 15000, polling: 200 });
+  await pk.waitForFunction((n) => window.__kanal.alarmer.length === n &&
+    window.__kanal.alarmer.every((a) => a.kanal !== 'default'),
+    førOmstart.alarmer.length, { timeout: 15000, polling: 200 }).catch(() => {});
+  await pk.waitForTimeout(500);
+
+  const mig = await pk.evaluate(() => ({
+    chId: window.__huskis.NATIVE_CH_ID,
+    kanaler: window.__kanal.kanaler,
+    logg: window.__kanal.logg.slice(),
+    alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, at: n.at, kanal: n.kanal })),
+    pending: window.__kanal.pending.map((n) => n.id).sort(),
+    lagt: window.__kanal.schedule.flat().map((n) => ({ id: n.id, kanal: n.channelId })),
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+    plan: window.__huskis.planNotifications(window.__huskis.state, Date.now(),
+      window.__huskis.notifPrefs).map((r) => window.__huskis.nativeNotifId(
+        window.__huskis.nativeNotifSig(r))).sort(),
+  }));
+  log('13o: en oppgradert installasjon får alarmene over på den nye kanalen ved oppstart',
+    mig.alarmer.length > 0 && mig.alarmer.every((n) => n.kanal === mig.chId) &&
+    mig.lagt.length > 0 && mig.lagt.every((n) => n.kanal === mig.chId) &&
+    mig.merke === mig.chId, JSON.stringify(mig.alarmer.map((n) => n.kanal)));
+  // … og kanalen ble laget FØR den første alarmen — også her, der den ikke
+  // fantes fra før.
+  log('13o2: … og kanalen ble opprettet før migreringen planla noe',
+    mig.logg.indexOf('createChannel:' + mig.chId) !== -1 &&
+    mig.logg.findIndex((x) => /^createChannel:/.test(x)) <
+      mig.logg.findIndex((x) => /^schedule:/.test(x)), JSON.stringify(mig.logg));
+  log('13p: … de SAMME alarmene, uten dubletter og uten en mistet framtid',
+    JSON.stringify(mig.alarmer.map((n) => n.id).sort()) === JSON.stringify(førOmstart.alarmer) &&
+    JSON.stringify(mig.alarmer.map((n) => n.at).sort()) === JSON.stringify(førOmstart.tider) &&
+    JSON.stringify(mig.pending) === JSON.stringify(mig.plan) &&
+    mig.alarmer.length === mig.plan.length && mig.kanaler.length === 1,
+    JSON.stringify({ før: førOmstart.alarmer.length, etter: mig.alarmer.length,
+      plan: mig.plan.length }));
+
+  /* ---------- 13q–13r) GJENTATT SYNK OG OMSTART ER IDEMPOTENT ---------- */
+  await pk.evaluate(() => {
+    window.__kanal.schedule.length = 0;
+    window.__kanal.cancel.length = 0;
+    window.__kanal.logg.length = 0;
+  });
+  for (let i = 0; i < 3; i++) await cycle(pk);
+  await pk.evaluate(() => window.__huskis.syncNotifChannel());
+  await pk.waitForTimeout(400);
+  const idem1 = await pk.evaluate(() => ({
+    lagt: window.__kanal.schedule.flat().length,
+    avlyst: window.__kanal.cancel.flat().length,
+    kanaler: window.__kanal.kanaler.length,
+    alarmer: window.__kanal.alarmer.map((n) => n.id).sort(),
+  }));
+  log('13q: gjentatt synk etter migreringen rører ingenting — den kjøres ÉN gang',
+    idem1.lagt === 0 && idem1.avlyst === 0 && idem1.kanaler === 1 &&
+    JSON.stringify(idem1.alarmer) === JSON.stringify(mig.alarmer.map((n) => n.id).sort()),
+    JSON.stringify(idem1));
+
+  await pk.goto(KURL);                       // og en omstart til, nå uten noe å migrere
+  await pk.waitForFunction(() => {
+    const H = window.__huskis;
+    return H && H.authUser && H.state.universes.length > 0 && !!H.notifPrefs;
+  }, null, { timeout: 15000, polling: 200 });
+  for (let i = 0; i < 2; i++) await cycle(pk);
+  await pk.waitForTimeout(600);
+  const idem2 = await pk.evaluate(() => ({
+    alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, at: n.at, kanal: n.kanal })),
+    kanaler: window.__kanal.kanaler.length,
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+  }));
+  log('13r: … og en ny omstart etterlater de samme alarmene på den samme kanalen',
+    idem2.kanaler === 1 && idem2.merke === mig.chId &&
+    JSON.stringify(idem2.alarmer.map((n) => n.id).sort()) ===
+      JSON.stringify(mig.alarmer.map((n) => n.id).sort()) &&
+    JSON.stringify(idem2.alarmer.map((n) => n.at).sort()) ===
+      JSON.stringify(mig.alarmer.map((n) => n.at).sort()) &&
+    idem2.alarmer.every((n) => n.kanal === mig.chId), JSON.stringify(idem2));
+
+  /* ---------- 13s–13t) EN KANAL SOM IKKE BLE OPPRETTET STOPPER RUNDEN ----
+     Et varsel planlagt mot en kanal som ikke finnes, vises aldri på Android
+     8+. En feilet kanal må derfor ikke bli en stille suksess: da ville
+     telefonen fått stumme alarmer, og både merket og signaturen sagt «ferdig».
+     Runden skal feile, signaturen stå — og neste runde gjøre hele jobben. */
+  const førFeil = await rigg(true);
+  await pk.evaluate(() => { window.__kanal.kanalFeil = true; window.__kanal.lagre(); });
+  /* Appen startes på nytt, som etter en oppgradering: en økt som alt HAR
+     opprettet kanalen spør ikke om den igjen, og da ville feilen aldri blitt
+     prøvd. */
+  await pk.goto(KURL);
+  await pk.waitForFunction(() => {
+    const H = window.__huskis;
+    return H && H.authUser && H.state.universes.length > 0 && !!H.notifPrefs;
+  }, null, { timeout: 15000, polling: 200 });
+  await pk.waitForTimeout(1200);
+  const feilet = await pk.evaluate(() => ({
+    lagt: window.__kanal.schedule.flat().length,
+    kanaler: window.__kanal.kanaler.length,
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+    alarmer: window.__kanal.alarmer.map((n) => n.kanal),
+  }));
+  log('13s: en kanal som ikke lot seg opprette gir verken varsler eller et merke',
+    feilet.lagt === 0 && feilet.kanaler === 0 && feilet.merke === null &&
+    !feilet.alarmer.some((k) => k === k1.chId), JSON.stringify(feilet));
+
+  await pk.evaluate(() => { window.__kanal.kanalFeil = null; window.__kanal.lagre(); });
+  await pk.evaluate(() => window.__huskis.syncNotifChannel());
+  await pk.waitForTimeout(600);
+  const berget = await pk.evaluate(() => ({
+    chId: window.__huskis.NATIVE_CH_ID,
+    kanaler: window.__kanal.kanaler.length,
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+    alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, kanal: n.kanal })),
+  }));
+  log('13t: … og neste runde gjør hele jobben, med det samme',
+    berget.kanaler === 1 && berget.merke === berget.chId &&
+    JSON.stringify(berget.alarmer.map((n) => n.id).sort()) === JSON.stringify(førFeil.alarmer) &&
+    berget.alarmer.every((n) => n.kanal === berget.chId), JSON.stringify(berget));
+
+  /* ---------- 13u) SPRÅKBYTTE NÅR DET IKKE FINNES NOEN ALARM ----------
+     Navnet og beskrivelsen står i Androids systeminnstillinger, og er
+     brukerrettet tekst som alt annet. En telefon uten en eneste framtidig
+     terskel har ingenting å planlegge — og skal likevel få kanalnavnet på det
+     nye språket. */
+  await settTid(pk, id.LA, 'due', '');
+  await pk.waitForTimeout(600);
+  const tomPlan = await pk.evaluate(() => ({
+    plan: window.__huskis.planNotifications(window.__huskis.state, Date.now(),
+      window.__huskis.notifPrefs).length,
+    navn: (window.__kanal.kanaler[0] || {}).name,
+  }));
+  await pk.evaluate(() => window.HUSKIS_I18N.setLang('en'));
+  await pk.goto(KURL);                       // språkbyttet laster appen på nytt
+  await pk.waitForFunction(() => {
+    const H = window.__huskis;
+    return H && H.authUser && H.state.universes.length > 0 && !!H.notifPrefs;
+  }, null, { timeout: 15000, polling: 200 });
+  await pk.waitForFunction((gammelt) => window.__kanal.kanaler[0] &&
+    window.__kanal.kanaler[0].name !== gammelt, tomPlan.navn,
+    { timeout: 15000, polling: 200 }).catch(() => {});
+  const språk = await pk.evaluate(() => ({
+    plan: window.__huskis.planNotifications(window.__huskis.state, Date.now(),
+      window.__huskis.notifPrefs).length,
+    kanaler: window.__kanal.kanaler.length,
+    kanal: window.__kanal.kanaler[0],
+    ventet: { navn: window.HUSKIS_I18N.t('notif.android.channelName'),
+      tekst: window.HUSKIS_I18N.t('notif.android.channelDesc') },
+  }));
+  log('13u: et språkbytte når navnet i systeminnstillingene — også uten en eneste alarm',
+    tomPlan.plan === 0 && språk.plan === 0 && språk.kanaler === 1 &&
+    språk.kanal.name === språk.ventet.navn && språk.kanal.name !== tomPlan.navn &&
+    språk.kanal.description === språk.ventet.tekst,
+    JSON.stringify({ før: tomPlan.navn, nå: språk.kanal.name }));
+  /* … og resten av kanalen står som den ble laget: Android oppdaterer bare
+     navn og beskrivelse, og det er nettopp derfor id-en er versjonert. */
+  log('13v: … mens viktighet og vibrasjon står urørt',
+    språk.kanal.importance === 4 && språk.kanal.vibration === true,
+    JSON.stringify(språk.kanal));
+
+  await ctxK.close();
+
+  /* ---------- 13w–13y) ET OS UTEN KANALER STOPPER INGENTING ----------
+     Android under 8 (minSdk er 24) har ikke kanaler i det hele tatt, og
+     pluginen svarer `unavailable`. Der er `channelId` et felt pluginen ser bort
+     fra, mens den høye PRIORITETEN på varselet er det som gjelder — og
+     varselet skal komme fram som før.
+
+     EGEN KONTEKST, og det er ikke pynt: `ensureNativeChannel` memoiserer en
+     kanal som er opprettet, så en økt som alt har lyktes spør ikke igjen. Kjørt
+     der ville testen aldri nådd `UNAVAILABLE`-grenen, og vært grønn uansett hva
+     den grenen gjorde. Her er appen fersk, og sjekken krever at
+     `createChannel` faktisk BLE forsøkt. */
+  const ctxG = await nyKontekst(browser);
+  const pg = await ctxG.newPage();
+  pg.on('pageerror', (e) => errs.push('gammeltOS: ' + e.message));
+  await seed(pg, KURL, buildDB(due));
+  await pg.evaluate(() => { window.__kanal.kanalFeil = 'UNAVAILABLE'; window.__kanal.lagre(); });
+  await pg.evaluate(() => window.__huskis.setNotifChannel(true));
+  await pg.waitForFunction(() => window.__kanal.alarmer.length > 0,
+    null, { timeout: 10000, polling: 100 }).catch(() => {});
+  await pg.waitForTimeout(400);
+  const gammeltOS = await pg.evaluate(() => ({
+    chId: window.__huskis.NATIVE_CH_ID,
+    logg: window.__kanal.logg.slice(),
+    kanaler: window.__kanal.kanaler.length,
+    lagt: window.__kanal.schedule.flat().map((n) => ({ kanal: n.channelId, prio: n.foreground })),
+    alarmer: window.__kanal.alarmer.length,
+    plan: window.__huskis.planNotifications(window.__huskis.state, Date.now(),
+      window.__huskis.notifPrefs).length,
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+  }));
+  log('13w: kanalen BLE forsøkt opprettet, og OS-et svarte at den ikke finnes',
+    gammeltOS.logg.indexOf('createChannel:' + gammeltOS.chId) !== -1 &&
+    gammeltOS.logg.findIndex((x) => /^createChannel:/.test(x)) <
+      gammeltOS.logg.findIndex((x) => /^schedule:/.test(x)) &&
+    gammeltOS.kanaler === 0, JSON.stringify(gammeltOS.logg));
+  log('13x: … og varslene legges likevel, med kanal og prioritet på seg',
+    gammeltOS.plan > 0 && gammeltOS.lagt.length === gammeltOS.plan &&
+    gammeltOS.alarmer === gammeltOS.plan && gammeltOS.merke === gammeltOS.chId &&
+    gammeltOS.lagt.every((n) => n.kanal === gammeltOS.chId && n.prio === true),
+    JSON.stringify({ plan: gammeltOS.plan, lagt: gammeltOS.lagt.length,
+      merke: gammeltOS.merke }));
+  /* Svaret kan ikke endre seg mens appen kjører, så det huskes: neste runde
+     skal ikke koste en tur over broen for å få det samme svaret igjen. */
+  await pg.evaluate(() => {
+    window.__kanal.logg.length = 0;
+    window.__kanal.schedule.length = 0;
+    localStorage.removeItem(window.__huskis.NATIVE_CH_KEY);   // tvinger en full runde
+  });
+  await pg.evaluate(() => window.__huskis.syncNotifChannel());
+  await pg.waitForTimeout(400);
+  const igjen = await pg.evaluate(() => ({
+    logg: window.__kanal.logg.slice(),
+    alarmer: window.__kanal.alarmer.length,
+    merke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+  }));
+  log('13y: … og «finnes ikke» spørres ikke om på nytt i den samme økten',
+    igjen.logg.every((x) => !/^createChannel:/.test(x)) &&
+    igjen.alarmer === gammeltOS.plan && igjen.merke === gammeltOS.chId,
+    JSON.stringify(igjen));
+
+  await ctxG.close();
+
+  /* ---------- 13z1–13z3) INGEN NY TILLATELSE HAR SNEKET SEG INN ----------
+     Heads-up er en kanal med høy viktighet — og på Android 7, som ikke har
+     kanaler, varselets egen prioritet. INGENTING mer. De mekanismene
+     som eier skjermen — fullskjerm-varsler, «slå på skjermen», presise alarmer
+     — hører til alarmklokker og innkommende anrop, koster hver sin gjennomgang
+     i Google Play, og skal ikke inn bakveien med denne endringen. */
+  const manifest = fs.readFileSync(
+    path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+  const appSrc = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
+  log('13z1: Huskis ber ikke om USE_FULL_SCREEN_INTENT eller TURN_SCREEN_ON',
+    !/USE_FULL_SCREEN_INTENT/.test(manifest) && !/TURN_SCREEN_ON/.test(manifest) &&
+    !/WAKE_LOCK/.test(manifest));
+  log('13z2: SCHEDULE_EXACT_ALARM er fortsatt trukket tilbake, og varslene er upresise',
+    /SCHEDULE_EXACT_ALARM"\s*\n?\s*tools:node="remove"/.test(manifest) &&
+    /isExactNotification:\s*false/.test(appSrc));
+  log('13z3: koden setter ingen fullScreenIntent og tar ingen wake lock',
+    !/fullScreenIntent\s*:/.test(appSrc) && !/wakeLock|WakeLock|requestWakeLock/.test(appSrc));
 
   /* ================= Nettleser: uten avsendernøkkel ================= */
   const ctxU = await nyKontekst(browser);
