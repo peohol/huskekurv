@@ -126,9 +126,8 @@ Første versjon skal støtte:
 - angre / gjør om igjen;
 - vanlige tastatursnarveier for grunnleggende formatering der dette er naturlig.
 
-Aktuelle editorfunksjoner og UX-mønstre kan gjenbrukes fra `peohol/mdeditz`, men
-Huskis skal ikke få unødvendig teknisk kompleksitet eller en egen tung editor-
-arkitektur dersom enklere gjenbruk er tilstrekkelig.
+Editoren skal ikke gi Huskis unødvendig teknisk kompleksitet eller en egen tung
+editor-arkitektur når en enklere løsning er tilstrekkelig.
 
 ## Utklippstavlen
 

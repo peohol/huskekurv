@@ -17,6 +17,8 @@
     1. vercel.json har én 308-regel per alternativt domene, med hele pathen
        bevart (`/:path*` → `https://huskis.no/:path*`) — og ingen regel som
        redirecter huskis.no selv eller preview-deployenes egne verter.
+       Reglene KANONISERER, og gjør ingenting annet: ingen av dem plukker ut
+       én enkelt path, og ingen av dem sender trafikk til et fremmed origin.
     2. Guarden i index.html står FØR alt som kjører (config.js, app.js,
        mock-backenden, update-check.js) — redirecten skal skje før appen,
        en service worker eller lokal tilstand initialiseres.
@@ -93,6 +95,25 @@ check('vercel.json: preview-deployenes egne verter er urørt',
   ![...byHost.keys()].some((h) => /-peohols-projects\.vercel\.app$/.test(h)), [...byHost.keys()]);
 check('vercel.json: hver redirect-regel er bundet til nøyaktig én host',
   redirects.every((r) => ruleHost(r) !== null), redirects.map((r) => r.has));
+
+/* REDIRECTENE KANONISERER, OG GJØR INGENTING ANNET.
+
+   Løkken over sjekker de tre hostene ved navn. Disse to sjekkene er den
+   GENERISKE regelen som også dekker en regel ingen har skrevet ennå: hver
+   regel flytter HELE pathen fra én alternativ host til det kanoniske
+   originet. Ingen regel plukker ut én enkelt path, og ingen regel sender
+   trafikken videre til et fremmed origin.
+
+   En path-spesifikk videresending UT av Huskis er nettopp det som ikke skal
+   snike seg inn: da er adressen brukeren ser Huskis' egen, mens siden som
+   svarer er en annens — og `huskis.no` blir inngangsdør for noe Huskis ikke
+   eier, kontrollerer eller kan rette. Det som trenger sin egen adresse, skal
+   ha sin egen adresse. */
+check('vercel.json: ingen regel plukker ut én enkelt path (alle flytter hele `/:path*`)',
+  redirects.every((r) => r.source === '/:path*'), redirects.map((r) => r.source));
+check('vercel.json: ingen regel sender trafikk til et fremmed origin',
+  redirects.every((r) => String(r.destination || '').indexOf(CANONICAL + '/') === 0),
+  redirects.map((r) => r.destination));
 
 /* ================= B) Guarden i index.html ================= */
 const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');

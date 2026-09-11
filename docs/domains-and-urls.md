@@ -73,6 +73,16 @@ peker til `huskis.no`, som da ikke fant den. Med 308-en kan ingen bruker
 lenger STARTE en auth-flyt på et alternativt domene, og hele flyten skjer på
 ett origin med én lokal tilstand.
 
+**Redirectene kanoniserer, og gjør ingenting annet.** Hver regel i
+`vercel.json` flytter HELE pathen (`/:path*`) fra én alternativ host hjem til
+`huskis.no`. Ingen regel plukker ut én enkelt path, og ingen regel sender
+trafikk videre til et fremmed origin: `huskis.no` svarer for Huskis, og bare
+for Huskis. En path-spesifikk videresending ut av appen ville gjort adressen
+brukeren ser til Huskis' egen, mens siden som svarer var en annens — det som
+trenger sin egen adresse, skal ha sin egen adresse.
+`tests/canonical-origin.test.js` vokter begge delene generisk, også for en
+regel som ikke finnes ennå.
+
 ## To separate e-postsystemer
 
 Huskis sender e-post fra to helt uavhengige systemer — ikke bland dem sammen:
