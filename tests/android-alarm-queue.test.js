@@ -393,6 +393,14 @@ check('8o … og emulatoren får RAM og kjerner eksplisitt',
    minutters venting. */
 check('8p akselerasjonen sjekkes FØR oppstarten, og kreves',
   /emulator -accel-check/.test(wf) && /-accel on/.test(wf));
+/* `avdmanager` og `emulator` er ikke enige om hvor en AVD bor: den første skriver
+   til $ANDROID_USER_HOME/avd, den andre leter i $ANDROID_AVD_HOME,
+   $ANDROID_SDK_HOME/avd og $HOME/.android/avd. Uten en avtalt sti lages en AVD
+   emulatoren aldri finner — og feilen ser ut som en emulator som ikke vil starte. */
+check('8q1 AVD-stien er AVTALT mellom avdmanager og emulator',
+  /ANDROID_AVD_HOME=\$HOME\/\.android\/avd/.test(wf) && /GITHUB_ENV/.test(wf));
+check('8q2 … og emulatoren spørres SELV om den ser AVD-en før oppstart',
+  /emulator -list-avds \| grep -qx huskis/.test(wf));
 check('8q emulatorloggen skrives ut etter 20 s, uansett utfall',
   /tail -40 emulator\.log/.test(wf) && /pgrep -af qemu-system/.test(wf));
 check('8r … og hvert adb-kall i loggsamlingen har tak (uten enhet kan de henge)',

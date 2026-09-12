@@ -136,6 +136,14 @@ jobs:
           for d in platform-tools emulator cmdline-tools/latest/bin; do
             echo "$ANDROID_HOME/$d" >> "$GITHUB_PATH"
           done
+          # … OG avtal HVOR AVD-en skal bo. De to verktøyene er ikke enige av seg
+          # selv: `avdmanager` skriver til $ANDROID_USER_HOME/avd (på runneren
+          # ~/.config/.android/avd), mens `emulator` 37.x bare leter i
+          # $ANDROID_AVD_HOME, $ANDROID_SDK_HOME/avd og $HOME/.android/avd. Uten
+          # denne linjen lager avdmanager en AVD emulatoren aldri finner — og
+          # feilen ser ut som en emulator som ikke vil starte.
+          echo "ANDROID_AVD_HOME=$HOME/.android/avd" >> "$GITHUB_ENV"
+          mkdir -p "$HOME/.android/avd"
 
       - name: Lag og start emulatoren
         run: |
@@ -147,12 +155,19 @@ jobs:
           # blir ferdig å boote. `-accel-check` avslutter med feil hvis den ikke
           # kan brukes, og da skal jobben si det med én gang.
           emulator -accel-check
+          echo "ANDROID_AVD_HOME=$ANDROID_AVD_HOME"
           echo no | avdmanager create avd -n huskis -k "$EMU_IMAGE" --force
-          # HVOR AVD-en havnet er ikke gitt: nyere SDK-verktøy følger
-          # ANDROID_USER_HOME (ofte ~/.config/.android på runneren), ikke
-          # ~/.android. Den skrives ut i stedet for å antas — et steg som
-          # skriver til en gjettet sti feiler uten å si hvorfor.
           avdmanager list avd
+          # SPØR EMULATOREN SELV om den ser AVD-en. Det er den ene sjekken som
+          # betyr noe: `avdmanager` kan ha skrevet den et sted emulatoren ikke
+          # leter, og da svarer den «Unknown AVD name» etter at vi har ventet fem
+          # minutter på en enhet som aldri kommer.
+          if ! emulator -list-avds | grep -qx huskis; then
+            echo "Emulatoren ser ingen AVD som heter «huskis»" >&2
+            echo "-- emulator -list-avds --" >&2; emulator -list-avds >&2 || true
+            echo "-- $ANDROID_AVD_HOME --" >&2; ls -la "$ANDROID_AVD_HOME" >&2 || true
+            exit 1
+          fi
           # RAM og kjerner eksplisitt: en AVD laget uten en enhetsprofil får
           # standardverdier som er for små for et moderne Android, og da bruker
           # oppstarten evigheter (eller kommer aldri).
