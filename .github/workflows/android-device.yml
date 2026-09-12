@@ -1,0 +1,154 @@
+name: Android enhetsrunde
+
+# Kjører den MASKINELLE delen av den fysiske Android-runden for varslene
+# (tests/android-device.js) på en ekte Android-emulator — alarmkøen, en
+# appomstart, en drept prosess, en telefonrestart, et levert varsel og trykket
+# på det. Det er den samme fila eieren kjører mot sin egen telefon; forskjellen
+# er bare hvilken enhet som svarer, og at emulatoren ikke er innlogget (den
+# kjører derfor RIGG-modus, se fila).
+#
+# Kjeden er den vanlige, pluss en emulator:
+#
+#   node build.js → dist/ → cap sync android → gradlew assembleDebug
+#                 → adb install → node tests/android-device.js
+#
+# Uten dette steget er harnesset bare en fil. MED det er alt i den fysiske
+# runden som ikke krever et øye, maskinelt bevist på hver PR som rører
+# Android-siden (docs/mobilapp-plan.md, «Det som MÅ prøves på telefon»).
+#
+# Trigger: manuelt, og på de pull requestene som kan gjøre runden ugyldig.
+# Vanlige Huskis-PR-er skal ikke betale for en emulator.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'android/**'
+      - 'capacitor.config.json'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'build.js'
+      - 'tests/android-device.js'
+      - 'tests/android-alarm-queue.test.js'
+      - '.github/workflows/android-device.yml'
+
+concurrency:
+  group: android-device-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  enhet:
+    name: Varslene på en emulator
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Installer npm-avhengighetene reproduserbart
+        run: npm ci
+
+      - name: Bygg webappen
+        run: node build.js
+
+      - name: Kopier dist/ inn i Android-prosjektet
+        run: npx cap sync android
+
+      # Emulatoren trenger maskinvarevirtualisering for å være raskere enn
+      # ubrukelig. Runneren HAR /dev/kvm, men bare for gruppen `kvm` —
+      # regelen under gir den til alle, som er den vanlige oppskriften.
+      - name: Slå på KVM
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      # Plattformen leses fra android/variables.gradle, som i debug-APK-jobben,
+      # så SDK-en og prosjektet ikke kan komme i utakt. SYSTEMBILDET er et annet
+      # valg: det finnes ikke alltid for det ferskeste nivået, så kandidatene
+      # prøves ovenfra og ned og den første som installeres vinner.
+      - name: Installer SDK, emulator og systembilde
+        run: |
+          set -euo pipefail
+          sdk="$(grep -oE 'compileSdkVersion[[:space:]]*=[[:space:]]*[0-9]+' android/variables.gradle | grep -oE '[0-9]+')"
+          echo "compileSdkVersion=$sdk"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          # `yes` dør av SIGPIPE i det sdkmanager slutter å lese, og med
+          # pipefail ville den døden blitt lest som en feilet godkjenning.
+          set +o pipefail
+          yes | "$sdkmanager" --licenses > /dev/null
+          set -o pipefail
+          "$sdkmanager" "platforms;android-$sdk" platform-tools emulator
+          img=""
+          for n in "$sdk" 35 34; do
+            kandidat="system-images;android-$n;google_apis;x86_64"
+            if "$sdkmanager" "$kandidat"; then img="$kandidat"; break; fi
+          done
+          if [ -z "$img" ]; then echo "Fant ingen systembilde å kjøre på" >&2; exit 1; fi
+          echo "EMU_IMAGE=$img" >> "$GITHUB_ENV"
+          echo "Systembilde: $img"
+
+      - name: Lag og start emulatoren
+        run: |
+          set -euo pipefail
+          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" \
+            create avd -n huskis -k "$EMU_IMAGE" --force
+          # Nok datapartisjon til en APK og en runde med dumper.
+          echo 'disk.dataPartition.size=6144M' >> "$HOME/.android/avd/huskis.avd/config.ini"
+          nohup "$ANDROID_HOME/emulator/emulator" -avd huskis \
+            -no-window -no-audio -no-boot-anim -no-snapshot \
+            -gpu swiftshader_indirect -camera-back none -camera-front none \
+            > emulator.log 2>&1 &
+          adb wait-for-device
+          # `sys.boot_completed` er det ene signalet som betyr at systemet er
+          # oppe. Uten ventingen installerer vi mot en halvbooted enhet.
+          timeout 600 bash -c \
+            'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 3; done'
+          adb shell input keyevent 82      # lås opp (ingen PIN på en ny AVD)
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+          adb shell getprop ro.build.version.sdk
+
+      - name: Bygg debug-APK
+        working-directory: android
+        run: ./gradlew --no-daemon assembleDebug
+
+      # Selve runden. `--install` tar APK-en inn, og harnesset gjør resten —
+      # inkludert en EKTE omstart av emulatoren (punkt G), som er grunnen til at
+      # jobben har romslig tid.
+      - name: Kjør varselrunden på enheten
+        run: node tests/android-device.js --install android/app/build/outputs/apk/debug/app-debug.apk
+
+      # Når runden feiler er loggene hele forklaringen: hva emulatoren gjorde,
+      # og hva appen sa over broen.
+      - name: Samle logger
+        if: always()
+        run: |
+          mkdir -p device-logs
+          cp emulator.log device-logs/ || true
+          adb logcat -d > device-logs/logcat.txt || true
+          adb shell dumpsys alarm > device-logs/dumpsys-alarm.txt || true
+          adb shell dumpsys notification --noredact > device-logs/dumpsys-notification.txt || true
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: huskis-device-logs
+          path: device-logs
+          if-no-files-found: warn

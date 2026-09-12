@@ -20,6 +20,7 @@ Rene node-tester (ingen server, ingen nettleser):
 node tests/build-version.test.js      # build.js + vercel.json
 node tests/capacitor-android.test.js  # Capacitor-skallet: dist/ som web-assets, ingen server.url
 node tests/android-release.test.js    # butikkbinæren: package ID, versionCode/-Name, release-signering
+node tests/android-alarm-queue.test.js # enhetsrunden for varslene: dumpsys-lesingen + tapp-intenten
 node tests/no-legacy-domain.test.js   # repo-vid vakt mot det pensjonerte domenet
 node tests/release-pipeline.test.js   # rekkefølgen migrering → smoke → deploy
 node tests/db-contract.test.js        # smoke-test.sql i takt med app.js
@@ -35,6 +36,36 @@ nøyaktig det CI kjører:
 tests/run-all.sh
 SHARD_INDEX=1 SHARD_TOTAL=4 tests/run-all.sh   # slik CI deler den opp
 ```
+
+## Enhetsrunden: `android-device.js`
+
+`tests/android-device.js` er ikke en del av suiten, og kan ikke være det: den
+krever en ekte Android-enhet. Den er den MASKINELLE halvdelen av den fysiske
+varselrunden (`docs/mobilapp-plan.md`) — alarmkøen, en appomstart, en drept
+prosess, en telefonrestart, et levert varsel og trykket på det — og kjøres mot
+en telefon eller en emulator:
+
+```bash
+adb devices                                       # nøyaktig én enhet
+node tests/android-device.js --install android/app/build/outputs/apk/debug/app-debug.apk
+node tests/android-device.js --plan               # hva den gjør, uten å kjøre noe
+node tests/android-device.js --no-reboot          # uten å restarte enheten
+```
+
+Den snakker DevTools-protokoll med appens egen WebView over `adb forward`, så
+det er appens egen adapter som planlegger — harnesset leser bare svaret ut av
+`dumpsys`. Er enheten innlogget med varsler PÅ, måles brukerens EGEN plan
+(LIVE); ellers planlegges tre syntetiske alarmer gjennom den samme adapteren
+(RIGG), og punktene som krever en økt rapporteres som SKIP med grunnen.
+
+`.github/workflows/android-device.yml` kjører den på en emulator, så runden ikke
+bare er en fil noen kan kjøre. Det som IKKE kan automatiseres — heads-up,
+lyd/vibrasjon og låseskjerm — skriver harnesset ut som tre spørsmål til slutt.
+
+De rene delene (lesingen av `dumpsys alarm`, sammenligningen av tidssett, formen
+på tapp-intenten) kjøres av `tests/android-alarm-queue.test.js` i den vanlige
+node-runden, mot ekte dumper fra flere Android-versjoner. En parser som teller
+feil ville ellers bestått hver enhetsrunde uten å måle noe.
 
 Én fil her er ikke en test, men en GENERATOR:
 

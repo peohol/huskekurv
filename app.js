@@ -28980,6 +28980,18 @@
     get devices() { return devicesRows; },
     get pushRevokedHere() { return notifPushRevoked; },
     notifChannelWanted, setNotifChannelWanted, notifExternalLabels,
+    /* TRYKKET på et eksternt varsel, sett fra appen. Begge kanalene ender i
+       `openNotifTargetFromChannel`, og de to feltene er alt den etterlater:
+       nøkkelen til varselet som ble trykket, og — når appen ennå ikke er
+       innlogget og synket — pekeren som står PARKERT til den er det.
+
+       De leses av `tests/android-device.js` på en ekte telefon. ADB kan levere
+       nøyaktig den intenten varselets eget trykk leverer, men ingenting i DOM-en
+       sier at den kom fram på en kaldstart: objektet pekeren viser til er ikke
+       lastet ennå. Uten disse to er trykket det ene punktet som bare et øye kan
+       bekrefte. */
+    get notifPendingTarget() { return notifPendingTarget; },
+    get notifChannelTapped() { return notifChannelTapped; },
     androidChannel, webChannel,
     /* Androids varselkanal: id-en alarmene planlegges med, og merket som sier
        hvilken kanal enhetens alarmer STÅR på. Testene bruker dem til å rigge en

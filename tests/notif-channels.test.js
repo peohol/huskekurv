@@ -22,7 +22,9 @@
         SCHEDULE_EXACT_ALARM — og en alarm som har flyttet seg ERSTATTES: et
         tidssonebytte gir samme varsel en ny absolutt tid, et nytt objektnavn gir
         det ny tekst, og i begge tilfeller er den gamle alarmen borte etterpå.
-     3. Trykk på et native varsel navigerer til objektet.
+     3. Trykk på et native varsel navigerer til objektet — og nøkkelen fra
+        trykket er LESBAR utenfra, som er kontrakten enhetsrunden
+        (`tests/android-device.js`) leser på en ekte telefon.
      4. Web push-kanalen: uten avsendernøkkel finnes den ikke; med nøkkel kan
         den slås på, den skriver et abonnement, den fornyer seg selv, og den
         slås av igjen — abonnementet forsvinner fra serveren. Og grensene for
@@ -938,6 +940,22 @@ async function run() {
     return { flash: !!document.querySelector('.nav-flash'), finnes: !!el };
   }, id.LA);
   log('3: et trykk på varselet navigerer til objektet', truffet.finnes, JSON.stringify(truffet));
+
+  /* … og trykket er OBSERVERBART fra utsiden. `tests/android-device.js` leverer
+     pluginens egen tapp-intent med ADB på en ekte telefon, og har ingen annen
+     måte å se at den kom fram: på en kaldstart er objektet pekeren viser til ikke
+     lastet ennå. Settet med trykkede nøkler er derfor kontrakten runden leser. */
+  const observert = await pn.evaluate(async (x) => {
+    window.__kanal.trykk({ notification: { extra:
+      { objType: 'card', objId: x.id, key: 'rigg:nøkkel@1' } } });
+    await new Promise((r) => setTimeout(r, 300));
+    const H = window.__huskis;
+    return { tapped: [...(H.notifChannelTapped || [])], peker: H.notifPendingTarget || null };
+  }, { id: id.LA });
+  log('3b: nøkkelen fra trykket er lesbar utenfra (enhetsrunden leser nettopp den)',
+    observert.tapped.includes('rigg:nøkkel@1'), JSON.stringify(observert.tapped));
+  log('3c: pekeren er TOM når appen var innlogget og synket — den ble tatt med én gang',
+    observert.peker === null, JSON.stringify(observert.peker));
 
   /* 9 for den native kanalen: nøkkelen ligger i `extra` og følger med trykket. */
   await ingenRedundantToast(pn, '9n', id.IA, (peker) => pn.evaluate((x) => {

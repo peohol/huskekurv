@@ -1147,6 +1147,54 @@ treg nedrigging som ikke kan ta den nye brukerens nye alarmer, en enhet uten
 merket som starter uten nett og likevel får planen tilbake, og en speiling som
 ble utstedt før utloggingen og derfor ikke får planlegge noe.
 
+#### Hva en ENHET har svart, og hva bare et øye kan svare på
+
+Alt over er dekket av `tests/notif-channels.test.js` mot en fake pluginbro, og
+omregningen av veggtid av `HuskisWallClockTest` på JVM-en. Ingen av dem ser
+ANDROID. Det gjør `tests/android-device.js`: den maskinelle runden mot en ekte
+telefon eller en emulator, kjørt av
+`.github/workflows/android-device.yml` på hver PR som rører Android-siden.
+
+Harnesset snakker DevTools-protokoll med appens egen WebView over `adb forward`.
+Det planlegger ingenting selv — det ber ADAPTEREN om runden og leser svaret ut
+av Androids egne dumper. Er enheten innlogget med varsler PÅ, er subjektet
+brukerens EGEN plan; ellers planlegges tre syntetiske alarmer gjennom den samme
+adapteren, og punktene som krever en økt rapporteres som hoppet over, med
+grunnen.
+
+Dette er MÅLT på enhet:
+
+| Det som måles | Hvordan |
+|---|---|
+| planen ligger i Androids alarmkø | `dumpsys alarm`: én armert alarm per terskel, på tidspunktet planen sier |
+| alarmene er upresise og vekkende | alarmens egen `type=RTC_WAKEUP`, og ingen SCHEDULE_EXACT_ALARM i den INSTALLERTE APK-en (`dumpsys package`) |
+| kanalen finnes, med høy viktighet | pluginens `listChannels()` leser Androids egen NotificationManager |
+| en vanlig appomstart rører dem ikke | samme kø før og etter, OG ingen `cancel`/`schedule` over pluginbroen (Capacitors egen logg) |
+| prosessen fjernet | `am kill` — og køen står |
+| telefonen restartet | `adb reboot`, og alarmene er tilbake på de samme tidspunktene |
+| varselet blir levert med appen borte | `dumpsys notification`: postet på `huskis-notif-v1`, rangert HIGH |
+| trykket bærer pekeren inn, også fra kaldstart | pluginens egen tapp-intent, sendt med `am start` mot en død prosess |
+| brukerbyttet rydder | enhetens eiermerke settes til en annen uid, og oppstarten rigger ned |
+
+**`am kill`, ikke `force-stop`.** De to ser like ut og er helt ulike: en
+`force-stop` AVLYSER appens alarmer og setter appen i «stopped state», der den
+ikke får kringkastinger i det hele tatt. Da prøver man Androids regel for en app
+brukeren har stoppet — ikke Huskis' kode, og ikke det en sveip i Recents gjør.
+
+**Tapp-intenten er pluginens, ikke vår.** `contentIntent` er en
+`PendingIntent.getActivity` over MAIN/LAUNCHER mot MainActivity, med
+SINGLE_TOP|CLEAR_TOP og tre extras — varsel-ID-en, handlingen og hele varselet
+som JSON. `am start` med nøyaktig de samme extras leverer altså det samme som et
+trykk. Det ADB ikke kan, er fingeren: at varselet er SYNLIG og trykkbart er et
+øyepunkt. Formene er lest ut av en pinnet pluginversjon, og
+`tests/android-alarm-queue.test.js` feller et versjonsløft som ikke har vært
+innom dem.
+
+Og det enheten IKKE kan svare på maskinelt er presentasjonen, fordi Android eier
+den: **heads-up-banneret, lyden/vibrasjonen og låseskjermen**. Harnesset skriver
+dem ut som tre spørsmål til slutt, og de er de eneste som står igjen for et
+menneske (`docs/mobilapp-plan.md`).
+
 Ikonene står under «Ikonene i et systemvarsel».
 
 ### Nettleser: web push
@@ -1906,6 +1954,24 @@ De to henger sammen på nøyaktig ett punkt, og ellers ikke:
   Tokyo gir nytt absolutt tidspunkt og samme veggtid, ID og tekst er urørt, en
   alarm som alt har ringt røres ikke, uendret sone gir ingen skriving, og
   sommertid tas av kalenderen.
+- `tests/android-device.js` — den MASKINELLE runden mot en ekte enhet, kjørt av
+  `.github/workflows/android-device.yml` på en emulator: at planen ligger i
+  Androids alarmkø på riktig tidspunkt, at alarmene er vekkende og upresise og at
+  den INSTALLERTE APK-en ikke ber om SCHEDULE_EXACT_ALARM, at kanalen finnes med
+  høy viktighet, at en vanlig appomstart verken avlyser eller planlegger noe
+  (lest av Capacitors egen broLOGG, ikke bare av køen), at alarmene står når
+  prosessen er drept og kommer tilbake etter en ekte omstart, at et varsel
+  leveres med appen borte — på Huskis-kanalen, rangert HIGH — at pluginens egen
+  tapp-intent bærer pekeren inn i appen fra en KALDSTART, og at et brukerbytte
+  rydder forrige brukers alarmer.
+- `tests/android-alarm-queue.test.js` — de delene av enhetsrunden som kan prøves
+  uten en enhet, og som ville gjort en grønn runde verdiløs om de var feil:
+  lesingen av `dumpsys alarm` i alle tidsformene Android bruker (og at
+  statistikkseksjonene ikke telles som framtid), sammenligningen av to tidssett,
+  formen på tapp-intenten med pluginens egne nøkler, at harnesset er pinnet til
+  pluginversjonen formene er lest av, at det bruker `am kill` og aldri
+  `force-stop`, at appen eksponerer de to observatørene runden leser — og at CI
+  faktisk kjører runden.
 - `tests/push-auth.test.js` — headerne, KJØRT: en ny secret key havner kun på
   `apikey` og ingen andre steder, en legacy-nøkkel får fortsatt begge, og en
   `sb_secret_…` på `Authorization` slipper ikke inn. Testen feiler hvis noen

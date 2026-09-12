@@ -25,9 +25,9 @@ autoritative dokumentet for fagfeltet.
 | Neste praktiske steg — fase 4 | Ingen. Fasen er ferdig; de to «vurder …»-punktene fikk sitt svar i fase 5 |
 | Neste praktiske steg — fase 5 | Ingen. Fasen er ferdig; produksjons-OTA, readiness, rollback og karantene er målt på fysisk Android |
 | Neste praktiske steg — fase 6 | Opprett Google Play Developer-kontoen, lag upload-nøkkelen og legg inn de fire `ANDROID_UPLOAD_*`-secretene — så kan «Android release-AAB» kjøres og AAB-en lastes opp til internt testspor (fase 6, «Slik lager du upload-nøkkelen»). Butikkoppføringens egen grafikk (512×512-ikon, screenshots) lages i Play Console; appikonet i binæren er på plass |
-| Neste praktiske steg — varsler | Kjør den fysiske Android-runden for varselkanalen (se «Native varsler», «Det som MÅ prøves på telefon»). Koden og de automatiske vaktene er på plass; ingenting av den native leveringen er prøvd på en enhet ennå. Det tyngste punktet er tidssonebyttet med appen HELT lukket — framgangsmåten står i listen |
+| Neste praktiske steg — varsler | Kjør `node tests/android-device.js` én gang mot din egen telefon (den kjører da i LIVE-modus og måler din egen plan), og svar på de tre spørsmålene den skriver ut til slutt: heads-up, låseskjerm og fingeren på varselet. Alt annet i runden er maskinelt bevist |
 | OTA | Innført ende til ende og verifisert på fysisk Android: signert produksjonsbundle, manifest per native nivå, native nedlasting, oppstilling, trygg aktivering, varig aktivering, readiness, rollback og karantene. Ferdigkriteriet er oppfylt |
-| Varsler | **Innført, ikke fysisk verifisert.** Android får lokale systemvarsler planlagt på enheten; nettleseren får web push. Begge leverer den samme planen generatoren allerede logger ([`varsler.md`](varsler.md)) — ingen ny varselmodell. Alarmene følger telefonens tidssone også når appen er lukket, gjennom en `TIMEZONE_CHANGED`-mottaker som regner om de planlagte alarmene og skriver den korrigerte tiden tilbake til pluginens lagring (`varsler.md`, «Når sonen endres mens appen ikke kjører»). Automatisk dekket av `tests/notif-channels.test.js`, `tests/notif-plan.test.js`, `tests/notif-timezone-native.test.js`, `tests/notif-native-devices.test.js`, `tests/push-crypto.test.js`, `tests/push-auth.test.js`, `tests/capacitor-android.test.js` og `android/app/src/test/…/HuskisWallClockTest.java`. Appen står også i «Enheter med varsler» og kan slås av derfra — med den ærlige begrensningen at en LUKKET app først tar ned alarmene sine neste gang den er i bruk ([`varsler.md`](varsler.md), «Android i enhetslisten»). Den fysiske runden gjenstår |
+| Varsler | **Innført. Den maskinelle delen av den fysiske runden er AUTOMATISERT og kjøres på en emulator i CI; LIVE-runden på eierens egen telefon og tre øyepunkter står igjen.** Android får lokale systemvarsler planlagt på enheten; nettleseren får web push. Begge leverer den samme planen generatoren allerede logger ([`varsler.md`](varsler.md)) — ingen ny varselmodell. Alarmene følger telefonens tidssone også når appen er lukket, gjennom en `TIMEZONE_CHANGED`-mottaker som regner om de planlagte alarmene og skriver den korrigerte tiden tilbake til pluginens lagring (`varsler.md`, «Når sonen endres mens appen ikke kjører»). `tests/android-device.js` er den maskinelle runden mot en ekte enhet, og `.github/workflows/android-device.yml` kjører den på en emulator på hver PR som rører Android-siden: alarmkøen mot planen, en vanlig appomstart, en drept prosess, en EKTE omstart av enheten, et tidssonebytte med appen helt lukket, en levering med radioen AV, trykket fra kaldstart, og opprydningen ved brukerbytte. Automatisk dekket ellers av `tests/notif-channels.test.js`, `tests/notif-plan.test.js`, `tests/notif-timezone-native.test.js`, `tests/notif-native-devices.test.js`, `tests/android-alarm-queue.test.js`, `tests/push-crypto.test.js`, `tests/push-auth.test.js`, `tests/capacitor-android.test.js` og `android/app/src/test/…/HuskisWallClockTest.java`. Appen står også i «Enheter med varsler» og kan slås av derfra — med den ærlige begrensningen at en LUKKET app først tar ned alarmene sine neste gang den er i bruk ([`varsler.md`](varsler.md), «Android i enhetslisten»). Det som står igjen er presentasjonen Android selv eier — heads-up, lyd/vibrasjon og låseskjerm — og én runde på eierens EGEN telefon, som måler brukerens egen plan i stedet for riggens |
 | iOS | Senere fase; ikke en del av første implementering |
 
 ### Slik holdes planen levende
@@ -2794,85 +2794,139 @@ også skriver `ic_stat_huskis.xml` — geometrien står ETT sted, og
 `tests/notif-channels.test.js` (10i–10m) sjekker at drawable-en og web push-
 badgen bærer nøyaktig de samme banene. Autoritativt: `docs/varsler.md`.
 
-## Det som MÅ prøves på telefon
+## Den maskinelle runden: `tests/android-device.js`
 
-Punktene under er fasen sitt ferdigkriterium, og de skal ikke krysses av før
-de faktisk er kjørt på en enhet. De avkryssede er observert på fysisk
-Android (Samsung, rein installasjon); resten står igjen.
+Den fysiske runden er delt i to, og skillet er ikke en smaksdom: **ADB kan lese
+Androids alarmkø, drepe en prosess, restarte enheten, bytte tidssone og levere
+den samme intenten et varseltrykk leverer. Det ADB ikke kan, er å SE.**
+
+Alt i den første halvdelen er automatisert i `tests/android-device.js`, og
+`.github/workflows/android-device.yml` kjører den på en ekte emulator på hver PR
+som rører Android-siden — så runden ikke bare er en fil noen kunne kjørt.
+Harnesset snakker DevTools-protokoll med appens egen WebView over `adb forward`:
+det planlegger ingenting selv, det ber ADAPTEREN om runden og leser svaret ut av
+`dumpsys`. Mekanikken står i [`varsler.md`](varsler.md), «Hva en ENHET har
+svart».
+
+Mot din egen telefon:
+
+```bash
+npm run android:debug        # dist/ → android/ → debug-APK
+node tests/android-device.js --install android/app/build/outputs/apk/debug/app-debug.apk
+```
+
+Er telefonen innlogget med systemvarsler PÅ, kjører runden i **LIVE**-modus og
+måler din EGEN plan mot Androids kø. Ellers planlegges tre syntetiske alarmer
+gjennom den samme adapteren (**RIGG**) — det er modusen emulatoren i CI kjører,
+og den ene tingen den da ikke kan prøve (et reelt brukerbytte) rapporteres som
+hoppet over, med grunnen. Runden endrer alarmkøen og rydder etter seg: diffen i
+adapteren er selvhelende, og harnesset MÅLER at planen er tilbake til slutt.
+
+`node tests/android-device.js --plan` skriver ut hele rekkefølgen uten å kjøre
+noe. `--no-reboot` hopper over omstarten av enheten og prøver pluginens
+oppstartsmottaker direkte i stedet.
+
+### Allerede observert på fysisk Android
 
 - [x] tillatelsesdialogen kommer ved bryteren, og bare der — Android spør ikke
-      ved oppstart, dialogen kommer først når systemvarsler slås PÅ i Huskis,
-      og tillatelsen beholdes etterpå;
+      ved oppstart, dialogen kommer først når systemvarsler slås PÅ i Huskis, og
+      tillatelsen beholdes etterpå. Harnesset bekrefter at tillatelsen er gitt før
+      det måler noe, og stopper med en beskjed hvis den mangler (A3);
 - [x] **med appen i forgrunnen: in-app-toasten leveres; et redundant
       systemvarsel er IKKE påkrevd.** Dette er produktregelen, ikke en mangel:
       terskelen som nettopp passerte er ute av den framtidige native planen, og
       diffen avlyser den armerte alarmen i den samme runden som toasten vises
       ([`varsler.md`](varsler.md), «Én synlig varsling»). Maskinelt låst av
-      `tests/notif-channels.test.js` 12;
-- [x] med appen i bakgrunnen: Android-systemvarselet leveres;
-- [ ] … og det vises som HEADS-UP — banneret over skjermen. Kanalens høye
-      viktighet er en FORESPØRSEL, så dette er punktet bare en telefon kan svare
-      på: brukeren, «Ikke forstyrr» og produsentens innstillinger har siste ord.
-      Sjekk samtidig at kanalen («Påminnelser») står i Androids
-      varselinnstillinger for Huskis, med lyd og vibrasjon;
-- [ ] en OPPGRADERING fra en versjon uten kanalen: alarmer som alt var
-      planlagt kommer fortsatt, nå som heads-up, og bare ÉN gang. Migreringen
-      er maskinelt dekket av `tests/notif-channels.test.js` 13, men bare mot en
-      fake pluginbro;
-- [ ] med prosessen fjernet fra Recents: Android-systemvarselet leveres;
-- [ ] en vanlig OMSTART av appen: alarmene som alt var planlagt blir STÅENDE.
-      `adb shell dumpsys alarm | grep -A 3 no.huskis.app` før og etter skal vise
-      de samme alarmene, uten at de avlyses og legges inn igjen. Maskinelt dekket
-      av `tests/notif-channels.test.js` 14, men bare mot en fake pluginbro;
-- [ ] en ANNEN bruker logger inn på den samme telefonen: forrige brukers alarmer
-      er borte etterpå (de bærer objektnavn), og bare den nye brukerens plan står
-      i `dumpsys alarm`;
-- [ ] varsel etter en telefonrestart (pluginens `BOOT_COMPLETED`-mottaker skal
-      stille opp igjen det som var planlagt);
-- [ ] trykk på varselet åpner riktig Huskis-objekt — også fra kaldstart, der
-      pekeren må vente på at innlogging og første synk er ferdige;
-- [ ] en endret frist avlyser den gamle planen og legger en ny;
-- [ ] fullføring avlyser den framtidige planen;
-- [ ] offline ved tidspunktet: alarmen er lokal og skal fyre uansett;
-- [ ] offline NÅR FRISTEN SETTES: alarmen skal legges inn selv om ingen
-      synk-runde når fram (planen speiles av `save()`, ikke bare av en
-      vellykket pull — `tests/notif-channels.test.js` 11);
-- [ ] et tidssonebytte MENS APPEN KJØRER — at den gamle alarmen faktisk er
-      BORTE etter byttet, ikke bare at en ny er lagt inn (maskinelt dekket av
-      `tests/notif-channels.test.js` 2n–2v, men bare mot en fake pluginbro);
-- [ ] et tidssonebytte MENS APPEN ER HELT LUKKET — den vanskelige, og den
-      eneste som krever et bestemt oppsett. Framgangsmåte:
-      1. planlegg et varsel et par dager fram med et klokkeslett du kjenner
-         (f.eks. en frist kl. 09:00), og la Huskis synke;
-      2. **tving prosessen ut av minnet** — «Recents» → sveip appen bort. Ikke
-         «Tving stopp» i innstillingene: en app i *stopped state* får ingen
-         kringkastinger i det hele tatt, og da prøver du Androids regel, ikke
-         Huskis' kode;
-      3. Innstillinger → System → Dato og tid: slå AV automatisk tidssone og
-         velg en annen sone med en tydelig forskyvning (Oslo → Tokyo);
-      4. **åpne ikke Huskis.** Kontroller i stedet at alarmen er flyttet:
-         `adb shell dumpsys alarm | grep -A 3 no.huskis.app` viser det nye
-         tidspunktet;
-      5. **restart telefonen**, uten å åpne Huskis, og se på `dumpsys alarm`
-         igjen: tidspunktet skal fortsatt være det korrigerte, ikke det gamle
-         (pluginens oppstartsgjenoppretting leser den korrigerte tiden fra
-         lagringen);
-      6. la varselet forfalle og bekreft at det kommer på riktig lokal klokke,
-         med riktig tekst, og at det bare kommer ÉN gang.
-      Selve omregningen er maskinelt dekket av
-      `android/app/src/test/…/HuskisWallClockTest.java` (kjøres av
-      `./gradlew testDebugUnitTest` i debug-APK-jobben) og koblingen mellom
-      lagene av `tests/notif-timezone-native.test.js`. Det ingen av dem kan se,
-      er om Android faktisk LEVERER kringkastingen til akkurat denne appen på
-      akkurat denne telefonen — det er dette punktet;
-- [ ] en DST-overgang — at et varsel planlagt før overgangen kommer på riktig
-      klokkeslett etter den. Dette skal virke UTEN noe ekstra ledd: veggtiden
-      ble regnet om til riktig instans allerede da planen ble lagt
-      ([`varsler.md`](varsler.md));
-- [ ] en OTA-oppdatering ødelegger ikke adapteren.
+      `tests/notif-channels.test.js` 12.
 
-Fram til den runden er kjørt, står varselkanalen som **innført, ikke
-verifisert** i statustabellen øverst.
+### Det runden MÅLER, og hvor beviset ligger
+
+Bokstav og tall i parentes er sjekkens navn i harnessets egen rapport, slik at et
+FAIL kan leses rett mot listen. **Emulatoren i CI kjører RIGG-modus på hver PR
+som rører Android-siden. LIVE-runden på eierens egen telefon måler det samme mot
+hans EGEN plan, og legger til brukerbyttet** — status for begge står i
+statustabellen øverst.
+
+- de planlagte alarmene ligger faktisk i ANDROIDS alarmkø — én armert alarm per
+  terskel, på tidspunktet planen sier (D2–D3) — og de er vekkende og UPRESISE
+  (D4). Pluginens lagring holder de samme ID-ene Huskis regnet ut (D1);
+- den INSTALLERTE APK-en ber ikke om SCHEDULE_EXACT_ALARM: tilbaketrekkingen i
+  manifestet holdt gjennom manifest-fletteren og inn i binæren (D5);
+- kanalen «Påminnelser» finnes på enheten, med høy viktighet og vibrasjon, lest
+  ut av Androids egen NotificationManager (B1–B2);
+- en vanlig OMSTART av appen etterlater alarmene STÅENDE. Køen er identisk før og
+  etter (E1), OG Capacitors egen broLOGG viser at appen verken avlyste eller
+  planla noe (E2) — køen alene kan ikke skille «urørt» fra «avlyst og lagt inn
+  igjen», derfor loggen;
+- med PROSESSEN FJERNET står alarmene (F1–F2), og varselet leveres likevel (H1).
+  Og merk forskjellen runden er nøye med: `am kill` er en sveip i Recents,
+  `force-stop` er noe annet — den AVLYSER appens alarmer og setter appen i
+  «stopped state». En runde som brukte `force-stop` ville prøvd Androids regel for
+  en app brukeren har stoppet, ikke Huskis' kode;
+- etter en TELEFONRESTART stiller pluginens `BOOT_COMPLETED`-mottaker alarmene
+  opp igjen, på de samme tidspunktene (G2). At enheten faktisk var NEDE bevises av
+  at oppetiden falt (G1), ikke av at adb svarte;
+- en alarm som forfaller blir POSTET som systemvarsel med appen borte — på
+  Huskis-kanalen (H2) og rangert HIGH av Android (H3), som er forutsetningen for
+  heads-up;
+- OFFLINE både når fristen settes og når den forfaller: alarmen planlegges og
+  fyrer med radioen AV (H4). Kanalen er lokal, og ingen server er involvert i noe
+  ledd;
+- TRYKK på varselet åpner riktig Huskis-objekt, også fra KALDSTART: runden sender
+  pluginens egen tapp-intent mot en prosess som er drept, og leser at pekeren kom
+  fram i appen (I1–I3). Varselet forsvinner fra panelet etterpå (I4);
+- et TIDSSONEBYTTE MENS APPEN ER HELT LUKKET — punktet som før krevde seks
+  manuelle steg. Runden bytter sone med AlarmManagers egen skallkommando, som
+  kringkaster `TIMEZONE_CHANGED` slik et ekte bytte gjør, og måler at alarmene
+  flyttet seg til SAMME VEGGTID (L1), at de gamle tidspunktene er BORTE og ikke
+  liggende ved siden av (L2), at ingen JS rørte dem — det var den native
+  mottakeren (L3) — og at sonen tilbake gir de opprinnelige tidspunktene igjen
+  (L4). Selve omregningen er dekket av
+  `android/app/src/test/…/HuskisWallClockTest.java`, koblingen mellom lagene av
+  `tests/notif-timezone-native.test.js`;
+- en ENDRET FRIST avlyser den gamle planen og legger en ny, og fullføring avlyser
+  den framtidige: det ER diffen, og runden kjører den to ganger på enheten — en
+  alarm legges til (H) og tas bort igjen (K), og køen måles etter hver;
+- et BRUKERBYTTE rydder forrige brukers alarmer. I LIVE settes enhetens eiermerke
+  til en annen uid — nøyaktig det en innlogging fra en annen konto etterlater — og
+  runden måler at oppstarten rigger ned (J1) og at enheten står igjen som den
+  innloggede brukerens (J2). I RIGG måles den andre halvdelen: at nedriggingen
+  faktisk TØMMER Androids kø, og ikke bare pluginens lagring. Hvem den nye planen
+  tilhører er ren klientlogikk, dekket av `tests/notif-channels.test.js` 14.
+
+### Det bare et ØYE kan svare på
+
+Android eier presentasjonen, og ingen dump kan bekrefte den. Harnesset skriver
+disse tre ut til slutt, og de er de eneste som står igjen:
+
+- [ ] **HEADS-UP.** La et varsel forfalle med skjermen på: legger banneret seg
+      over skjermen, med lyd eller vibrasjon?
+- [ ] **LÅSESKJERM.** Lås telefonen og la det neste forfalle: står det slik du
+      vil ha det? (Android bestemmer om navnet vises — innstillingen er
+      telefonens, ikke Huskis'.)
+- [ ] **FINGEREN.** Trykk på varselet i panelet: åpner Huskis riktig objekt?
+
+Høy viktighet er en FORESPØRSEL. Brukeren, «Ikke forstyrr» og produsentens egne
+regler har siste ord, så et heads-up som ikke kommer er ikke nødvendigvis en
+feil — men at kanalen ber om det, og at Android rangerer varselet HIGH, er målt
+(B2, H3).
+
+### Det som fortsatt ikke er prøvd, og hvorfor
+
+- [ ] en OPPGRADERING fra en Huskis-versjon uten kanalen: alarmer som alt var
+      planlagt kommer fortsatt, nå som heads-up, og bare ÉN gang. Dette krever en
+      eldre APK å oppgradere FRA, og den kan ikke rigges fra repoet. Migreringen
+      er maskinelt dekket av `tests/notif-channels.test.js` 13, begge veier; og
+      tilstanden ETTER en migrering — alarmene på kanalen, rangert HIGH — er målt
+      på enhet;
+- [ ] en DST-overgang: at et varsel planlagt før overgangen kommer på riktig
+      klokkeslett etter den. Dette skal virke UTEN noe ekstra ledd — veggtiden ble
+      regnet om til riktig instans allerede da planen ble lagt
+      ([`varsler.md`](varsler.md)) — og overgangen er dekket av
+      `HuskisWallClockTest`. Å prøve den på enhet krever at kalenderen faktisk
+      passerer 29. mars eller 25. oktober;
+- [ ] en OTA-oppdatering ødelegger ikke adapteren. Prøves naturlig sammen med
+      neste OTA-runde.
 
 ---
 
@@ -2933,3 +2987,16 @@ Ferdig: selvhostet signert OTA med `@capawesome/capacitor-live-update`,
 readiness, innebygd fallback og dobbel varig karantene. Produksjonsmålingen og
 to forskjellige defekte riggbundler er observert på fysisk Android. iOS arver
 arkitekturen først i fase 7.
+
+### Varsler
+
+Den maskinelle delen av den fysiske runden er AUTOMATISERT og kjøres på en
+emulator i CI (`tests/android-device.js`). Det som står igjen er tre spørsmål
+harnesset stiller til slutt, og som bare et øye kan svare på: heads-up,
+låseskjermen og fingeren på varselet. Kjør runden mot din egen telefon én gang,
+svar på de tre, og kryss dem av i «Det bare et ØYE kan svare på».
+
+**Ingen «vekk skjermen»-mekanisme er innført, og det er med vilje**: ingen
+`fullScreenIntent`, ingen USE_FULL_SCREEN_INTENT, ingen TURN_SCREEN_ON, ingen
+wake lock og ingen presise alarmer. Det er neste produktleveranse, og den skal
+bygge på en grunnmur som er verifisert — ikke erstatte verifiseringen.

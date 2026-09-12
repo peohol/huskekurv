@@ -18,11 +18,12 @@ som håndhever det.
 mock-backenden (`?mock=1`), SQL-testene mot en fersk PostgreSQL i en
 service-container. Den har ikke tilgang til `SUPABASE_DB_URL`.
 
-Repoet har to workflows til, `android-debug.yml` og `android-release.yml`, som
-står helt utenfor denne kjeden: den første pakker `dist/` inn i en Android
-debug-APK, den andre bygger den signerte butikkbinæren `app-release.aab`. Begge
-laster opp et artifact, ingen av dem migrerer eller deployer noe, og ingen av
-dem publiserer til Google Play — se [`mobilapp-plan.md`](mobilapp-plan.md).
+Repoet har tre workflows til, og alle står helt utenfor denne kjeden:
+`android-debug.yml` pakker `dist/` inn i en Android debug-APK, `android-release.yml`
+bygger den signerte butikkbinæren `app-release.aab`, og `android-device.yml`
+kjører varselrunden (`tests/android-device.js`) på en ekte Android-emulator. Ingen
+av dem migrerer eller deployer noe, og ingen av dem publiserer til Google Play —
+se [`mobilapp-plan.md`](mobilapp-plan.md).
 `tests/release-pipeline.test.js` holder dem (og enhver annen ny workflow)
 utenfor migreringen og produksjonsdeployen.
 

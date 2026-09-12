@@ -104,6 +104,8 @@ tests/run-all.sh              # hele JS-suiten (starter server selv) — samme s
 npm ci                        # kun for mobilskallet (Capacitor) — webappen trenger den ikke
 npm run sync:android          # node build.js → kopier dist/ inn i android/
 npm run android:debug         # samme, og bygg debug-APK (krever Android SDK)
+
+node tests/android-device.js   # varslene på en TILKOBLET Android-enhet (adb) — docs/mobilapp-plan.md
 ```
 
 - `?mock=1` bytter Supabase-klienten mot den hermetiske mock-backenden;
@@ -152,9 +154,10 @@ Kjør den minste verifikasjonen som gir troverdig evidens for endringen:
 | Brukerrettet UI | ekte nettleser (Playwright), + skjermbilde ved visuell endring |
 | Responsiv eller pekeravhengig oppførsel | både desktop- og mobil-viewport |
 | Auth, synk eller deling | mock-backend (`?mock=1`) + den relevante flerbrukerflyten |
-| Varsler, planen framover eller de eksterne kanalene | `node tests/push-crypto.test.js` + `tests/notif-plan.test.js`, `tests/notif-channels.test.js`, `tests/notif-modal.test.js`, `tests/notif-native-devices.test.js` og SQL-suiten (`test-push.sql`, `test-native-notif.sql`) |
+| Varsler, planen framover eller de eksterne kanalene | `node tests/push-crypto.test.js` + `tests/notif-plan.test.js`, `tests/notif-channels.test.js`, `tests/notif-modal.test.js`, `tests/notif-native-devices.test.js`, `tests/android-alarm-queue.test.js` og SQL-suiten (`test-push.sql`, `test-native-notif.sql`) |
 | Deploy, caching, build-output | `node build.js` og `node tests/build-version.test.js` |
 | Capacitor, `android/`, npm-tooling | `node tests/capacitor-android.test.js` + `node tests/build-version.test.js`, og Android debug-APK-workflowen |
+| De native varslene på en ekte enhet | `node tests/android-alarm-queue.test.js` + enhetsrunden `node tests/android-device.js` (krever en tilkoblet enhet; CI kjører den på en emulator) |
 | Sikkerhetsheadere, CSP, tredjepartsressurser | `node tests/security-headers.test.js` + `node tests/csp-enforced.test.js` |
 | Releaseprosessen (workflows, `vercel.json`, smoke-test) | `node tests/release-pipeline.test.js` + `node tests/db-contract.test.js`, og SQL-suiten hvis `smoke-test.sql` er endret |
 
