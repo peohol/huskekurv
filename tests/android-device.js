@@ -343,21 +343,74 @@ function broKall() {
     .map((s) => s.split('methodName: ')[1]);
 }
 
-/* Radioen av og på. Dette er hele «offline»-punktet: en lokal alarm skal
-   planlegges og fyre uten at noe når en server. Klarer vi ikke å slå den av,
-   sier rapporten det — en runde som stilltiende kjørte på nett ville sagt at
-   punktet var prøvd. */
-const flymodus = () => sh('settings get global airplane_mode_on', { tillatFeil: true }).trim() === '1';
-function settFlymodus(på) {
-  sh('cmd connectivity airplane-mode ' + (på ? 'enable' : 'disable'), { tillatFeil: true });
-  /* Flagget leses av tilstanden, ikke av hva vi BA om: et «slå av» som ikke tok
-     (kommandoen feilet, eller innstillingen henger etter) skal fortsatt stå som
-     noe å rydde, ellers slutter opprydningen å prøve og telefonen blir stående i
-     flymodus. */
-  const nå = flymodus();
-  åGjenopprette.flymodus = nå;
-  return nå === på;
+/* ------------------------------------------------------- enhetens egen tilstand
+
+   Runden skrur på fire ting som IKKE er appens egne, men TELEFONENS: nettet av,
+   en annen tidssone, skjermen våken, og på en rein enhet varseltillatelsen. En
+   runde som etterlot noen av dem endret ville vært en feil harnesset selv laget.
+
+   Derfor tas et ØYEBLIKKSBILDE før første endring, og opprydningen fører enheten
+   tilbake til NØYAKTIG det — ikke til en antatt «normaltilstand». En telefon som
+   alt sto i flymodus skal stå i flymodus etterpå, og en bruker som hadde slått AV
+   systemvarsler skal ha dem av. */
+
+/* En global innstilling som TALL, eller null når den ikke lot seg lese. Null
+   betyr «rør den ikke»: en verdi vi ikke kan sette tilbake, skal vi ikke endre. */
+const gi = (n) => {
+  const v = sh('settings get global ' + n, { tillatFeil: true }).trim();
+  return /^-?\d+$/.test(v) ? Number(v) : null;
+};
+
+/* FLYMODUS ER IKKE «INGEN NETT», og det er hele grunnen til at dette er tre
+   verdier og ikke én: Wi-Fi er en egen radio som kan stå PÅ i flymodus — nyere
+   Android husker til og med at den skal gjøre det — og mobildata er en tredje. */
+const nettTilstand = () => ({
+  flymodus: gi('airplane_mode_on'),
+  wifi: gi('wifi_on'),
+  data: gi('mobile_data'),
+});
+
+function nettAv() {
+  if (!åGjenopprette.nett) åGjenopprette.nett = nettTilstand();
+  const før = åGjenopprette.nett;
+  sh('cmd connectivity airplane-mode enable', { tillatFeil: true });
+  if (før.wifi !== null) sh('svc wifi disable', { tillatFeil: true });
+  if (før.data !== null) sh('svc data disable', { tillatFeil: true });
+  /* Svaret er om HOVEDBRYTEREN tok. Wi-Fi og mobildata er beste forsøk: en
+     emulator uten SIM lar ikke alltid `svc data disable` ta, og det skal ikke
+     felle runden når appen likevel er målt uten nett. Hele tilstanden følger med
+     i rapporten, så en leser ser hvilke radioer som faktisk er av — og BEVISET er
+     `nåddeNettet()`, ikke denne lesingen. */
+  return nettTilstand().flymodus === 1;
 }
+
+/* … og «offline» som en MÅLT egenskap, ikke som en innstilling. Det runden
+   trenger er ikke at et flagg står på, men at appen ikke kan NÅ serveren den
+   ville lastet en ny bundle fra. Derfor spør vi appen selv, mot NØYAKTIG den
+   adressen `fetchOtaBundle()` bruker. Svarer den, er vi på nett uansett hva
+   `airplane_mode_on` sier.
+
+   Et hvilket som helst SVAR teller som «nådde fram», også en 404: da er serveren
+   der, og en nedlasting kunne skjedd. */
+const nåddeNettet = () => bro.evalJs(
+  'const base = window.__huskis.canonicalAppUrl();' +
+  'const ctl = new AbortController();' +
+  'const t = setTimeout(() => ctl.abort(), 6000);' +
+  'try { await fetch(base + "version.json?probe=" + Date.now(), ' +
+  '  { cache: "no-store", signal: ctl.signal }); return true; }' +
+  'catch (e) { return false; } finally { clearTimeout(t); }');
+
+/* Appens EGEN dom over om manifestet ble nådd denne oppstarten. `no-manifest` med
+   en nettverksgrunn er svaret vi vil se; `downloaded`, `already-downloaded` eller
+   `same-release` ville betydd at den kom fram. */
+const otaDom = () => bro.evalJs(
+  'const f = window.__huskis.otaFetch || {};' +
+  'return { state: String(f.state || "?"), detail: String(f.detail == null ? "" : f.detail).slice(0, 120) };');
+
+/* VARSELTILLATELSEN er brukerens valg, ikke vårt. Den leses derfor før den
+   eventuelt gis, og gis BARE når den mangler — og tas tilbake etterpå. */
+const varselTillatelseGitt = () =>
+  /POST_NOTIFICATIONS:\s*granted=true/.test(sh('dumpsys package ' + PKG, { tillatFeil: true }));
 
 /* Enhetens tidssone, og et bytte av den. `cmd alarm set-timezone` er
    AlarmManagerService sin egen skallkommando, og den kringkaster
@@ -365,11 +418,13 @@ function settFlymodus(på) {
    kringkastingen `TimeZoneAlarmReceiver` lever av. */
 const sonen = () => sh('getprop persist.sys.timezone', { tillatFeil: true }).trim();
 
-/* Runden skrur på to ting som ikke er appens egne: flymodus og tidssonen. De SKAL
-   tilbake uansett hvordan runden ender — en avbrutt runde som etterlot telefonen i
-   flymodus eller på Hawaii-tid ville vært en feil harnesset selv laget.
+/* Det som skal tilbake. `nett` og `stayon` holder de OPPRINNELIGE verdiene, ikke
+   «av»; `varselTillatelse` er satt bare hvis runden selv ga den.
    `ryddEnheten()` kjøres både på veien ut og fra feilgrenen. */
-const åGjenopprette = { sone: null, flymodus: false, riggIder: [], harØkt: false };
+const åGjenopprette = {
+  sone: null, nett: null, stayon: null, varselTillatelse: null,
+  riggIder: [], harØkt: false,
+};
 
 /* SYSTEMINNSTILLINGENE tilbake — VERIFISERT, og med nye forsøk innen et vindu.
 
@@ -383,29 +438,52 @@ const åGjenopprette = { sone: null, flymodus: false, riggIder: [], harØkt: fal
 async function ryddEnheten() {
   const frist = Date.now() + RYDD_SYS_MS;
   const kort = { tillatFeil: true, timeout: 15000 };
+  const igjen = () => [
+    åGjenopprette.nett ? 'nettet er ikke satt tilbake (flymodus/Wi-Fi/mobildata)' : null,
+    åGjenopprette.sone ? 'tidssonen er ikke tilbake til ' + åGjenopprette.sone : null,
+    åGjenopprette.stayon !== null ? 'skjermen står fortsatt våken mens den lader' : null,
+    åGjenopprette.varselTillatelse ? 'varseltillatelsen står igjen PÅ — den var av før runden' : null,
+  ].filter(Boolean);
   for (;;) {
     try {
-      if (åGjenopprette.flymodus) {
-        sh('cmd connectivity airplane-mode disable', kort);
-        åGjenopprette.flymodus = flymodus();
+      /* NETTET tilbake til det enheten HADDE, ikke til «på». Hver av de tre
+         settes bare hvis den lot seg lese før runden endret noe. */
+      if (åGjenopprette.nett) {
+        const mål = åGjenopprette.nett;
+        if (mål.flymodus !== null) {
+          sh('cmd connectivity airplane-mode ' + (mål.flymodus ? 'enable' : 'disable'), kort);
+        }
+        if (mål.wifi !== null) sh('svc wifi ' + (mål.wifi ? 'enable' : 'disable'), kort);
+        if (mål.data !== null) sh('svc data ' + (mål.data ? 'enable' : 'disable'), kort);
+        const nå = nettTilstand();
+        const likt = (k) => mål[k] === null || nå[k] === mål[k];
+        if (likt('flymodus') && likt('wifi') && likt('data')) åGjenopprette.nett = null;
       }
       if (åGjenopprette.sone) {
         sh('cmd alarm set-timezone ' + åGjenopprette.sone, kort);
         if (sonen() === åGjenopprette.sone) åGjenopprette.sone = null;
       }
+      /* SKJERMEN: den opprinnelige bitmasken tilbake, ikke `stayon false`. En
+         bruker som hadde «hold skjermen våken» på, skal ha den på. */
+      if (åGjenopprette.stayon !== null) {
+        sh('settings put global stay_on_while_plugged_in ' + åGjenopprette.stayon, kort);
+        if (gi('stay_on_while_plugged_in') === åGjenopprette.stayon) åGjenopprette.stayon = null;
+      }
+      /* VARSELTILLATELSEN tas tilbake bare hvis runden selv ga den. */
+      if (åGjenopprette.varselTillatelse === 'revoke') {
+        sh('pm revoke ' + PKG + ' android.permission.POST_NOTIFICATIONS', kort);
+        if (!varselTillatelseGitt()) åGjenopprette.varselTillatelse = null;
+      }
     } catch (e) { /* opprydningen skal ikke skjule feilen den rydder etter */ }
-    if (!åGjenopprette.flymodus && !åGjenopprette.sone) break;
+    if (!igjen().length) break;
     if (Date.now() >= frist) {
-      console.error('     · FIKK IKKE satt tilbake: ' + [
-        åGjenopprette.flymodus ? 'FLYMODUS STÅR PÅ' : null,
-        åGjenopprette.sone ? 'tidssonen er ikke tilbake til ' + åGjenopprette.sone : null,
-      ].filter(Boolean).join(', ') + ' — rett det i telefonens innstillinger.');
+      console.error('     · FIKK IKKE satt tilbake: ' + igjen().join(', ') +
+        ' — rett det i telefonens innstillinger.');
       break;
     }
     await sov(1500);
   }
   try {
-    sh('svc power stayon false', kort);
     adb(['forward', '--remove', 'tcp:' + CDP_PORT], kort);
   } catch (e) { /* uviktig */ }
 }
@@ -760,7 +838,7 @@ async function vaktBundle(navn, ventet) {
 
      RADIOEN AV først: er den på, kan appen laste ned den samme bundelen igjen i
      det den starter, og da retter tilbakestillingen ingenting. */
-  if (!flymodus()) settFlymodus(true);
+  nettAv();
   let nullstilt = false;
   try {
     nullstilt = await bro.evalJs(
@@ -830,8 +908,8 @@ function planUtskrift() {
 
   A  oppsett: adb, én enhet, riktig pakke, varseltillatelse, DevTools-broen — og
      at appen kjører NØYAKTIG den web-bundelen som ble bygget (A4). Radioen slås
-     AV for hele runden (A5), og HVER oppstart etterpå voktes: driver identiteten,
-     stopper runden der og da
+     AV for hele runden, og at appen FAKTISK ikke kan nå serveren måles (A5).
+     HVER oppstart etterpå voktes: driver identiteten, stopper runden der og da
   B  kanalen: huskis-notif-v1 finnes på enheten, med HØY viktighet og vibrasjon
   C  subjektet: enhetens egen plan (LIVE) eller tre riggalarmer (RIGG)
   D  alarmene ligger i Androids kø — én per terskel, på riktig tidspunkt,
@@ -892,16 +970,26 @@ async function main() {
   /* Skjermen skal stå på hele runden. En alarm er UPRESIS med vilje, og en
      telefon som sovner kan holde den igjen i minutter (dvalekvoten,
      docs/varsler.md) — det er plattformoppførsel, men det gjør ikke en
-     testrunde bedre. */
+     testrunde bedre.
+
+     ØYEBLIKKSBILDET FØRST: `stay_on_while_plugged_in` er en bitmaske telefonen
+     eier, og en bruker som hadde «hold skjermen våken» på skal ha den på etterpå.
+     `svc power stayon false` ville satt den til 0 for alle. */
+  åGjenopprette.stayon = gi('stay_on_while_plugged_in');
   sh('svc power stayon true', { tillatFeil: true });
   sh('input keyevent 224', { tillatFeil: true });      // KEYCODE_WAKEUP
 
   /* POST_NOTIFICATIONS er en kjøretidstillatelse fra Android 13. Dialogen hører
      til bryteren i appen og skal ALDRI komme av seg selv (docs/varsler.md), så
      harnesset gir tillatelsen gjennom `pm grant` i stedet for å trykke seg
-     gjennom en dialog som ikke skal finnes her. */
-  if (sdk >= 33) {
+     gjennom en dialog som ikke skal finnes her.
+
+     Men BARE når den mangler, og da tas den tilbake etterpå: en bruker som har
+     slått AV systemvarsler har valgt det, og en testrunde skal ikke omgjøre
+     valget hennes. */
+  if (sdk >= 33 && !varselTillatelseGitt()) {
     sh('pm grant ' + PKG + ' android.permission.POST_NOTIFICATIONS', { tillatFeil: true });
+    if (varselTillatelseGitt()) åGjenopprette.varselTillatelse = 'revoke';
   }
 
   /* RADIOEN AV FØR APPEN STARTER FØRSTE GANG, og det er ikke en detalj: appen
@@ -918,7 +1006,7 @@ async function main() {
      Appen drepes først, for radioen hjelper ikke mot en prosess som alt kjører
      med en nedlastet bundle: den FØRSTE oppstarten i runden skal være uten nett. */
   await drepApp();
-  const radioenAv = settFlymodus(true);
+  const radioenAv = nettAv();
 
   await appenOpp('A oppsett');
   const tillatelse = await bro.evalJs('return await window.__huskis.androidChannel.state();');
@@ -944,15 +1032,22 @@ async function main() {
      hvert eneste sted runden kan få en app i hendene. */
   ventetBundle = ventet;
 
-  /* A5 er forutsetningen for at én vakt per oppstart er NOK: uten nett kan ikke
-     bundelen byttes mellom dem heller. Fikk vi ikke slått av radioen, er runden
-     rød — da kan vi ikke love at koden sto stille, og det skal synes. Runden
-     fortsetter likevel, for vakten ved hver oppstart er fortsatt et net. */
-  check('A5 radioen er AV, så ingen oppdatering kan bytte koden under runden',
-    radioenAv, { flymodus: flymodus() });
-  if (!radioenAv) {
-    sier('FIKK IKKE slått av radioen herfra. Vakten ved hver oppstart står, men ' +
-      'en oppdatering kan fortsatt komme mellom to av dem — runden rapporteres rød.');
+  /* A5 er forutsetningen for at én vakt per oppstart er NOK: kan ikke appen nå
+     serveren, kan bundelen ikke byttes mellom to vakter heller. Og det MÅLES, det
+     leses ikke av en innstilling: `airplane_mode_on` sier ingenting om Wi-Fi, som
+     kan stå på i flymodus — og da er appen på nett. Derfor ber vi APPEN hente fra
+     nøyaktig den adressen OTA-en bruker, og krever at den ikke kommer fram.
+     Appens egen dom over oppstartens manifesthenting står ved siden av som
+     evidens. Kommer den fram, er runden rød: da kan vi ikke love at koden sto
+     stille. Den fortsetter likevel, for vakten ved hver oppstart er et net. */
+  const nådde = await nåddeNettet();
+  const ota = await otaDom();
+  check('A5 appen kan ikke NÅ serveren den ville hentet en ny bundle fra',
+    radioenAv && !nådde,
+    { radioerAv: radioenAv, nåddeServeren: nådde, nett: nettTilstand(), otaFetch: ota });
+  if (!radioenAv || nådde) {
+    sier('Appen er IKKE målt offline. Vakten ved hver oppstart står, men en ' +
+      'oppdatering kan komme mellom to av dem — runden rapporteres rød.');
   }
 
   /* --------------------------- C. Subjektet --------------------------- */
@@ -1200,9 +1295,15 @@ async function main() {
      varselet har kommet. Da er både «offline når fristen settes» og «offline ved
      tidspunktet» prøvd i ett — kanalen er lokal, og ingen server er involvert i
      noen av leddene. */
-  sier(flymodus() ? 'radioen er alt av — alarmen planlegges og leveres uten nett'
-    : 'slår på flymodus mens alarmen planlegges og leveres');
-  const offline = settFlymodus(true);
+  const radioerAvNå = nettAv();
+  /* MÅLT på nytt her, ikke antatt fra A5: mellom A5 og nå har enheten vært
+     gjennom en ekte omstart, og en omstart er nettopp der en radio kan komme
+     tilbake av seg selv. Probe-en må gjøres FØR appen drepes — den går gjennom
+     appens egen fetch. */
+  const nåddeNå = await nåddeNettet();
+  const offline = radioerAvNå && !nåddeNå;
+  sier(offline ? 'appen er målt uten nett — alarmen planlegges og leveres lokalt'
+    : 'appen NÅDDE serveren: «offline» kan ikke påstås for dette punktet');
   /* HELE planen, ikke bare den nye raden: `sync` er en diff mot det telefonen
      har, så en plan uten de andre alarmene ville avlyst dem. */
   const medSnart = (live ? await bro.evalJs(PLAN_JS) : rigg).concat([snart]);
@@ -1241,14 +1342,16 @@ async function main() {
       (postet.match(/importance=\w+/g) || ['leste ingen importance']).join(' '));
   }
   if (offline) {
-    check('H4 … planlagt OG levert med radioen av — kanalen er lokal',
-      !!postet && flymodus(), { flymodus: flymodus() });
+    check('H4 … planlagt OG levert UTEN at appen kunne nå noen server',
+      !!postet && nettTilstand().flymodus === 1,
+      { radioerAvFørst: radioerAvNå, nåddeServeren: nåddeNå, nett: nettTilstand() });
   } else {
-    skip('H4 planlagt og levert med radioen av',
-      'fikk ikke slått på flymodus herfra — runden gikk med nett');
+    skip('H4 planlagt og levert uten at appen kunne nå noen server',
+      'appen er ikke målt offline her — runden kan ha gått med nett');
   }
-  /* Radioen blir stående av. Resten av runden er like lokal som dette punktet, og
-     opprydningen er den som slår den på igjen — verifisert. */
+  /* Nettet blir stående av. Resten av runden er like lokal som dette punktet, og
+     opprydningen er den som fører enheten tilbake — til den tilstanden den HADDE,
+     verifisert. */
 
   /* --------------------- I. Trykk fra KALDSTART --------------------- */
   /* Prosessen drepes på nytt her, og det er ikke overflødig: selve alarmen

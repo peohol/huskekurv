@@ -2831,14 +2831,18 @@ etter en oppdatering ved oppstart, og finner den en nyere bundle bytter den
 web-koden mens runden står på — da måler runden en annen kode enn endringen, og en
 feil ser ut som en feil i koden her.
 
-To lag, og de må begge til. Radioen slås AV før den første oppstarten og blir
+To lag, og de må begge til. Nettet slås AV før den første oppstarten og blir
 stående av til opprydningen, i begge modi: ingenting runden måler trenger nett.
 Det er mer enn forsiktighet — oppdateringsmotoren kan laste appen om MIDT i en
-økt, så faste sjekkpunkter alene ville ikke sett byttet. Og identiteten voktes ved
-HVER oppstart: de to funksjonene som kan skaffe runden en app å måle på leser
-`huskis-build` fra den kjørende siden og sammenligner med den builden som ble
-bygget, før de svarer. Appen starter mange ganger i runden (E, G, H, I, J, K), og
-hver av dem sier hvor den er, så en drift har en adresse.
+økt, så faste sjekkpunkter alene ville ikke sett byttet. Og «uten nett» er MÅLT,
+ikke lest av en innstilling: flymodus sier ingenting om Wi-Fi, som kan stå på i
+flymodus, så runden slår av alle tre radioene hver for seg og spør APPEN om den
+kommer fram til adressen OTA-en bruker (A5, og på nytt i H etter omstarten).
+
+Og identiteten voktes ved HVER oppstart: de to funksjonene som kan skaffe runden
+en app å måle på leser `huskis-build` fra den kjørende siden og sammenligner med
+den builden som ble bygget, før de svarer. Appen starter mange ganger i runden
+(E, G, H, I, J, K), og hver av dem sier hvor den er, så en drift har en adresse.
 
 A4 er den første sjekken, og den får forsøke å rette en drift ved å tilbakestille
 OTA-en til den innebygde bundelen; A4b gjentar den etter den ekte omstarten. Etter
@@ -2850,9 +2854,14 @@ Merk at telefonen er UTEN NETT så lenge runden står på (se pinningen over), o
 den får nettet tilbake når runden er over. Det er med vilje, og det koster
 ingenting: ingenting runden måler trenger nett.
 
-Runden skrur på tre ting som ikke er appens egne — alarmkøen, flymodus og
-tidssonen — og setter alle tilbake, også når den blir avbrutt med Ctrl-C eller
-bryter sammen. Blir den avbrutt med RIGGENS alarmer armert, avlyses nøyaktig de
+Runden endrer fem ting som ikke er appens egne — alarmkøen, nettet (flymodus,
+Wi-Fi, mobildata), tidssonen, «hold skjermen våken», og på en rein enhet
+varseltillatelsen. Av hver av dem tas et ØYEBLIKKSBILDE før første endring, og
+opprydningen fører enheten tilbake til nøyaktig det, verifisert og med nye forsøk
+innen et vindu — også når runden blir avbrutt med Ctrl-C eller bryter sammen. En
+telefon som alt sto i flymodus står i flymodus etterpå, og en bruker som hadde
+slått AV systemvarsler har dem av: tillatelsen gis bare når den mangler, og tas
+tilbake. En innstilling hvis opprinnelige verdi ikke lot seg lese, røres ikke. Blir den avbrutt med RIGGENS alarmer armert, avlyses nøyaktig de
 id-ene riggen la inn: «Huskis-rigg forfaller» skal ikke ringe på noens telefon,
 og brukerens egen plan står ikke i listen og røres ikke. Å vente på neste
 speilingsrunde duger ikke — alarmen som skal få forfalle ligger sekunder fram.

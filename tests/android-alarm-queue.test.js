@@ -37,10 +37,12 @@
      9. Dokumentasjonen skiller maskinelt bevist fra det et øye må se — og
         opprydningen melder seg aldri ferdig uten å ha VERIFISERT at riggens
         alarmer er borte.
-    10. Runden måler den bundelen som ble bygget, HELE veien: radioen er av fra
+    10. Runden måler den bundelen som ble bygget, HELE veien: nettet er av fra
         før den første oppstarten til opprydningen, hver oppstart vokter
         identiteten mot den builden som ble bygget, og en drift STOPPER runden i
         stedet for å bli tolket som en feil i koden.
+    11. «Offline» er MÅLT, ikke lest av et flagg — og hver telefoninnstilling
+        runden endrer, settes tilbake til den verdien enheten HADDE.
 
   Kjør:
     node tests/android-alarm-queue.test.js
@@ -314,12 +316,16 @@ check('6j … og evidensen er at JS IKKE rørte alarmene: ingen kall over broen'
   /L3 ingen JS rørte alarmene/.test(harness) && /tzKall/.test(harness));
 check('6k en omstart er bevist med OPPETIDEN, ikke med at adb svarte',
   /\/proc\/uptime/.test(harness) && /oppetidFør/.test(harness));
-check('6l offline prøves med ekte flymodus, og en runde som gikk på nett sier det',
+check('6l offline prøves med ekte radioer AV, og en runde som gikk på nett sier det',
   /cmd connectivity airplane-mode/.test(harness) &&
-  /airplane_mode_on/.test(harness) && /H4 planlagt og levert med radioen av/.test(harness));
-check('6m1 flymodus-flagget leses av VERIFISERT tilstand, ikke av hva vi ba om',
-  /const nå = flymodus\(\);\s*\n\s*åGjenopprette\.flymodus = nå;/.test(harness),
-  'et «slå av» som ikke tok skal fortsatt stå som noe å rydde');
+  /airplane_mode_on/.test(harness) &&
+  /skip\('H4 planlagt og levert uten at appen kunne nå noen server'/.test(harness));
+check('6m1 gjenopprettingen nulles først når tilstanden er LEST TILBAKE som riktig',
+  /const nå = nettTilstand\(\);\s*\n\s*const likt = \(k\) =>/.test(harness) &&
+  /if \(likt\('flymodus'\) && likt\('wifi'\) && likt\('data'\)\) åGjenopprette\.nett = null;/.test(harness) &&
+  /if \(gi\('stay_on_while_plugged_in'\) === åGjenopprette\.stayon\)/.test(harness) &&
+  /if \(!varselTillatelseGitt\(\)\) åGjenopprette\.varselTillatelse = null;/.test(harness),
+  'et «sett tilbake» som ikke tok skal fortsatt stå som noe å rydde');
 check('6m2 Ctrl-C og SIGTERM rydder enheten før de avslutter',
   /process\.on\(sig/.test(harness) && /SIGINT/.test(harness) && /SIGTERM/.test(harness) &&
   /process\.on\(sig, \(\) => \{[\s\S]{0,600}await ryddEnheten\(\);/.test(harness));
@@ -332,10 +338,10 @@ check('6m flymodus og tidssone settes TILBAKE uansett hvordan runden ender',
    prøves på nytt FØR prosessen går, ikke bare etterlate et flagg. */
 check('6m3 systemopprydningen prøver på nytt til tilstanden er lest tilbake',
   /const frist = Date\.now\(\) \+ RYDD_SYS_MS;/.test(harness) &&
-  /if \(!åGjenopprette\.flymodus && !åGjenopprette\.sone\) break;/.test(harness) &&
+  /if \(!igjen\(\)\.length\) break;/.test(harness) &&
   /await sov\(1500\);/.test(harness));
 check('6m4 … og sier det tydelig hvis vinduet gikk ut',
-  /FIKK IKKE satt tilbake/.test(harness) && /FLYMODUS STÅR PÅ/.test(harness));
+  /FIKK IKKE satt tilbake/.test(harness) && /nettet er ikke satt tilbake/.test(harness));
 check('6m5 hele opprydningen har ett samlet tak, så et avbrudd ikke kan henge',
   (harness.match(/sov\(RYDD_SYS_MS \+ RYDD_MS\)/g) || []).length === 2);
 
@@ -520,21 +526,24 @@ check('10b den forventede builden kommer fra --expect-build eller dist/version.j
 check('10c build.js stempler samme id i meta-taggen og i version.json',
   /stampMeta\(stripped, 'huskis-build', ids\.buildId\)/.test(les('build.js')) &&
   /\n\s*buildId,\n/.test(les('build.js')));
-check('10d radioen slås av FØR appen starter første gang',
-  /const radioenAv = settFlymodus\(true\);\n\n  await appenOpp\(/.test(harness));
+check('10d nettet slås av FØR appen starter første gang',
+  /const radioenAv = nettAv\(\);\n\n  await appenOpp\(/.test(harness));
 /* … og den blir stående av. Det er forutsetningen for at ÉN vakt per oppstart er
    nok: `update-check.js` kan laste appen om midt i en økt når den finner en nyere
    build, og da ville to faste vakter ikke sett byttet. Uten nett kan det ikke
    skje. Derfor skal ingen del av runden slå nettet på igjen — bare
    opprydningen, som gjør det gjennom `cmd connectivity`, ikke gjennom
    `settFlymodus(false)`. */
+/* Bare OPPRYDNINGEN slår nettet på igjen, og den gjør det gjennom
+   gjenopprettingen — ikke gjennom et «slå på»-kall noe annet sted i runden. */
 check('10d2 ingen del av runden slår nettet på igjen underveis',
-  !/settFlymodus\(false\)/.test(harness) &&
-  /airplane-mode disable/.test(harness));
+  (harness.match(/airplane-mode ' \+ \(mål\.flymodus \? 'enable' : 'disable'\)/g) || []).length === 1 &&
+  !/airplane-mode enable'\s*,\s*kort/.test(harness) &&
+  (harness.match(/svc wifi ' \+ \(mål\.wifi/g) || []).length === 1);
 check('10d3 … og returverdien fra «slå av» blir RAPPORTERT, ikke ignorert',
-  /const radioenAv = settFlymodus\(true\)/.test(harness) &&
-  /check\('A5 radioen er AV/.test(harness) &&
-  /radioenAv, \{ flymodus: flymodus\(\) \}/.test(harness));
+  /const radioenAv = nettAv\(\)/.test(harness) &&
+  /check\('A5 appen kan ikke NÅ serveren/.test(harness) &&
+  /radioenAv && !nådde/.test(harness));
 check('10e vakten kjøres før målingene, og EN GANG TIL etter den ekte omstarten',
   /vaktBundle\('A4', ventet\)/.test(harness) && /vaktBundle\('A4b', ventet\)/.test(harness) &&
   harness.indexOf("vaktBundle('A4', ventet)") <
@@ -545,9 +554,9 @@ check('10f en drift STOPPER runden i stedet for å måle videre i feil kode',
   (harness.match(/ANNEN web-bundle/g) || []).length >= 2 &&
   /if \(!\(await vaktBundle\('A4', ventet\)\)\) \{/.test(harness) &&
   /if \(!\(await vaktBundle\('A4b', ventet\)\)\) \{/.test(harness));
-check('10g … og forsøket på å rette den slår av radioen først, ellers laster appen ' +
+check('10g … og forsøket på å rette den slår av nettet først, ellers laster appen ' +
   'den samme bundelen ned igjen',
-  /if \(!flymodus\(\)\) settFlymodus\(true\);/.test(harness) &&
+  /nettAv\(\);\n  let nullstilt = false;/.test(harness) &&
   /LiveUpdate/.test(harness) && /lu\.reset\(\)/.test(harness));
 /* DEN SENTRALE VAKTEN, og det er den som gjør pinningen sann gjennom HELE runden:
    appen starter mange ganger (E, G, H, I, J, K), og en OTA tas i bruk ved
@@ -589,6 +598,64 @@ check('10k rapporten sier hvilken bundle LiveUpdate mener appen kjører',
    fornyes rekker ikke alltid å svare da — derfor merket ved siden av økten. */
 check('10j «tilhører en konto» leses av økten ELLER eiermerket',
   /authUser;'\)\) \|\| !!eier;/.test(harness));
+
+/* ---- 11. «Offline» er målt, og telefonen settes tilbake til sin egen tilstand ----
+
+   Tre hull gjelder den FYSISKE telefonen, og emulatoren kan ikke avsløre dem: den
+   starter i en rein, forventet tilstand. Derfor låses de her.
+
+   1. `airplane_mode_on=1` er IKKE «ingen nett». Wi-Fi er en egen radio som kan stå
+      på i flymodus — nyere Android husker til og med at den skal. Da kan appen
+      fortsatt laste ned og aktivere en bundle midt i samme WebView-økt, som er
+      nøyaktig vinduet pinningen finnes for å lukke.
+   2. En telefon som ALT sto i flymodus skal stå i flymodus etterpå. Et flagg som
+      betyr «slå av» kan ikke uttrykke det.
+   3. Varseltillatelsen og «hold skjermen våken» er brukerens valg, ikke rundens. */
+check('11a «offline» MÅLES av appen selv, mot adressen OTA-en bruker',
+  /const nåddeNettet = \(\) => bro\.evalJs\(/.test(harness) &&
+  /canonicalAppUrl\(\)/.test(harness) &&
+  /fetch\(base \+ "version\.json\?probe="/.test(harness) &&
+  /catch \(e\) \{ return false; \}/.test(harness));
+check('11a2 … og A5 krever at den IKKE kom fram — ikke bare at et flagg står på',
+  /radioenAv && !nådde/.test(harness) &&
+  /check\('A5 appen kan ikke NÅ serveren den ville hentet en ny bundle fra'/.test(harness));
+check('11a3 … og appens EGEN dom over manifesthentingen står som evidens',
+  /const otaDom = \(\) => bro\.evalJs\(/.test(harness) &&
+  /otaFetch: ota/.test(harness));
+check('11a4 H måler offline PÅ NYTT etter omstarten, i stedet for å anta A5',
+  /const nåddeNå = await nåddeNettet\(\);/.test(harness) &&
+  /const offline = radioerAvNå && !nåddeNå;/.test(harness) &&
+  harness.indexOf('const nåddeNå = await nåddeNettet();') <
+    harness.indexOf("await drepApp();                 // varselet skal komme med appen BORTE"));
+check('11b Wi-Fi og mobildata slås av for seg — flymodus alene er ikke nok',
+  /svc wifi disable/.test(harness) && /svc data disable/.test(harness) &&
+  /wifi: gi\('wifi_on'\)/.test(harness) && /data: gi\('mobile_data'\)/.test(harness));
+check('11b2 … men bare når den opprinnelige verdien lot seg LESE',
+  /if \(før\.wifi !== null\) sh\('svc wifi disable'/.test(harness) &&
+  /if \(før\.data !== null\) sh\('svc data disable'/.test(harness));
+check('11c nettet settes tilbake til den tilstanden enheten HADDE, ikke til «på»',
+  /if \(!åGjenopprette\.nett\) åGjenopprette\.nett = nettTilstand\(\);/.test(harness) &&
+  /const mål = åGjenopprette\.nett;/.test(harness) &&
+  /\(mål\.flymodus \? 'enable' : 'disable'\)/.test(harness) &&
+  /const likt = \(k\) => mål\[k\] === null \|\| nå\[k\] === mål\[k\];/.test(harness));
+check('11d «hold skjermen våken» settes tilbake til den opprinnelige bitmasken',
+  /åGjenopprette\.stayon = gi\('stay_on_while_plugged_in'\);/.test(harness) &&
+  /settings put global stay_on_while_plugged_in ' \+ åGjenopprette\.stayon/.test(harness) &&
+  !/sh\('svc power stayon false'/.test(harness));
+check('11e varseltillatelsen gis BARE når den mangler, og tas tilbake etterpå',
+  /if \(sdk >= 33 && !varselTillatelseGitt\(\)\)/.test(harness) &&
+  /åGjenopprette\.varselTillatelse = 'revoke'/.test(harness) &&
+  /pm revoke ' \+ PKG \+ ' android\.permission\.POST_NOTIFICATIONS/.test(harness));
+check('11f alt fire meldes eksplisitt hvis det IKKE lot seg sette tilbake',
+  /const igjen = \(\) => \[/.test(harness) &&
+  /nettet er ikke satt tilbake/.test(harness) &&
+  /skjermen står fortsatt våken/.test(harness) &&
+  /varseltillatelsen står igjen PÅ/.test(harness) &&
+  /FIKK IKKE satt tilbake/.test(harness));
+/* Og gjenopprettingen må kjøre fra BEGGE veiene ut, ellers hjelper den ikke på en
+   runde som brøt sammen eller ble avbrutt med Ctrl-C. */
+check('11g gjenopprettingen kjøres både fra avslutningen og fra signalene',
+  (harness.match(/await ryddEnheten\(\); await ryddRiggAlarmer\(\);/g) || []).length === 2);
 
 const feil = results.filter((r) => !r).length;
 console.log('\n' + (results.length - feil) + ' passed, ' + feil + ' failed');

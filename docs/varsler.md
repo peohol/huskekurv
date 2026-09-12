@@ -1213,11 +1213,21 @@ den web-koden under føttene på runden. Det har skjedd: en emulatorrunde bygde 
 bundle inn i APK-en og kjørte en HELT annen i WebView-en, og felte et punkt på
 kode som ikke fantes i den bundelen.
 
-To lag hindrer det, og de må begge til. **Radioen er AV fra før den første
+To lag hindrer det, og de må begge til. **Nettet er AV fra før den første
 oppstarten til opprydningen**, i begge modi: ingenting runden måler trenger nett,
 og uten nett kan verken manifestet nås eller `update-check.js` finne en nyere
 build å laste om til. Det siste er grunnen til at noen få faste sjekkpunkter ikke
 ville holdt — motoren kan laste appen om MIDT i en økt, ikke bare ved oppstart.
+
+Og «uten nett» er en MÅLT egenskap, ikke en innstilling. `airplane_mode_on=1`
+betyr ikke «ingen nett»: Wi-Fi er en egen radio som kan stå PÅ i flymodus, og
+nyere Android husker at den skal. Runden slår derfor av flymodus, Wi-Fi og
+mobildata hver for seg — og SPØR APPEN om den kommer fram, mot nøyaktig den
+adressen `fetchOtaBundle()` bruker. Et hvilket som helst svar teller som «nådde
+fram», også en 404: da er serveren der, og en nedlasting kunne skjedd. Appens egen
+`otaFetch`-tilstand står ved siden av som evidens. Det måles to ganger — ved
+oppsettet (A5) og på nytt i H, fordi en omstart er nettopp der en radio kan komme
+tilbake av seg selv.
 **Og identiteten voktes ved HVER oppstart**: de to funksjonene som kan skaffe
 runden en app å måle på (`appenOpp()` og `ventPåBro()`) leser
 `<meta name="huskis-build">` fra den kjørende siden og sammenligner med builden
@@ -1228,9 +1238,19 @@ Den første sjekken (A4) får forsøke å rette en drift ved å tilbakestille OT
 til den innebygde bundelen. Etter den er vakten streng: en drift — eller en
 identitet som ikke lar seg lese — STOPPER runden med «kjører feil bundle». En
 måling i feil kode er verre enn ingen måling, for da ser plattformen ut til å
-svare på et spørsmål den ikke har fått. Lykkes det ikke å slå av radioen,
-rapporteres runden RØD (A5): vakten står fortsatt, men da kan ingen love at koden
-sto stille mellom to av dem.
+svare på et spørsmål den ikke har fått. Kommer appen fram til serveren, rapporteres runden
+RØD (A5): vakten står fortsatt, men da kan ingen love at koden sto stille mellom
+to av dem.
+
+**Og telefonen settes tilbake til SIN EGEN tilstand, ikke til en antatt
+normaltilstand.** Runden endrer fire ting som er telefonens, ikke Huskis': nettet,
+tidssonen, «hold skjermen våken», og på en rein enhet varseltillatelsen. Av hver
+av dem tas et øyeblikksbilde FØR første endring, og opprydningen fører enheten
+tilbake til nøyaktig det, verifisert og med nye forsøk innen et vindu. En telefon
+som alt sto i flymodus står i flymodus etterpå. En bruker som hadde slått AV
+systemvarsler har dem av: tillatelsen gis bare når den mangler, og tas tilbake.
+En radio hvis opprinnelige verdi ikke lot seg lese, røres ikke — det vi ikke kan
+sette tilbake, endrer vi ikke.
 
 **Tapp-intenten er pluginens, ikke vår.** `contentIntent` er en
 `PendingIntent.getActivity` over MAIN/LAUNCHER mot MainActivity, med
