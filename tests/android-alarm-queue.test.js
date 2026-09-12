@@ -32,7 +32,8 @@
         tilbake det den skrudde på enheten (flymodus, tidssone) uansett utfall.
      7. Appen eksponerer pekeren og de trykkede nøklene, og den siste settes FØR
         innloggingssjekken (ellers er en kaldstart ikke observerbar).
-     8. CI kjører runden på en emulator, med en ekte APK.
+     8. CI kjører runden på en emulator, med en ekte APK — og på app.js, der
+        adapteren runden prøver faktisk bor.
      9. Dokumentasjonen skiller maskinelt bevist fra det et øye må se.
 
   Kjør:
@@ -277,8 +278,18 @@ check('5a harnesset er pinnet til den pluginversjonen formene er lest av',
    Androids regel for en stoppet app — ikke Huskis' kode, og ikke det en sveip i
    Recents gjør. */
 check('6a harnesset dreper prosessen med `am kill`', /am kill /.test(harness));
-check('6b … og kjører aldri `am force-stop`, som ville avlyst alarmene',
-  !/am force-stop/.test(harness));
+/* `force-stop` avlyser appens alarmer. Den skal derfor ALDRI brukes til å fjerne
+   prosessen under runden — da prøver man Androids regel for en stoppet app — mens
+   den er nøyaktig riktig verktøy i opprydningen, der avlysningen ER poenget. */
+const drepKropp = (() => {
+  const i = harness.indexOf('async function drepApp()');
+  return i < 0 ? '' : harness.slice(i, harness.indexOf('\n}', i));
+})();
+check('6b `drepApp` bruker aldri force-stop — den ville avlyst alarmene',
+  drepKropp !== '' && !/force-stop/.test(drepKropp) && /am kill /.test(drepKropp));
+check('6b2 … og den ENESTE force-stop i fila står i opprydningen av riggen',
+  (harness.match(/am force-stop/g) || []).length === 1 &&
+  /åGjenopprette\.rigg && !åGjenopprette\.live\) \{[\s\S]{0,200}am force-stop/.test(harness));
 check('6c grunnen står i fila, ikke bare i dokumentasjonen',
   /force-stop/.test(harness) && /stopped state/.test(harness));
 check('6d varseltillatelsen gis med `pm grant`, ikke ved å trykke i en dialog',
@@ -345,6 +356,16 @@ check('8f loggene lastes opp også når runden feiler',
 check('8g workflowen kjøres på PR-er som rører Android-siden',
   /pull_request:/.test(wf) && /'android\/\*\*'/.test(wf) &&
   /'tests\/android-device\.js'/.test(wf));
+/* app.js ER produksjonskoden runden prøver — adapteren og
+   `window.__huskis.androidChannel` bor der. Uten den i triggeren kunne en
+   endring i adapteren brekke native varsler uten at runden kjørte. */
+check('8h … OG på app.js, der varseladapteren faktisk bor',
+  /^\s+- 'app\.js'$/m.test(wf));
+check('8i opprydningen kan også avlyse RIGGENS alarmer på en enhet uten økt',
+  /åGjenopprette\.rigg/.test(harness) && /am force-stop/.test(harness) &&
+  /!åGjenopprette\.live/.test(harness));
+check('8j … men ALDRI på en innlogget telefon, der køen er brukerens egen',
+  /if \(åGjenopprette\.rigg && !åGjenopprette\.live\) \{[\s\S]{0,200}am force-stop/.test(harness));
 
 /* ---- 9. Dokumentasjonen skiller bevist fra observert ---- */
 const plan = les('docs', 'mobilapp-plan.md');

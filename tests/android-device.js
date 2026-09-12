@@ -334,16 +334,36 @@ const sonen = () => sh('getprop persist.sys.timezone', { tillatFeil: true }).tri
    tilbake uansett hvordan runden ender — en avbrutt runde som etterlot telefonen i
    flymodus eller på Hawaii-tid ville vært en feil harnesset selv laget.
    `ryddEnheten()` kjøres både på veien ut og fra feilgrenen. */
-const åGjenopprette = { sone: null, flymodus: false };
+const åGjenopprette = { sone: null, flymodus: false, rigg: false, live: false };
 function ryddEnheten() {
   try {
     if (åGjenopprette.flymodus) {
       sh('cmd connectivity airplane-mode disable', { tillatFeil: true });
-      åGjenopprette.flymodus = false;
+      åGjenopprette.flymodus = flymodus();
     }
     if (åGjenopprette.sone) {
       sh('cmd alarm set-timezone ' + åGjenopprette.sone, { tillatFeil: true });
-      åGjenopprette.sone = null;
+      if (sonen() === åGjenopprette.sone) åGjenopprette.sone = null;
+    }
+    /* … OG RIGGENS EGNE ALARMER, når runden ble avbrutt med dem armert. De bærer
+       teksten «Huskis-rigg», og på en enhet UTEN en innlogget bruker finnes det
+       ingen speilingsrunde som noensinne rydder dem: de ville ringt.
+
+       `force-stop` er verktøyet her, og det er ikke en selvmotsigelse: runden
+       unngår den nettopp FORDI Android avlyser appens alarmer når en app
+       tvangsstoppes (se `drepApp`). Her er det virkningen vi er etter.
+
+       På en INNLOGGET telefon gjør vi det ikke: køen er brukerens egen, og en
+       `force-stop` ville tatt hennes alarmer også. Der heler adapterens diff den
+       ene overflødige raden ved neste speiling — det er nettopp det K måler når
+       runden får gå ferdig. */
+    if (åGjenopprette.rigg && !åGjenopprette.live) {
+      sh('am force-stop ' + PKG, { tillatFeil: true });
+      åGjenopprette.rigg = false;
+      console.error('     · riggalarmene er avlyst (force-stop) — enheten står uten Huskis-alarmer');
+    } else if (åGjenopprette.rigg) {
+      console.error('     · en riggalarm kan stå armert; den avlyses av diffen neste gang Huskis synker');
+      åGjenopprette.rigg = false;
     }
     sh('svc power stayon false', { tillatFeil: true });
     adb(['forward', '--remove', 'tcp:' + CDP_PORT], { tillatFeil: true });
@@ -636,12 +656,14 @@ async function main() {
   const eier = await bro.evalJs('return window.__huskis.nativePlanOwner() || null;');
   let plan = await bro.evalJs(PLAN_JS);
   const live = tillatelse === 'on' && !!eier && plan.length > 0;
+  åGjenopprette.live = live;
   let rigg = null;
   if (live) {
     check('C1 LIVE: enheten har en innlogget bruker med en plan framover', true,
       plan.length + ' terskler, eier ' + eier.slice(0, 8));
   } else {
     rigg = riggPlan(await bro.evalJs('return Date.now();'));
+    åGjenopprette.rigg = true;        // fra nå ligger det syntetiske alarmer i køen
     await sync(rigg, false);
     plan = await medId(rigg);
     check('C1 RIGG: tre syntetiske alarmer planlagt gjennom den ekte adapteren',
@@ -829,6 +851,7 @@ async function main() {
   /* HELE planen, ikke bare den nye raden: `sync` er en diff mot det telefonen
      har, så en plan uten de andre alarmene ville avlyst dem. */
   const medSnart = (live ? await bro.evalJs(PLAN_JS) : rigg).concat([snart]);
+  åGjenopprette.rigg = true;          // «snart» er syntetisk i begge modi
   await sync(medSnart, false);
   const snartId = (await medId([snart]))[0].id;
   await drepApp();                 // varselet skal komme med appen BORTE
@@ -948,14 +971,17 @@ async function main() {
     const ekte = await bro.evalJs(PLAN_JS);
     await drepApp();
     const slutt = alarmKø();
-    check('K1 den ekte planen står igjen på enheten, og riggen er borte',
-      slutt.length === ekte.length &&
-      sammeTider(tider(slutt), ekte.map((r) => r.at).sort((a, b) => a - b)),
+    const iTakt = slutt.length === ekte.length &&
+      sammeTider(tider(slutt), ekte.map((r) => r.at).sort((a, b) => a - b));
+    if (iTakt) åGjenopprette.rigg = false;     // ingen syntetisk rad står igjen
+    check('K1 den ekte planen står igjen på enheten, og riggen er borte', iTakt,
       { kø: slutt.length, plan: ekte.length });
   } else {
     await sync([], true);
     await drepApp();
-    check('K1 riggen er ryddet bort — enheten er som før runden', alarmKø().length === 0);
+    const tom = alarmKø().length === 0;
+    if (tom) åGjenopprette.rigg = false;
+    check('K1 riggen er ryddet bort — enheten er som før runden', tom);
   }
   if (bro) { bro.lukk(); bro = null; }
   ryddEnheten();

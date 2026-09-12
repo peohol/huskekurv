@@ -2826,6 +2826,13 @@ adapteren er selvhelende, og harnesset MÅLER at planen er tilbake til slutt.
 noe. `--no-reboot` hopper over omstarten av enheten og prøver pluginens
 oppstartsmottaker direkte i stedet.
 
+Runden skrur på tre ting som ikke er appens egne — alarmkøen, flymodus og
+tidssonen — og setter alle tilbake, også når den blir avbrutt med Ctrl-C eller
+bryter sammen. Blir den avbrutt med RIGGENS alarmer armert på en enhet uten
+innlogget bruker, avlyses de med en `force-stop`: der finnes ingen
+speilingsrunde som ville ryddet dem, og «Huskis-rigg 1» skal ikke ringe på noens
+telefon. På en innlogget telefon gjøres det aldri.
+
 ### Allerede observert på fysisk Android
 
 - [x] tillatelsesdialogen kommer ved bryteren, og bare der — Android spør ikke

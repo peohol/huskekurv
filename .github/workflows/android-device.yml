@@ -28,6 +28,13 @@ on:
       - 'package.json'
       - 'package-lock.json'
       - 'build.js'
+      # app.js ER produksjonskoden runden prøver: varseladapteren og
+      # `window.__huskis.androidChannel` bor der. Uten denne linjen kunne en
+      # endring i adapteren brekke de native varslene uten at enhetsrunden kjørte
+      # en eneste gang — og det er nøyaktig det hullet workflowen finnes for å
+      # lukke. Prisen er en emulatorrunde på de fleste Huskis-PR-er, og den er
+      # valgt med vilje: et varsel som ikke kommer fram er dyrere.
+      - 'app.js'
       - 'tests/android-device.js'
       - 'tests/android-alarm-queue.test.js'
       - '.github/workflows/android-device.yml'

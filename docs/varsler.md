@@ -1179,7 +1179,12 @@ Dette er MÅLT på enhet:
 **`am kill`, ikke `force-stop`.** De to ser like ut og er helt ulike: en
 `force-stop` AVLYSER appens alarmer og setter appen i «stopped state», der den
 ikke får kringkastinger i det hele tatt. Da prøver man Androids regel for en app
-brukeren har stoppet — ikke Huskis' kode, og ikke det en sveip i Recents gjør.
+brukeren har stoppet — ikke Huskis' kode, og ikke det en sveip i Recents gjør. Den
+ene gangen `force-stop` likevel brukes er i OPPRYDNINGEN etter en avbrutt runde
+på en enhet uten innlogget bruker: der er avlysningen nettopp poenget, for
+ingen speilingsrunde finnes som ville ryddet de syntetiske alarmene. På en
+innlogget telefon gjøres det aldri — køen er brukerens egen, og diffen heler den
+ene overflødige raden selv.
 
 **Tapp-intenten er pluginens, ikke vår.** `contentIntent` er en
 `PendingIntent.getActivity` over MAIN/LAUNCHER mot MainActivity, med
