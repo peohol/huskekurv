@@ -341,9 +341,13 @@ check('6m5 hele opprydningen har ett samlet tak, så et avbrudd ikke kan henge',
 check('6n trykket måles på en app som ble startet AV trykket, uten en ny intent',
   /async function ventPåBro/.test(harness) &&
   /const fraTrykket = !!\(await ventPåBro\(60000\)\);/.test(harness));
-check('6o … og sporet plugin → JS leses av Androids egen logg',
+check('6o … og sporet plugin → JS leses av Androids egen logg, USTERT',
   /function trykkSpor/.test(harness) && /LocalNotification received/.test(harness) &&
-  /tilPlugin:/.test(harness) && /tilJs:/.test(harness));
+  /tilPlugin:/.test(harness) && /tilJs:/.test(harness) &&
+  /logcat', '-d', '-t', '3000'/.test(harness) && /bevis:/.test(harness));
+check('6o2 … og en intent Android gjenopptok UTEN extras rapporteres som ikke målbar',
+  /Activity started without notification attached/.test(harness) &&
+  /launcher-semantikk/.test(harness));
 check('6p en varm intent skiller kaldstart-hullet fra koblingen plugin → JS',
   /I2b … og den kommer fram når appen ALT kjører/.test(harness));
 check('6q viktigheten leses både som ord OG som tall (API 36 skriver 4)',
@@ -370,6 +374,21 @@ check('7c nøkkelen registreres FØR innloggingssjekken (ellers er en kaldstart 
   [kropp.indexOf('notifChannelTapped.add(key)'), kropp.indexOf('if (!authUser')]);
 check('7d harnesset leser nøyaktig de to',
   /notifPendingTarget/.test(harness) && /notifChannelTapped/.test(harness));
+/* FEILEN enhetsrunden fant: `cloudStart()` kjører på hver innlogging — også den
+   bufrede ved kaldstart — og `resetNotifications()` nullstilte pekeren fra
+   varseltrykket FØR `flushNotifPendingTarget()` kunne bruke den. Et trykk åpnet
+   derfor ingenting på en kaldstart. Oppførselen er dekket kjørende av
+   `notif-channels` 3d–3e; her låses at nullstillingen ikke kommer tilbake. */
+const resetKropp = (() => {
+  const i = appJs.indexOf('function resetNotifications(nesteEier) {');
+  return i < 0 ? '' : appJs.slice(i, appJs.indexOf('\n  }', i));
+})();
+check('7e innloggingen nullstiller IKKE pekeren fra et varseltrykk',
+  resetKropp !== '' && !/notifPendingTarget = null/.test(resetKropp) &&
+  !/notifChannelTapped\.clear\(\)/.test(resetKropp));
+check('7f … og grunnen står der, så den ikke blir «ryddet bort» igjen',
+  /PEKEREN FRA ET TRYKK BLIR STÅENDE/.test(resetKropp) &&
+  /kaldstart/.test(resetKropp));
 
 /* ---- 8. CI kjører runden ---- */
 check('8a det finnes en workflow som kjører harnesset',

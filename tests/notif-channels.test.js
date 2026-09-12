@@ -22,9 +22,11 @@
         SCHEDULE_EXACT_ALARM — og en alarm som har flyttet seg ERSTATTES: et
         tidssonebytte gir samme varsel en ny absolutt tid, et nytt objektnavn gir
         det ny tekst, og i begge tilfeller er den gamle alarmen borte etterpå.
-     3. Trykk på et native varsel navigerer til objektet — og nøkkelen fra
-        trykket er LESBAR utenfra, som er kontrakten enhetsrunden
-        (`tests/android-device.js`) leser på en ekte telefon.
+     3. Trykk på et native varsel navigerer til objektet — nøkkelen fra trykket
+        er LESBAR utenfra, som er kontrakten enhetsrunden
+        (`tests/android-device.js`) leser på en ekte telefon — og et trykk som
+        kommer FØR innloggingen (en kaldstart fra varselet) navigerer likevel,
+        fordi pekeren ikke lenger nullstilles av innloggingen.
      4. Web push-kanalen: uten avsendernøkkel finnes den ikke; med nøkkel kan
         den slås på, den skriver et abonnement, den fornyer seg selv, og den
         slås av igjen — abonnementet forsvinner fra serveren. Og grensene for
@@ -191,7 +193,17 @@ function fakePlattform() {
     /* Et RPC-kall som feiler FRA FØRSTE LINJE: `?rpcfeil=get_my_doc` er en
        oppstart uten nett. Flagget må stå før appen rekker å pulle, og kan
        derfor ikke settes fra testen etter en sidelasting. */
-    rpcFeil: q.get('rpcfeil') || null };
+    rpcFeil: q.get('rpcfeil') || null,
+    /* ET KALDT TRYKK: `?koldtrykk=<objId>` leverer varseltrykket i det SAMME
+       øyeblikket appen registrerer lytteren — altså før `getSession()` har
+       svart. Det er rekkefølgen en ekte kaldstart fra et varsel har: pluginen
+       holder hendelsen igjen (`retainUntilConsumed`) og slipper den straks en
+       lytter finnes, lenge før innloggingen er ferdig.
+
+       Flagget må stå FØR appen kjører, og kan derfor ikke settes fra testen
+       etter en sidelasting — som `rpcfeil`. */
+    koldTrykk: q.get('koldtrykk') || null,
+    koldType: q.get('koldtype') || null };
   ['pending', 'alarmer', 'levert', 'kanaler'].forEach((k) => {
     if (Array.isArray(lagret[k])) window.__kanal[k] = lagret[k];
   });
@@ -360,7 +372,25 @@ function fakePlattform() {
             window.__kanal.lagre();
           },
           addListener: async (navn, fn) => {
-            if (navn === 'localNotificationActionPerformed') window.__kanal.trykk = fn;
+            if (navn === 'localNotificationActionPerformed') {
+              window.__kanal.trykk = fn;
+              /* … og den KALDE veien: hendelsen ligger og venter, og leveres
+                 straks lytteren finnes.
+
+                 På en mikrotask, ikke synkront: pluginens retainede hendelse
+                 kommer over BROEN, altså minst én task etter at `addListener`
+                 ble kalt — og `addListener` kalles mens app.js fortsatt kjører
+                 sin egen toppnivåkropp. Et synkront kall her ville lest
+                 `authUser` før deklarasjonen og kastet en feil som ikke kan skje
+                 på en enhet. Mikrotasken er fortsatt lenge før `getSession()`
+                 svarer, som er det rekkefølgen handler om. */
+              if (window.__kanal.koldTrykk) {
+                const id = window.__kanal.koldTrykk;
+                Promise.resolve().then(() => fn({ notification: { extra:
+                  { objType: window.__kanal.koldType || 'card', objId: id,
+                    key: 'kald@' + id } } }));
+              }
+            }
             return { remove() {} };
           },
         },
@@ -956,6 +986,51 @@ async function run() {
     observert.tapped.includes('rigg:nøkkel@1'), JSON.stringify(observert.tapped));
   log('3c: pekeren er TOM når appen var innlogget og synket — den ble tatt med én gang',
     observert.peker === null, JSON.stringify(observert.peker));
+
+  /* ---------- 3d) KALDSTART FRA ET VARSEL ----------
+     Rekkefølgen er hele saken, og den er ikke valgfri: pluginen holder trykket
+     igjen og slipper det i det appen registrerer lytteren — altså FØR
+     `getSession()` har svart. Pekeren parkeres da, og skal tas når innloggingen
+     og første synk er ferdige.
+
+     Dette gikk galt: innloggingen nullstilte varseltilstanden (`cloudStart` →
+     `resetNotifications`), og pekeren forsvant før noen kunne bruke den. Et trykk
+     på et varsel åpnet derfor INGENTING på en kaldstart — punktet enhetsrunden
+     (`tests/android-device.js`, I2) felte på en ekte Android-emulator.
+
+     Uten rettelsen finner denne sjekken ikke objektet. */
+  const ctxKald = await nyKontekst(browser, { utenSone: true });
+  const pkald = await ctxKald.newPage();
+  pkald.on('pageerror', (e) => errs.push('kald: ' + e.message));
+  /* Trykket peker på LISTEPUNKTET, og lista det ligger i er seedet SAMMENSLÅTT.
+     Det er forskjellen mellom en sjekk som måler noe og en som ikke gjør det:
+     punktet er ikke i DOM-en før noe utvider lista, og det ENESTE som gjør det
+     her er navigeringen (`expandForTarget`). Pekte trykket på lista i stedet,
+     ville den stått der uansett — og sjekken vært grønn også uten rettelsen. */
+  const kaldDb = buildDB(null);
+  kaldDb.cards.find((c) => c.id === id.LA).collapsed = true;
+  const KALDURL = BASE + '/?mock=1&ch=native&koldtype=item&koldtrykk=' + id.IA;
+  await seed(pkald, KALDURL, kaldDb);
+  const kaldt = await pkald.evaluate(async (iid) => {
+    // Pekeren tas av `flushNotifPendingTarget` når doc-et er inne; gi den de
+    // rundene den trenger i stedet for å måle på ett tikk.
+    for (let i = 0; i < 40; i++) {
+      if (document.querySelector('[data-id="' + iid + '"]')) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const H = window.__huskis;
+    return {
+      finnes: !!document.querySelector('[data-id="' + iid + '"]'),
+      sammenslått: !!(H.state.universes[0].groups[0].cards[0] || {}).collapsed,
+      tapped: [...(H.notifChannelTapped || [])],
+      peker: H.notifPendingTarget || null,
+    };
+  }, id.IA);
+  log('3d: et trykk FØR innloggingen navigerer likevel til objektet (kaldstart)',
+    kaldt.finnes && !kaldt.sammenslått, JSON.stringify(kaldt));
+  log('3e: … og nøkkelen fra trykket overlevde innloggingen',
+    kaldt.tapped.includes('kald@' + id.IA), JSON.stringify(kaldt.tapped));
+  await ctxKald.close();
 
   /* 9 for den native kanalen: nøkkelen ligger i `extra` og følger med trykket. */
   await ingenRedundantToast(pn, '9n', id.IA, (peker) => pn.evaluate((x) => {

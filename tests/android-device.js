@@ -313,12 +313,26 @@ const tømLogg = () => adb(['logcat', '-c'], { tillatFeil: true });
 
    Uten denne oppdelingen er «ingen peker» bare et nederlag uten adresse. */
 function trykkSpor() {
-  const txt = adb(['logcat', '-d', '-s', 'Capacitor:V', LOG_TAG + ':V', 'Capacitor/LN:V',
-    'chromium:E'], { tillatFeil: true });
+  /* USTERT logcat, og filtrering i node. Et taggfilter (`-s`) krever at tagen
+     treffer EKSAKT, og pluginens egne linjer kommer på
+     `Capacitor/LocalNotificationsPlugin` — en tag det er lett å gjette feil på,
+     og da svarer sporet «nei» på noe som skjedde. `-t` holder mengden nede. */
+  const txt = adb(['logcat', '-d', '-t', '3000'], { tillatFeil: true });
+  const linjer = txt.split('\n');
+  const treff = (re) => linjer.filter((l) => re.test(l));
+  const fikk = treff(/LocalNotification received/);
+  const videre = treff(/Notifying listeners for event localNotificationActionPerformed/);
+  /* Pluginens egen linje for «intenten kom, men den bar ingen varsel-ID». Det er
+     Androids oppgave-semantikk: en MAIN/LAUNCHER-intent mot en oppgave som alt
+     finnes kan bli gjenopptatt UTEN at extras leveres. Da har sonden ingenting
+     å måle, og det skal rapporteres som nettopp det — ikke som en feil i appen. */
+  const utenId = treff(/Activity started without notification attached/);
   return {
-    tilPlugin: /LocalNotification received/.test(txt),
-    tilJs: /localNotificationActionPerformed/.test(txt),
-    jsFeil: (txt.match(/\[INFO:CONSOLE[^\n]*|Uncaught[^\n]*/g) || []).slice(0, 3),
+    tilPlugin: fikk.length > 0,
+    tilJs: videre.length > 0,
+    utenId: utenId.length > 0,
+    bevis: fikk.concat(videre, utenId).slice(0, 4).map((l) => l.trim().slice(0, 160)),
+    jsFeil: treff(/Uncaught|INFO:CONSOLE/).slice(0, 3).map((l) => l.trim().slice(0, 160)),
   };
 }
 
@@ -1111,10 +1125,20 @@ async function main() {
         'return { tapped: [...(H.notifChannelTapped || [])], peker: H.notifPendingTarget || null };');
       return (svar.tapped.length || svar.peker) ? svar : null;
     }, 20000, 1000);
-    check('I2b … og den kommer fram når appen ALT kjører (varm intent)',
-      !!varmt && (varmt.tapped.includes(snart.key) ||
-        !!(varmt.peker && varmt.peker.id === snart.obj_id)),
-      varmt || { pekerIkkeSett: true, sporet: trykkSpor() });
+    const varmtSpor = trykkSpor();
+    const traff = !!varmt && (varmt.tapped.includes(snart.key) ||
+      !!(varmt.peker && varmt.peker.id === snart.obj_id));
+    if (!traff && varmtSpor.utenId) {
+      /* Android gjenopptok oppgaven uten å levere intenten vår — pluginen sier
+         det selv. Sonden kan da ikke måle noe, og et FAIL ville vært en påstand
+         om appen som evidensen ikke bærer. */
+      skip('I2b den kommer fram når appen ALT kjører (varm intent)',
+        'Android gjenopptok oppgaven uten å levere intenten (launcher-semantikk) — ' +
+        'ikke målbart med `am start`');
+    } else {
+      check('I2b … og den kommer fram når appen ALT kjører (varm intent)', traff,
+        varmt || { pekerIkkeSett: true, sporet: varmtSpor });
+    }
   }
 
   const panelEtter = postet ? varselDump() : null;

@@ -2883,7 +2883,14 @@ statustabellen øverst.
   ledd;
 - TRYKK på varselet åpner riktig Huskis-objekt, også fra KALDSTART: runden sender
   pluginens egen tapp-intent mot en prosess som er drept, og leser at pekeren kom
-  fram i appen (I1–I3). Varselet forsvinner fra panelet etterpå (I4);
+  fram i appen (I1–I3). Varselet forsvinner fra panelet etterpå (I4).
+
+  **Dette punktet var ØDELAGT, og runden er det som fant det.** Pekeren parkeres
+  i det pluginen leverer trykket — før appen vet hvem som er innlogget — og
+  innloggingen nullstilte den rett etterpå. Et trykk på et varsel åpnet derfor
+  ingenting på en kaldstart. Rettet i samme endring, med regresjonstester
+  (`tests/notif-channels.test.js` 3d–3e leverer trykket FØR innloggingen er
+  ferdig). Begrunnelsen står i [`varsler.md`](varsler.md);
 - et TIDSSONEBYTTE MENS APPEN ER HELT LUKKET — punktet som før krevde seks
   manuelle steg. Runden bytter sone med AlarmManagers egen skallkommando, som
   kringkaster `TIMEZONE_CHANGED` slik et ekte bytte gjør, og måler at alarmene

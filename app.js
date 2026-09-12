@@ -14341,8 +14341,23 @@
     notifPushMark = null; notifPushMarkAt = 0;
     notifNativeMark = null; notifNativeMarkAt = 0; notifNativeRetryAt = 0;
     notifChSig = null;
-    notifPendingTarget = null;
-    notifChannelTapped.clear();
+    /* PEKEREN FRA ET TRYKK BLIR STÅENDE, og det er en rettelse: den hører til
+       enhetens siste HANDLING, ikke til kontoens historikk.
+
+       En kaldstart fra et varsel parkerer pekeren idet pluginen leverer trykket
+       — det skjer før `initAccounts()` har fått svar på `getSession()`. Nulles
+       den her, er den borte før `flushNotifPendingTarget()` kan bruke den, og da
+       åpner et trykk på varselet ingenting i det hele tatt. Det er nettopp
+       løftet parkeringen finnes for å holde: «pekeren må vente på at innlogging
+       og første synk er ferdige» (docs/varsler.md).
+
+       Å beholde den over et BRUKERBYTTE er trygt, og det er ikke en
+       bekvemmelighet: `navigateToObject` slår pekeren opp i gjeldende tilstand,
+       så en id den nye brukeren ikke har tilgang til finnes ikke og fører ingen
+       steder. Pekeren er dessuten allerede på enheten — den lekker ingenting.
+       Det samme gjelder de trykkede nøklene: settet er avgrenset, og det eneste
+       det kan gjøre er å holde tilbake én toast om nøyaktig det objektet
+       brukeren selv nettopp trykket på. */
     /* … OG TELEFONENS EGNE ALARMER, men BARE når de ikke er denne brukerens.
 
        De to tilfellene ser like ut herfra og er helt ulike:

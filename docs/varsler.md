@@ -802,6 +802,21 @@ Pekeren i varselet (`{ objType, objId }`) er nettopp en peker — **aldri et
 bevis**. Trykket kaller `navigateToObject()`, som slår id-en opp i gjeldende
 tilstand; en id vi ikke har tilgang til finnes ikke der, og fører ingen steder.
 
+**Og pekeren OVERLEVER innloggingen.** En kaldstart fra et varsel parkerer
+pekeren i det pluginen leverer trykket — det skjer før `getSession()` har svart,
+altså før appen vet hvem som er innlogget. `resetNotifications()` nullstiller
+varseltilstanden ved hver innlogging, men pekeren og de trykkede nøklene står
+igjen: de hører til enhetens siste HANDLING, ikke til kontoens historikk. Nulles
+de der, er pekeren borte før `flushNotifPendingTarget()` kan bruke den, og et
+trykk på varselet åpner ingenting i det hele tatt.
+
+Å beholde pekeren over et brukerbytte er trygt, og det er ikke en
+bekvemmelighet: `navigateToObject` slår den opp i gjeldende tilstand, så en id
+den nye brukeren ikke har tilgang til finnes ikke og fører ingen steder — og
+pekeren var allerede på enheten. Låst av `tests/notif-channels.test.js` 3d–3e,
+som leverer trykket FØR innloggingen er ferdig, og av
+`tests/android-alarm-queue.test.js` 7e–7f.
+
 ### Android: lokale varsler
 
 Adapteren speiler planen ut på enheten som en **diff** mot `getPending()`:
