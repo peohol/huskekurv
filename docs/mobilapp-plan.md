@@ -2765,6 +2765,14 @@ kanals viktighet i det den opprettes; alarmer fra en installasjon som er eldre
 enn kanalen planlegges derfor på nytt én gang. Autoritativt:
 `docs/varsler.md`, «Varselkanalen».
 
+**En vanlig oppstart rører ikke alarmene som alt ligger på telefonen.** Appen
+starter fra en bufret økt, så hver oppstart ser ut som en innlogging — men
+alarmene i Androids alarmkø er da brukerens egne, og en «avlys, så planlegg»
+ville gitt et vindu der telefonen sto uten dem. Enheten bærer derfor et merke
+over HVEM alarmene sist ble speilet for: er det den samme brukeren, står de
+urørt; er det en annen (eller ingen: en utlogging), rigges de ned før den nye
+planen gjelder. Autoritativt: `docs/varsler.md`, «Oppstart og brukerbytte».
+
 ### Varselets to ikoner
 
 Statuslinje-ikonet er `ic_stat_huskis` (`res/drawable/`), og uten et
@@ -2812,6 +2820,13 @@ Android (Samsung, rein installasjon); resten står igjen.
       er maskinelt dekket av `tests/notif-channels.test.js` 13, men bare mot en
       fake pluginbro;
 - [ ] med prosessen fjernet fra Recents: Android-systemvarselet leveres;
+- [ ] en vanlig OMSTART av appen: alarmene som alt var planlagt blir STÅENDE.
+      `adb shell dumpsys alarm | grep -A 3 no.huskis.app` før og etter skal vise
+      de samme alarmene, uten at de avlyses og legges inn igjen. Maskinelt dekket
+      av `tests/notif-channels.test.js` 14, men bare mot en fake pluginbro;
+- [ ] en ANNEN bruker logger inn på den samme telefonen: forrige brukers alarmer
+      er borte etterpå (de bærer objektnavn), og bare den nye brukerens plan står
+      i `dumpsys alarm`;
 - [ ] varsel etter en telefonrestart (pluginens `BOOT_COMPLETED`-mottaker skal
       stille opp igjen det som var planlagt);
 - [ ] trykk på varselet åpner riktig Huskis-objekt — også fra kaldstart, der

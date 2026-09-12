@@ -64,6 +64,15 @@
         omstarter ikke gjør noe mer. Til slutt at heads-up ikke har dratt med
         seg en eneste ny tillatelse: ingen fullskjerm, ingen skjerm-på, ingen
         presise alarmer.
+    14. Oppstart, og HVEM alarmene tilhører: en vanlig omstart for samme bruker
+        rører ikke en armert alarm — verken avlysning eller planlegging — mens en
+        ANNEN bruker som overtar enheten fortsatt får forrige brukers alarmer
+        ryddet bort, også når ingen speilingsrunde kan kjøre. Og de fem kantene:
+        en runde som feiler i broen beholder de tidligere gyldige alarmene, en
+        opprydning som feiler blir prøvd på nytt ved neste oppstart, en treg
+        nedrigging kan ikke avlyse alarmene den nye brukerens runde nettopp la
+        inn, en enhet uten merket får planen tilbake selv uten nett, og en
+        speiling utstedt før utloggingen får ikke planlegge noe.
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -90,14 +99,24 @@ const uid = 'uK';
 const id = {};
 ['UA', 'GA', 'LA', 'IA'].forEach((k) => { id[k] = U(); });
 
-function buildDB(due) {
+/* EN ANNEN BRUKER på den samme telefonen (kun 14): hun har sin egen mappe med
+   sin egen frist, så planen hennes er en annen enn den som alt ligger armert. */
+const uidB = 'uB';
+const idB = {};
+['UB', 'GB', 'LB', 'IB'].forEach((k) => { idB[k] = U(); });
+const METAB = {
+  onboarding: { v: 3, status: 'done' },
+  tips: { drag: true, trash: true, moveList: true, dragTrash: true },
+};
+
+function buildDB(due, medB) {
   const base = (x) => Object.assign({
     trashed: false, locked: false, unlocked: false, invite_policy: 'inherit',
     collapsed: false, is_cat: false, cat_id: null,
     start_at: null, due_at: null, lock_times: false,
     ts: 1, org: 'v', pos: 0, pos_ts: 1, pos_org: 'v',
   }, x);
-  return {
+  const d = {
     _rolesBackfilled: true,
     profiles: [{ id: uid, email: 'k@x.no', display_name: 'Kanal', user_metadata: {} }],
     passwords: { 'k@x.no': 'x' },
@@ -110,6 +129,29 @@ function buildDB(due) {
     share_invites: [], tombstones: [], notifications: [], notification_prefs: [],
     push_subscriptions: [], push_deliveries: [],
   };
+  if (medB) {
+    /* Her logges det faktisk INN som begge brukerne (et brukerbytte er hele
+       poenget), og da kommer metadataen fra PROFILRADEN — som hos Supabase.
+       Uten «demoen er sett» ville introduksjonen startet ved innloggingen og
+       byttet ut board-et med simuleringen sin. */
+    d.profiles[0].user_metadata = METAB;
+    // Fristen hennes er en annen dag, så ingen av alarmene kan forveksles med
+    // den forrige brukerens (id-en ER signaturen: nøkkel, tid og tekst).
+    const dueB = due && due.replace(/T.*$/, 'T08:30');
+    d.profiles.push({ id: uidB, email: 'b@x.no', display_name: 'Bruker B', user_metadata: METAB });
+    d.passwords['b@x.no'] = 'x';
+    d.universes.push(base({ id: idB.UB, owner_id: uidB, name: 'B-område' }));
+    d.groups.push(base({ id: idB.GB, owner_id: uidB, universe_id: idB.UB, name: 'B-mappe' }));
+    d.cards.push(base({ id: idB.LB, owner_id: uidB, group_id: idB.GB, title: 'Bs frist',
+      k: true, p: true, lab_ts: 0, lab_org: '', due_at: dueB }));
+    // Et aktivt listepunkt, som hos den første brukeren: en liste uten et
+    // eneste aktivt punkt har ingen kommende hendelser (`cardIsActive`), og
+    // dermed ingen plan å speile.
+    d.items.push(base({ id: idB.IB, owner_id: uidB, card_id: idB.LB, text: 'Bs punkt', done: false }));
+    d.memberships.push({ id: U(), user_id: uidB, universe_id: idB.UB, group_id: null,
+      role: 'owner', pos: 0, created_at: 1 });
+  }
+  return d;
 }
 
 /* Plattformen, og bare den. `?ch=native` gir pluginbroen, `?ch=web` gir
@@ -143,7 +185,11 @@ function fakePlattform() {
        rekkefølgen de kom — testen bruker den til å se at kanalen fantes FØR
        det første varselet ble planlagt. Loggen er øktens, ikke telefonens. */
     kanaler: [], logg: [],
-    perm: q.get('perm') || 'prompt', spurt: 0, vist: [], meldt: [] };
+    perm: q.get('perm') || 'prompt', spurt: 0, vist: [], meldt: [],
+    /* Et RPC-kall som feiler FRA FØRSTE LINJE: `?rpcfeil=get_my_doc` er en
+       oppstart uten nett. Flagget må stå før appen rekker å pulle, og kan
+       derfor ikke settes fra testen etter en sidelasting. */
+    rpcFeil: q.get('rpcfeil') || null };
   ['pending', 'alarmer', 'levert', 'kanaler'].forEach((k) => {
     if (Array.isArray(lagret[k])) window.__kanal[k] = lagret[k];
   });
@@ -174,6 +220,10 @@ function fakePlattform() {
       const lagKlient = v.createClient;
       v.createClient = function () {
         const c = lagKlient.apply(this, arguments);
+        /* Klienten testen selv logger inn med: et brukerbytte UTEN utlogging er
+           nøyaktig det Supabase gjør (`SIGNED_IN` på en annen bruker), og det er
+           den veien appen tar når en annen overtar enheten. */
+        window.__client = c;
         const ekte = c.rpc.bind(c);
         c.rpc = function (navn, params) {
           if (window.__kanal && window.__kanal.rpcFeil === navn) {
@@ -292,6 +342,11 @@ function fakePlattform() {
           },
           cancel: async (o) => {
             window.__kanal.logg.push('cancel:' + o.notifications.length);
+            /* Broen kan feile HER også, og det er ikke det samme som at den
+               feiler når noe skal planlegges: `cancelFeil` er en opprydning som
+               ikke kom gjennom. Bare i minnet — en ny sidelasting er en ny
+               telefonøkt, og feilen skal ikke følge med dit. */
+            if (window.__kanal.cancelFeil) throw new Error('avlys-feil (test)');
             window.__kanal.cancel.push(o.notifications);
             const vekk = new Set(o.notifications.map((n) => n.id));
             window.__kanal.alarmer = window.__kanal.alarmer.filter((n) => !vekk.has(n.id));
@@ -379,6 +434,18 @@ async function seed(p, url, db) {
     const H = window.__huskis;
     return H && H.authUser && H.lastMy && H.state.universes.length > 0 && !!H.notifPrefs;
   }, null, { timeout: 15000, polling: 200 });
+}
+
+/* Appen er oppe igjen etter en OMSTART (`goto` uten å seede på nytt): økten er
+   gjenopprettet, doc-et pullet og — med mindre `prefs: false` — varselrunden har
+   vært gjennom. Samme venting som `seed`, men for en telefon som alt er i drift. */
+async function venteOppe(p, opts) {
+  await p.waitForFunction((o) => {
+    const H = window.__huskis;
+    if (!H || !H.authUser || !H.lastMy || !H.state.universes.length) return false;
+    if (o.bruker && H.authUser.id !== o.bruker) return false;
+    return o.prefs === false || !!H.notifPrefs;
+  }, opts || {}, { timeout: 15000, polling: 200 });
 }
 
 async function cycle(p) {
@@ -1642,6 +1709,316 @@ async function run() {
     /isExactNotification:\s*false/.test(appSrc));
   log('13z3: koden setter ingen fullScreenIntent og tar ingen wake lock',
     !/fullScreenIntent\s*:/.test(appSrc) && !/wakeLock|WakeLock|requestWakeLock/.test(appSrc));
+
+  /* ========= 14) OPPSTART, OG HVEM ALARMENE PÅ TELEFONEN TILHØRER =========
+     Alarmene ligger i operativsystemets alarmkø og overlever både prosessen og
+     en oppgradering. Kanalen er lokal nettopp derfor: telefonen skal ikke
+     trenge appen for å varsle.
+
+     Da må en vanlig oppstart la dem STÅ. Appen starter fra en bufret økt, så
+     hver oppstart ser ut som en innlogging — og speilte opprydningen ved
+     innlogging en TOM plan inn i kanalen, ville den avlyst den samme brukerens
+     egne alarmer og lagt dem inn igjen en runde senere. Vinduet imellom er kort,
+     men ekte: dør prosessen der, eller feiler runden som skal legge dem inn
+     igjen, står telefonen uten alarmer til appen åpnes neste gang.
+
+     Det som skiller tilfellene er merket over eierskapet
+     (`hk-notif-android-user`). Her prøves begge veier, og de fire kantene rundt
+     dem: en runde som feiler i broen, en opprydning som feiler i broen, et
+     brukerbytte der broen svarer for sent, en enhet uten merket som starter uten
+     nett, og en speiling som ble utstedt før utloggingen. Sikkerhetsregelen står uendret — overtar en ANNEN bruker enheten,
+     ryddes alarmene bort før den nye planen gjelder, også når ingen
+     speilingsrunde kan kjøre. */
+  const ctxO = await nyKontekst(browser);
+  const po = await ctxO.newPage();
+  po.on('pageerror', (e) => errs.push('omstart: ' + e.message));
+  const OURL = BASE + '/?mock=1&ch=native';
+  await seed(po, OURL, buildDB(due, true));
+
+  /* Telefonen slik den står når brukeren har slått varslene på: alarmene
+     armert, kanalen laget, og begge merkene skrevet. */
+  await po.evaluate(() => window.__huskis.setNotifChannel(true));
+  await po.waitForFunction(() => window.__kanal.alarmer.length > 0,
+    null, { timeout: 8000, polling: 100 });
+  await po.waitForTimeout(400);
+
+  const bilde = () => po.evaluate(() => ({
+    chId: window.__huskis.NATIVE_CH_ID,
+    bruker: (window.__huskis.authUser || {}).id || null,
+    pullet: !!window.__huskis.lastMy,
+    eier: window.__huskis.nativePlanOwner(),
+    kanalMerke: localStorage.getItem(window.__huskis.NATIVE_CH_KEY),
+    kanaler: window.__kanal.kanaler.length,
+    perm: window.__kanal.perm,
+    alarmer: window.__kanal.alarmer.map((n) => ({ id: n.id, at: n.at, kanal: n.kanal }))
+      .sort((a, b) => a.id - b.id),
+    logg: window.__kanal.logg.slice(),
+    lagt: window.__kanal.schedule.flat().map((n) => n.id).sort((a, b) => a - b),
+    avlyst: window.__kanal.cancel.flat().map((n) => n.id).sort((a, b) => a - b),
+    plan: window.__huskis.planNotifications(window.__huskis.state, Date.now(),
+      window.__huskis.notifPrefs).map((r) => window.__huskis.nativeNotifId(
+        window.__huskis.nativeNotifSig(r))).sort((a, b) => a - b),
+  }));
+  const armertIder = (b) => JSON.stringify(b.alarmer.map((n) => n.id));
+  const armertTider = (b) => JSON.stringify(b.alarmer.map((n) => n.at));
+  const somPlanen = (b) => armertIder(b) === JSON.stringify(b.plan);
+  const nullstillLogg = () => po.evaluate(() => {
+    window.__kanal.logg.length = 0;
+    window.__kanal.schedule.length = 0;
+    window.__kanal.cancel.length = 0;
+  });
+  const loggInn = async (epost, bruker) => {
+    await po.evaluate((e) => window.__client.auth.signInWithPassword({ email: e, password: 'x' }), epost);
+    await po.waitForFunction((b) => {
+      const H = window.__huskis;
+      return H && H.authUser && H.authUser.id === b;
+    }, bruker, { timeout: 10000, polling: 50 });
+  };
+
+  const påSlått = await bilde();
+  log('14a: telefonen er merket med HVEM alarmene tilhører',
+    påSlått.alarmer.length > 0 && somPlanen(påSlått) && påSlått.eier === uid &&
+    påSlått.kanalMerke === påSlått.chId,
+    JSON.stringify({ alarmer: påSlått.alarmer.length, eier: påSlått.eier }));
+
+  /* ---------- 14b–14c) EN VANLIG OMSTART RØRER INGENTING ----------
+     Den samme brukeren, den samme planen, den samme telefonen. Da skal det
+     verken avlyses eller planlegges noe som helst — og det er nøyaktig det
+     issue #198 målte det motsatte av («cancel:2 → schedule:2»). */
+  await po.goto(OURL);
+  await venteOppe(po, { bruker: uid });
+  await po.evaluate(() => window.__huskis.syncNotifChannel());
+  for (let i = 0; i < 2; i++) await cycle(po);
+  await po.waitForTimeout(700);
+  const etterOmstart = await bilde();
+  log('14b: en vanlig omstart for samme bruker avlyser og planlegger INGENTING',
+    etterOmstart.logg.some((x) => /^createChannel:/.test(x)) &&
+    etterOmstart.logg.every((x) => !/^(cancel|schedule):/.test(x)) &&
+    etterOmstart.lagt.length === 0 && etterOmstart.avlyst.length === 0,
+    JSON.stringify(etterOmstart.logg));
+  log('14c: … og telefonen står igjen med NØYAKTIG de samme alarmene, på den samme kanalen',
+    armertIder(etterOmstart) === armertIder(påSlått) && armertTider(etterOmstart) === armertTider(påSlått) &&
+    etterOmstart.alarmer.every((n) => n.kanal === etterOmstart.chId) && somPlanen(etterOmstart) &&
+    etterOmstart.kanaler === 1 && etterOmstart.kanalMerke === etterOmstart.chId && etterOmstart.eier === uid,
+    JSON.stringify({ før: armertIder(påSlått), etter: armertIder(etterOmstart), eier: etterOmstart.eier }));
+
+  /* ---------- 14d–14e) EN RUNDE SOM FEILER TAR INGENTING MED SEG ----------
+     Det er dette vinduet issue #198 handler om. Fristen flyttes på SERVEREN —
+     som fra en annen enhet — så planen etterOmstart omstarten er en ANNEN enn den som
+     ligger armert: runden har noe å gjøre. Så feiler broen, oppstart etterOmstart
+     oppstart. Telefonen skal da beholde de tidligere gyldige alarmene, ikke
+     stå tom i påvente av en runde som kommer gjennom. */
+  const nyDue = due.replace(/T\d\d:\d\d$/, 'T15:00');
+  await po.evaluate(({ lid, nyDue }) => {
+    const d = window.HK_MOCK._loadDB();
+    const kort = d.cards.find((c) => c.id === lid);
+    // Stempelet må være nyere enn den lokale kopien, ellers vinner den i
+    // flettingen (LWW) og planen ville ikke endret seg i det hele tatt.
+    kort.due_at = nyDue; kort.ts = Date.now(); kort.org = 'annen-enhet';
+    window.HK_MOCK._saveDB(d);
+  }, { lid: id.LA, nyDue });
+  await po.evaluate(() => { window.__kanal.kanalFeil = true; window.__kanal.lagre(); });
+  for (let i = 0; i < 3; i++) {
+    await po.goto(OURL);
+    await venteOppe(po, { bruker: uid });
+    await po.waitForTimeout(600);
+  }
+  const broFeilet = await bilde();
+  log('14d: en runde som feiler i broen etterlater de tidligere gyldige alarmene i fred',
+    armertIder(broFeilet) === armertIder(påSlått) && armertTider(broFeilet) === armertTider(påSlått) &&
+    broFeilet.lagt.length === 0 && broFeilet.avlyst.length === 0 &&
+    // … og runden HADDE noe å gjøre: planen er ikke den som ligger armert.
+    !somPlanen(broFeilet) && broFeilet.plan.length > 0,
+    JSON.stringify({ armert: broFeilet.alarmer.length, plan: broFeilet.plan.length }));
+
+  await po.evaluate(() => { window.__kanal.kanalFeil = null; window.__kanal.lagre(); });
+  await po.evaluate(() => window.__huskis.syncNotifChannel());
+  await po.waitForTimeout(700);
+  const tattIgjen = await bilde();
+  log('14e: … og runden som endelig kom gjennom tar hele etterslepet',
+    somPlanen(tattIgjen) && tattIgjen.lagt.length > 0 && tattIgjen.avlyst.length > 0 &&
+    tattIgjen.alarmer.every((n) => n.kanal === tattIgjen.chId) && tattIgjen.eier === uid,
+    JSON.stringify({ lagt: tattIgjen.lagt.length, avlyst: tattIgjen.avlyst.length }));
+
+  /* ---------- 14f–14g) ET REELT BRUKERBYTTE RYDDER FORTSATT ----------
+     Sikkerhetsregelen, uendret: en annen bruker overtar enheten, og forrige
+     brukers alarmer — de bærer objektnavn — skal bort FØR den nye planen
+     gjelder. Tillatelsen trekkes først, så ingen speilingsrunde KAN kjøre:
+     opprydningen er ikke avhengig av at kanalen er på. */
+  await nullstillLogg();
+  await po.evaluate(() => { window.__kanal.perm = 'denied'; window.__kanal.lagre(); });
+  await loggInn('b@x.no', 'uB');
+  await po.waitForTimeout(900);
+  const bytte = await bilde();
+  log('14f: en ANNEN bruker overtar enheten — forrige brukers alarmer avlyses',
+    bytte.bruker === 'uB' && bytte.alarmer.length === 0 &&
+    JSON.stringify(bytte.avlyst) === JSON.stringify(tattIgjen.alarmer.map((n) => n.id)) &&
+    bytte.eier === null,
+    JSON.stringify({ avlyst: bytte.avlyst.length, eier: bytte.eier }));
+  log('14g: … og opprydningen skjer selv om ingen speilingsrunde kan kjøre',
+    bytte.perm === 'denied' && bytte.lagt.length === 0 &&
+    bytte.logg.every((x) => !/^schedule:/.test(x)), JSON.stringify(bytte.logg));
+
+  /* ---------- 14h–14j) EN OPPRYDNING SOM FEILER ER IKKE GLEMT ----------
+     Broen kan feile også når noe skal AVLYSES. Merket blir da stående på
+     forrige bruker, og oppgaven er utsatt — ikke tapt: neste oppstart prøver på
+     nytt, og det er merket som gjør at den kan. */
+  await po.evaluate(() => { window.__kanal.perm = 'granted'; window.__kanal.lagre(); });
+  await loggInn('k@x.no', uid);
+  await po.waitForFunction(() => window.__kanal.alarmer.length > 0,
+    null, { timeout: 10000, polling: 100 });
+  await po.waitForTimeout(500);
+  const tilbake = await bilde();
+  log('14h: brukeren tar enheten tilbake, og alarmene hennes armeres på nytt',
+    tilbake.bruker === uid && tilbake.alarmer.length > 0 && somPlanen(tilbake) &&
+    tilbake.eier === uid, JSON.stringify({ bruker: tilbake.bruker, eier: tilbake.eier,
+      armert: armertIder(tilbake), plan: tilbake.plan }));
+
+  await nullstillLogg();
+  await po.evaluate(() => {
+    window.__kanal.cancelFeil = true;                     // avlysningen kommer ikke gjennom
+    window.__kanal.perm = 'denied'; window.__kanal.lagre();  // … og ingen runde kan rydde i stedet
+  });
+  await loggInn('b@x.no', 'uB');
+  await po.waitForTimeout(900);
+  const mislykket = await bilde();
+  log('14i: en opprydning som feiler i broen lar merket stå på forrige bruker',
+    mislykket.bruker === 'uB' && armertIder(mislykket) === armertIder(tilbake) &&
+    mislykket.eier === uid, JSON.stringify({ armert: mislykket.alarmer.length, eier: mislykket.eier }));
+
+  await po.evaluate(() => { window.__kanal.cancelFeil = null; });
+  await po.goto(OURL);                       // neste oppstart — fortsatt uten tillatelse
+  await venteOppe(po, { bruker: 'uB', prefs: false });
+  await po.waitForTimeout(900);
+  const ryddet = await bilde();
+  log('14j: … og neste oppstart rydder dem bort, uten at planen eller kanalen trengs',
+    ryddet.bruker === 'uB' && ryddet.alarmer.length === 0 && ryddet.eier === null &&
+    ryddet.perm === 'denied', JSON.stringify({ armert: ryddet.alarmer.length, eier: ryddet.eier }));
+
+  /* ---------- 14k) NEDRIGGINGEN KAN IKKE TA DEN NYE BRUKERENS ALARMER ----
+     Nedriggingen og speilingen går over den samme broen, og de står i kø
+     nettopp derfor: svarte nedriggingens `getPending()` SENT, ville den regnet
+     ut avlysningen sin fra en lagring der den nye brukerens alarmer alt sto —
+     og avlyst dem, mens signaturen sa «speilet». Her tvinges nøyaktig den
+     rekkefølgen. */
+  await po.evaluate(() => { window.__kanal.perm = 'granted'; window.__kanal.lagre(); });
+  await loggInn('k@x.no', uid);
+  await po.waitForFunction(() => window.__kanal.alarmer.length > 0,
+    null, { timeout: 10000, polling: 100 });
+  await po.waitForTimeout(500);
+  const førKø = await bilde();
+  await nullstillLogg();
+  await po.evaluate(() => {
+    const ln = window.Capacitor.Plugins.LocalNotifications;
+    const ekte = ln.getPending;
+    window.__kanal.ekteGetPending = ekte;
+    let n = 0;
+    ln.getPending = function () {
+      const args = arguments;
+      // Første forespørsel etterOmstart byttet er nedriggingens. Den svarer sent.
+      if (n++ === 0) return new Promise((ok) => setTimeout(() => ok(ekte.apply(ln, args)), 600));
+      return ekte.apply(ln, args);
+    };
+  });
+  await loggInn('b@x.no', 'uB');
+  await po.waitForFunction(() => window.__kanal.alarmer.length > 0,
+    null, { timeout: 15000, polling: 100 }).catch(() => {});
+  await po.waitForTimeout(1200);
+  const kø = await bilde();
+  log('14k: en treg nedrigging kan ikke avlyse alarmene den nye brukerens runde la inn',
+    kø.bruker === 'uB' && kø.alarmer.length > 0 && somPlanen(kø) &&
+    kø.alarmer.every((n) => førKø.alarmer.every((a) => a.id !== n.id)) &&
+    kø.eier === 'uB', JSON.stringify({ armert: armertIder(kø), plan: JSON.stringify(kø.plan) }));
+  await po.evaluate(() => {
+    const ln = window.Capacitor.Plugins.LocalNotifications;
+    ln.getPending = window.__kanal.ekteGetPending || ln.getPending;
+  });
+
+  /* ---------- 14l) EN ENHET UTEN MERKET, OG UTEN NETT ----------
+     Slik ser en installasjon ut som er ELDRE enn merket: alarmer i køen, men
+     ingen som kan si hvem de tilhører. Da ryddes de — ukjent regnes som en
+     annens — og nettopp derfor må planen legges tilbake med det samme, fra
+     enhetens egen tilstand. Her kommer ikke pullen fram i det hele tatt
+     (`?rpcfeil=get_my_doc`): hadde opprydningen ventet på en speilingsrunde,
+     ville telefonen stått med en tom alarmkø til noe annet skjedde. */
+  await po.evaluate(() => localStorage.removeItem(window.__huskis.NATIVE_OWNER_KEY));
+  const utenMerke = await bilde();
+  await po.goto(OURL + '&rpcfeil=get_my_doc');
+  await po.waitForFunction(() => {
+    const H = window.__huskis;
+    return H && H.authUser && H.state.universes.length > 0;
+  }, null, { timeout: 15000, polling: 200 });
+  await po.waitForTimeout(1800);
+  const uMerke = await bilde();
+  log('14l: en enhet uten merket ryddes — men planen er tilbake med det samme, uten en server',
+    uMerke.pullet === false && uMerke.avlyst.length > 0 &&
+    armertIder(uMerke) === armertIder(utenMerke) && somPlanen(uMerke) &&
+    uMerke.alarmer.every((n) => n.kanal === uMerke.chId) && uMerke.eier === 'uB',
+    JSON.stringify({ pullet: uMerke.pullet, avlyst: uMerke.avlyst.length,
+      armert: armertIder(uMerke), før: armertIder(utenMerke), eier: uMerke.eier }));
+
+  /* ---------- 14m) UTLOGGING RIGGER FORTSATT NED ---------- */
+  await po.evaluate(() => window.__client.auth.signOut({ scope: 'local' }));
+  await po.waitForFunction(() => !window.__huskis.authUser,
+    null, { timeout: 10000, polling: 100 });
+  await po.waitForTimeout(800);
+  const utlogget = await bilde();
+  log('14m: utlogging tar fortsatt planen ned — ingen tar over enheten',
+    utlogget.bruker === null && utlogget.alarmer.length === 0 && utlogget.eier === null,
+    JSON.stringify({ armert: utlogget.alarmer.length, eier: utlogget.eier }));
+
+  /* ---------- 14n) EN RUNDE SOM BLE UTSTEDT FØR UTLOGGINGEN ----------
+     En speiling regner ut planen sin FØRST og går så over broen — `state()`, og
+     køen foran `sync()`. Skjer utloggingen mens den står der, er planen den
+     bærer forrige brukers, og køen slipper den inn ETTER nedriggingen. Fikk den
+     planlegge, sto telefonen igjen med den utloggede brukerens alarmer, med
+     objektnavnene hennes, og uten en innlogget økt til å rydde dem.
+
+     Her holdes broen igjen i `checkPermissions` — nøyaktig der `state()` venter
+     — mens utloggingen skjer. Tiden settes rett i `state`, uten `save()`, så
+     ingen debounce kan komme og gjøre jobben for runden. */
+  await po.goto(OURL);
+  await po.waitForFunction(() => !!window.__huskis, null, { timeout: 15000, polling: 100 });
+  await loggInn('k@x.no', uid);
+  await po.waitForFunction(() => window.__kanal.alarmer.length > 0,
+    null, { timeout: 15000, polling: 100 });
+  await po.waitForTimeout(600);
+  await nullstillLogg();
+  await po.evaluate(() => {
+    const ln = window.Capacitor.Plugins.LocalNotifications;
+    const ekte = ln.checkPermissions;
+    ln.checkPermissions = function () {
+      const args = arguments;
+      if (!window.__kanal.tregPerm) return ekte.apply(ln, args);
+      return new Promise((ok) => setTimeout(() => ok(ekte.apply(ln, args)), 900));
+    };
+  });
+  const førUt = await bilde();
+  await po.evaluate((lid) => {
+    const H = window.__huskis;
+    let kort = null;
+    for (const u of H.state.universes) for (const g of (u.groups || []))
+      for (const c of (g.cards || [])) if (c.id === lid) kort = c;
+    const to = (x) => String(x).padStart(2, '0');
+    const d = new Date(Date.now() + 9 * 86400000);
+    // Rett i tilstanden: en ny plan, uten en `save()` som ville køet en runde.
+    kort.due = d.getFullYear() + '-' + to(d.getMonth() + 1) + '-' + to(d.getDate()) + 'T16:30';
+    window.__kanal.tregPerm = true;
+    H.syncNotifChannel();      // ikke ventet på: den står nå i broen
+  }, id.LA);
+  await po.waitForTimeout(200);
+  await po.evaluate(() => window.__client.auth.signOut({ scope: 'local' }));
+  await po.waitForFunction(() => !window.__huskis.authUser,
+    null, { timeout: 10000, polling: 100 });
+  await po.waitForTimeout(2600);            // godt forbi de 900 ms i broen
+  const stale = await bilde();
+  log('14n: en speiling utstedt FØR utloggingen får ikke legge den utloggede brukerens alarmer',
+    førUt.alarmer.length > 0 && stale.bruker === null && stale.alarmer.length === 0 &&
+    stale.lagt.length === 0 && stale.eier === null,
+    JSON.stringify({ før: førUt.alarmer.length, armert: stale.alarmer.length,
+      lagt: stale.lagt.length, eier: stale.eier }));
+
+  await ctxO.close();
 
   /* ================= Nettleser: uten avsendernøkkel ================= */
   const ctxU = await nyKontekst(browser);
