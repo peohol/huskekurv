@@ -130,15 +130,32 @@ jobs:
           # ~/.android. Den skrives ut i stedet for å antas — et steg som
           # skriver til en gjettet sti feiler uten å si hvorfor.
           avdmanager list avd
+          # RAM og kjerner eksplisitt: en AVD laget uten en enhetsprofil får
+          # standardverdier som er for små for et moderne Android, og da bruker
+          # oppstarten evigheter (eller kommer aldri).
           nohup emulator -avd huskis \
-            -no-window -no-audio -no-boot-anim -no-snapshot \
+            -no-window -no-audio -no-boot-anim -no-snapshot -no-snapshot-save \
+            -memory 4096 -cores 2 \
             -gpu swiftshader_indirect -camera-back none -camera-front none \
             > emulator.log 2>&1 &
-          adb wait-for-device
+          # BEGGE ventingene har tak, og det er ikke pynt: `adb wait-for-device`
+          # venter i all evighet, så en emulator som krasjer under oppstart ville
+          # holdt jobben til dens egen 75-minutters grense — og da hadde vi brukt
+          # en time på ingenting. Loggen skrives ut her OG lastes opp som artifact,
+          # så grunnen er lesbar uten å laste ned noe.
+          if ! timeout 300 adb wait-for-device; then
+            echo "Emulatoren registrerte seg ikke hos adb innen 300 s" >&2
+            tail -100 emulator.log >&2 || true
+            exit 1
+          fi
           # `sys.boot_completed` er det ene signalet som betyr at systemet er
           # oppe. Uten ventingen installerer vi mot en halvbooted enhet.
-          timeout 600 bash -c \
-            'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 3; done'
+          if ! timeout 600 bash -c \
+            'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 3; done'; then
+            echo "Emulatoren fullførte ikke oppstart innen 600 s" >&2
+            tail -100 emulator.log >&2 || true
+            exit 1
+          fi
           adb shell input keyevent 82      # lås opp (ingen PIN på en ny AVD)
           adb shell settings put global window_animation_scale 0
           adb shell settings put global transition_animation_scale 0

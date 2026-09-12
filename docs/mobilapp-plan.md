@@ -2828,10 +2828,12 @@ oppstartsmottaker direkte i stedet.
 
 Runden skrur på tre ting som ikke er appens egne — alarmkøen, flymodus og
 tidssonen — og setter alle tilbake, også når den blir avbrutt med Ctrl-C eller
-bryter sammen. Blir den avbrutt med RIGGENS alarmer armert på en enhet uten
-innlogget bruker, avlyses de med en `force-stop`: der finnes ingen
-speilingsrunde som ville ryddet dem, og «Huskis-rigg 1» skal ikke ringe på noens
-telefon. På en innlogget telefon gjøres det aldri.
+bryter sammen. Blir den avbrutt med RIGGENS alarmer armert, avlyses nøyaktig de
+id-ene riggen la inn: «Huskis-rigg forfaller» skal ikke ringe på noens telefon,
+og brukerens egen plan står ikke i listen og røres ikke. Å vente på neste
+speilingsrunde duger ikke — alarmen som skal få forfalle ligger sekunder fram.
+`force-stop` er siste utvei når pluginbroen ikke er å nå, og brukes bare på en
+enhet uten innlogget bruker.
 
 ### Allerede observert på fysisk Android
 

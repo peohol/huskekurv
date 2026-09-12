@@ -287,9 +287,9 @@ const drepKropp = (() => {
 })();
 check('6b `drepApp` bruker aldri force-stop — den ville avlyst alarmene',
   drepKropp !== '' && !/force-stop/.test(drepKropp) && /am kill /.test(drepKropp));
-check('6b2 … og den ENESTE force-stop i fila står i opprydningen av riggen',
+check('6b2 … og den ENESTE force-stop i fila er siste utvei i riggopprydningen',
   (harness.match(/am force-stop/g) || []).length === 1 &&
-  /åGjenopprette\.rigg && !åGjenopprette\.live\) \{[\s\S]{0,200}am force-stop/.test(harness));
+  /function ryddRiggAlarmer[\s\S]*am force-stop/.test(harness));
 check('6c grunnen står i fila, ikke bare i dokumentasjonen',
   /force-stop/.test(harness) && /stopped state/.test(harness));
 check('6d varseltillatelsen gis med `pm grant`, ikke ved å trykke i en dialog',
@@ -319,8 +319,9 @@ check('6m2 Ctrl-C og SIGTERM rydder enheten før de avslutter',
   /process\.on\(sig, \(\) => \{[\s\S]{0,300}ryddEnheten\(\);/.test(harness));
 check('6m flymodus og tidssone settes TILBAKE uansett hvordan runden ender',
   /function ryddEnheten/.test(harness) &&
-  (harness.match(/ryddEnheten\(\);/g) || []).length >= 4 &&
-  /\.catch\(\(e\) => \{[\s\S]{0,400}ryddEnheten\(\);/.test(harness),
+  /const avslutt = async \(kode\) => \{\s*\n\s*ryddEnheten\(\);/.test(harness) &&
+  /main\(\)\.then\(avslutt\)\.catch\([\s\S]{0,400}avslutt\(1\);/.test(harness) &&
+  (harness.match(/ryddEnheten\(\);/g) || []).length >= 3,
   (harness.match(/ryddEnheten\(\);/g) || []).length + ' kall');
 
 /* ---- 7. Observatørene appen må eksponere ----
@@ -361,11 +362,30 @@ check('8g workflowen kjøres på PR-er som rører Android-siden',
    endring i adapteren brekke native varsler uten at runden kjørte. */
 check('8h … OG på app.js, der varseladapteren faktisk bor',
   /^\s+- 'app\.js'$/m.test(wf));
-check('8i opprydningen kan også avlyse RIGGENS alarmer på en enhet uten økt',
-  /åGjenopprette\.rigg/.test(harness) && /am force-stop/.test(harness) &&
-  /!åGjenopprette\.live/.test(harness));
-check('8j … men ALDRI på en innlogget telefon, der køen er brukerens egen',
-  /if \(åGjenopprette\.rigg && !åGjenopprette\.live\) \{[\s\S]{0,200}am force-stop/.test(harness));
+check('8i opprydningen avlyser NØYAKTIG riggens id-er gjennom pluginen',
+  /åGjenopprette\.riggIder/.test(harness) && /ln\.cancel\(\{ notifications: ider/.test(harness) &&
+  /removeDeliveredNotificationsById/.test(harness));
+check('8j … ikke ved å vente på «neste synk»: alarmen i H ligger sekunder fram',
+  !/avlyses av diffen neste gang Huskis synker/.test(harness) &&
+  /~25 sekunder/.test(harness));
+check('8k force-stop er SISTE utvei, og bare uten en innlogget bruker',
+  /if \(!åGjenopprette\.harØkt\) \{[\s\S]{0,200}am force-stop/.test(harness));
+/* «Innlogget» og «LIVE» er ikke det samme: LIVE krever i tillegg varsler PÅ og en
+   ikke-tom plan. En innlogget bruker uten kommende varsler kjører altså RIGG, og
+   der ville en force-stop tatt hennes app inn i «stopped state» for ingenting. */
+check('8l økten leses av `authUser`, ikke av LIVE-vilkåret',
+  /window\.__huskis\.authUser/.test(harness) &&
+  /åGjenopprette\.harØkt = harØkt/.test(harness) &&
+  !/åGjenopprette\.live/.test(harness));
+check('8m avbrudd rydder BÅDE innstillingene og alarmene, med et tak',
+  /ryddEnheten\(\);\s*\/\/ systeminnstillingene med én gang/.test(harness) &&
+  /Promise\.race\(\[ryddRiggAlarmer\(\), sov\(RYDD_MS\)\]\)/.test(harness) &&
+  /if \(rydder\) process\.exit\(130\);/.test(harness));
+check('8n emulatorjobben har tak på BEGGE ventingene, og skriver loggen ved feil',
+  /timeout 300 adb wait-for-device/.test(wf) && /timeout 600 bash -c/.test(wf) &&
+  (wf.match(/tail -100 emulator\.log/g) || []).length === 2);
+check('8o … og emulatoren får RAM og kjerner eksplisitt',
+  /-memory 4096/.test(wf) && /-cores 2/.test(wf));
 
 /* ---- 9. Dokumentasjonen skiller bevist fra observert ---- */
 const plan = les('docs', 'mobilapp-plan.md');

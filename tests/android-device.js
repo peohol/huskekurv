@@ -101,6 +101,7 @@ const POST_MS = 180000;          // alarmen er UPRESIS med vilje: Android får f
 const RIG_AHEAD_MIN = [180, 240, 300];
 const SOON_S = 25;               // alarmen som skal få forfalle i runden
 const TOL_MS = 150000;           // slingring når to tidssett sammenlignes
+const RYDD_MS = 45000;           // taket på opprydningen av riggens alarmer
 
 /* ---------------------------------------------------------------- rapporten */
 
@@ -334,7 +335,10 @@ const sonen = () => sh('getprop persist.sys.timezone', { tillatFeil: true }).tri
    tilbake uansett hvordan runden ender — en avbrutt runde som etterlot telefonen i
    flymodus eller på Hawaii-tid ville vært en feil harnesset selv laget.
    `ryddEnheten()` kjøres både på veien ut og fra feilgrenen. */
-const åGjenopprette = { sone: null, flymodus: false, rigg: false, live: false };
+const åGjenopprette = { sone: null, flymodus: false, riggIder: [], harØkt: false };
+
+/* SYSTEMINNSTILLINGENE tilbake. Synkron med vilje: den må virke selv når broen
+   er død, og den skal være ferdig før prosessen får lov til å gå. */
 function ryddEnheten() {
   try {
     if (åGjenopprette.flymodus) {
@@ -345,29 +349,49 @@ function ryddEnheten() {
       sh('cmd alarm set-timezone ' + åGjenopprette.sone, { tillatFeil: true });
       if (sonen() === åGjenopprette.sone) åGjenopprette.sone = null;
     }
-    /* … OG RIGGENS EGNE ALARMER, når runden ble avbrutt med dem armert. De bærer
-       teksten «Huskis-rigg», og på en enhet UTEN en innlogget bruker finnes det
-       ingen speilingsrunde som noensinne rydder dem: de ville ringt.
-
-       `force-stop` er verktøyet her, og det er ikke en selvmotsigelse: runden
-       unngår den nettopp FORDI Android avlyser appens alarmer når en app
-       tvangsstoppes (se `drepApp`). Her er det virkningen vi er etter.
-
-       På en INNLOGGET telefon gjør vi det ikke: køen er brukerens egen, og en
-       `force-stop` ville tatt hennes alarmer også. Der heler adapterens diff den
-       ene overflødige raden ved neste speiling — det er nettopp det K måler når
-       runden får gå ferdig. */
-    if (åGjenopprette.rigg && !åGjenopprette.live) {
-      sh('am force-stop ' + PKG, { tillatFeil: true });
-      åGjenopprette.rigg = false;
-      console.error('     · riggalarmene er avlyst (force-stop) — enheten står uten Huskis-alarmer');
-    } else if (åGjenopprette.rigg) {
-      console.error('     · en riggalarm kan stå armert; den avlyses av diffen neste gang Huskis synker');
-      åGjenopprette.rigg = false;
-    }
     sh('svc power stayon false', { tillatFeil: true });
     adb(['forward', '--remove', 'tcp:' + CDP_PORT], { tillatFeil: true });
   } catch (e) { /* opprydningen skal ikke kunne skjule feilen den rydder etter */ }
+}
+
+/* … OG RIGGENS EGNE ALARMER, når runden blir avbrutt med dem armert.
+
+   Å vente på «neste speilingsrunde» duger ikke: alarmen i H ligger ~25 sekunder
+   fram, og den rekker å ringe lenge før en synk. «Huskis-rigg forfaller» skal
+   ikke komme på noens telefon.
+
+   Derfor avlyses NØYAKTIG de id-ene riggen la inn, gjennom pluginen — brukerens
+   egen plan er urørt, for den står ikke i listen. Det krever at appen kjører, så
+   den startes. Når broen ikke er å nå, er siste utvei `force-stop`, som avlyser
+   ALLE appens alarmer: den brukes bare når enheten ikke har en innlogget bruker,
+   for der er køen riggens egen. Er brukeren innlogget, sier vi i stedet presis
+   hva som kan ringe én gang — en `force-stop` ville tatt hennes alarmer OG satt
+   appen i «stopped state». */
+async function ryddRiggAlarmer() {
+  const ider = åGjenopprette.riggIder.slice();
+  if (!ider.length) return;
+  const liste = JSON.stringify(ider);
+  try {
+    const b = await appenOpp();
+    await b.evalJs(
+      'const ln = window.Capacitor.Plugins.LocalNotifications;' +
+      'const ider = ' + liste + ';' +
+      'try { await ln.cancel({ notifications: ider.map((id) => ({ id })) }); } catch (e) {}' +
+      'try { await ln.removeDeliveredNotificationsById({ ids: ider }); } catch (e) {}' +
+      'return true;');
+    åGjenopprette.riggIder = [];
+    console.error('     · riggalarmene ' + liste + ' er avlyst; brukerens egen plan er urørt');
+  } catch (e) {
+    if (!åGjenopprette.harØkt) {
+      sh('am force-stop ' + PKG, { tillatFeil: true });
+      åGjenopprette.riggIder = [];
+      console.error('     · broen var ikke å nå — riggalarmene avlyst med force-stop ' +
+        '(ingen innlogget bruker, så køen var riggens egen)');
+    } else {
+      console.error('     · FIKK IKKE avlyst riggalarmene ' + liste + ': de kan ringe én gang. ' +
+        'Din egen plan er urørt — åpne Huskis, så rydder diffen resten.');
+    }
+  }
 }
 
 async function settSone(id) {
@@ -654,22 +678,31 @@ async function main() {
 
   /* --------------------------- C. Subjektet --------------------------- */
   const eier = await bro.evalJs('return window.__huskis.nativePlanOwner() || null;');
+  /* «Innlogget» og «LIVE» er IKKE det samme, og forskjellen avgjør hva en
+     opprydning får gjøre. LIVE krever i tillegg at varslene er på og at planen
+     framover ikke er tom — en innlogget bruker uten kommende varsler kjører altså
+     RIGG. Der ville en `force-stop` ved avbrudd tatt hennes app inn i Androids
+     «stopped state» for ingenting. Økten leses derfor av `authUser`, for seg. */
+  const harØkt = !!(await bro.evalJs('return !!window.__huskis.authUser;'));
+  åGjenopprette.harØkt = harØkt;
   let plan = await bro.evalJs(PLAN_JS);
   const live = tillatelse === 'on' && !!eier && plan.length > 0;
-  åGjenopprette.live = live;
   let rigg = null;
   if (live) {
     check('C1 LIVE: enheten har en innlogget bruker med en plan framover', true,
       plan.length + ' terskler, eier ' + eier.slice(0, 8));
   } else {
     rigg = riggPlan(await bro.evalJs('return Date.now();'));
-    åGjenopprette.rigg = true;        // fra nå ligger det syntetiske alarmer i køen
-    await sync(rigg, false);
+    /* Id-ene FØRST: fra nå kan et avbrudd etterlate dem armert, og opprydningen
+       må vite nøyaktig hvilke som er riggens. */
     plan = await medId(rigg);
+    åGjenopprette.riggIder = plan.map((r) => r.id);
+    await sync(rigg, false);
     check('C1 RIGG: tre syntetiske alarmer planlagt gjennom den ekte adapteren',
       plan.length === RIG_AHEAD_MIN.length,
-      { innlogget: !!eier, varsler: tillatelse });
-    sier('ingen innlogget plan på enheten — brukerbyttet (J3) kan ikke prøves her');
+      { innlogget: harØkt, eiermerke: !!eier, varsler: tillatelse });
+    sier(harØkt ? 'innlogget, men ingen plan framover — brukerbyttet (J3) kan ikke prøves her'
+      : 'ingen innlogget bruker — brukerbyttet (J3) kan ikke prøves her');
   }
 
   /* ------------------- D. Alarmene ligger i Androids kø ------------------- */
@@ -851,9 +884,10 @@ async function main() {
   /* HELE planen, ikke bare den nye raden: `sync` er en diff mot det telefonen
      har, så en plan uten de andre alarmene ville avlyst dem. */
   const medSnart = (live ? await bro.evalJs(PLAN_JS) : rigg).concat([snart]);
-  åGjenopprette.rigg = true;          // «snart» er syntetisk i begge modi
-  await sync(medSnart, false);
   const snartId = (await medId([snart]))[0].id;
+  // … og den er syntetisk i BEGGE modi, så opprydningen må kjenne den.
+  åGjenopprette.riggIder = åGjenopprette.riggIder.concat([snartId]);
+  await sync(medSnart, false);
   await drepApp();                 // varselet skal komme med appen BORTE
   /* NØYAKTIG dette varselet, ikke «et varsel fra Huskis»: på en telefon i bruk
      kan panelet alt ha en Huskis-rad liggende, og da ville et søk på pakkenavnet
@@ -973,14 +1007,14 @@ async function main() {
     const slutt = alarmKø();
     const iTakt = slutt.length === ekte.length &&
       sammeTider(tider(slutt), ekte.map((r) => r.at).sort((a, b) => a - b));
-    if (iTakt) åGjenopprette.rigg = false;     // ingen syntetisk rad står igjen
+    if (iTakt) åGjenopprette.riggIder = [];    // ingen syntetisk rad står igjen
     check('K1 den ekte planen står igjen på enheten, og riggen er borte', iTakt,
       { kø: slutt.length, plan: ekte.length });
   } else {
     await sync([], true);
     await drepApp();
     const tom = alarmKø().length === 0;
-    if (tom) åGjenopprette.rigg = false;
+    if (tom) åGjenopprette.riggIder = [];
     check('K1 riggen er ryddet bort — enheten er som før runden', tom);
   }
   if (bro) { bro.lukk(); bro = null; }
@@ -1025,18 +1059,29 @@ if (require.main === module) {
      gjennom noen av grenene under: løftet blir aldri oppgjort, og telefonen står
      igjen i flymodus eller på en annen tidssone. Signalene får derfor samme
      opprydning, og avslutter med signalets egen kode (128 + nummer). */
+  let rydder = false;
   for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     process.on(sig, () => {
+      // Et andre trykk avslutter straks: opprydningen skal ikke kunne holde en
+      // Ctrl-C som gissel.
+      if (rydder) process.exit(130);
+      rydder = true;
       console.error('\n✗ Avbrutt (' + sig + ') — rydder enheten før jeg går.');
-      ryddEnheten();
-      process.exit(sig === 'SIGINT' ? 130 : 143);
+      ryddEnheten();                    // systeminnstillingene med én gang
+      Promise.race([ryddRiggAlarmer(), sov(RYDD_MS)])
+        .catch(() => {})
+        .then(() => process.exit(sig === 'SIGINT' ? 130 : 143));
     });
   }
-  main().then((kode) => { ryddEnheten(); process.exit(kode); }).catch((e) => {
-    console.error('\n✗ Runden stoppet: ' + ((e && e.message) || e));
-    // Telefonen skal ikke bli stående i flymodus eller på en annen tidssone fordi
-    // runden brøt sammen.
+  const avslutt = async (kode) => {
     ryddEnheten();
-    process.exit(1);
+    await Promise.race([ryddRiggAlarmer(), sov(RYDD_MS)]).catch(() => {});
+    process.exit(kode);
+  };
+  main().then(avslutt).catch((e) => {
+    console.error('\n✗ Runden stoppet: ' + ((e && e.message) || e));
+    // Telefonen skal ikke bli stående i flymodus, på en annen tidssone eller med
+    // riggens alarmer armert fordi runden brøt sammen.
+    avslutt(1);
   });
 }
