@@ -386,6 +386,11 @@ check('8n emulatorjobben har tak på BEGGE ventingene, og skriver loggen ved fei
   (wf.match(/tail -100 emulator\.log/g) || []).length === 2);
 check('8o … og emulatoren får RAM og kjerner eksplisitt',
   /-memory 4096/.test(wf) && /-cores 2/.test(wf));
+/* En emulator uten brukbar KVM feiler ikke — den KRABBER, og ser ut som en enhet
+   som aldri blir ferdig å boote. Det skal sies med én gang, ikke etter tolv
+   minutters venting. */
+check('8p akselerasjonen sjekkes FØR oppstarten, og kreves',
+  /emulator -accel-check/.test(wf) && /-accel on/.test(wf));
 
 /* ---- 9. Dokumentasjonen skiller bevist fra observert ---- */
 const plan = les('docs', 'mobilapp-plan.md');

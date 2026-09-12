@@ -124,6 +124,12 @@ jobs:
         run: |
           set -euo pipefail
           adb --version
+          # ER akselerasjonen brukbar? Dette svarer på det FØR vi venter tolv
+          # minutter på en oppstart som krabber i programvare — som er nøyaktig
+          # slik en emulator uten KVM ser ut: ingen feil, bare en enhet som aldri
+          # blir ferdig å boote. `-accel-check` avslutter med feil hvis den ikke
+          # kan brukes, og da skal jobben si det med én gang.
+          emulator -accel-check
           echo no | avdmanager create avd -n huskis -k "$EMU_IMAGE" --force
           # HVOR AVD-en havnet er ikke gitt: nyere SDK-verktøy følger
           # ANDROID_USER_HOME (ofte ~/.config/.android på runneren), ikke
@@ -135,7 +141,7 @@ jobs:
           # oppstarten evigheter (eller kommer aldri).
           nohup emulator -avd huskis \
             -no-window -no-audio -no-boot-anim -no-snapshot -no-snapshot-save \
-            -memory 4096 -cores 2 \
+            -memory 4096 -cores 2 -accel on \
             -gpu swiftshader_indirect -camera-back none -camera-front none \
             > emulator.log 2>&1 &
           # BEGGE ventingene har tak, og det er ikke pynt: `adb wait-for-device`
