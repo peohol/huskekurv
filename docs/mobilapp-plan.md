@@ -2826,6 +2826,17 @@ adapteren er selvhelende, og harnesset MÅLER at planen er tilbake til slutt.
 noe. `--no-reboot` hopper over omstarten av enheten og prøver pluginens
 oppstartsmottaker direkte i stedet.
 
+**Runden er PINNET til den bundelen som ble bygget.** Appen spør etter en
+OTA-oppdatering ved oppstart, og finner den en nyere bundle bytter den web-koden
+mens runden står på — da måler runden en annen kode enn endringen, og en feil ser
+ut som en feil i koden her. Derfor slås radioen av FØR appen starter første gang,
+og i RIGG blir den stående av hele runden (ingenting som måles der trenger nett).
+I tillegg leser harnesset hvilken build siden faktisk kjører, og sammenligner med
+den som ble bygget — før målingene (A4) og en gang til etter den ekte omstarten
+(A4b). Driver identiteten, forsøkes OTA-en tilbakestilt til den innebygde
+bundelen, og står driften STOPPER runden. CI pinner id-en eksplisitt med
+`--expect-build`.
+
 Runden skrur på tre ting som ikke er appens egne — alarmkøen, flymodus og
 tidssonen — og setter alle tilbake, også når den blir avbrutt med Ctrl-C eller
 bryter sammen. Blir den avbrutt med RIGGENS alarmer armert, avlyses nøyaktig de
@@ -2885,12 +2896,16 @@ statustabellen øverst.
   pluginens egen tapp-intent mot en prosess som er drept, og leser at pekeren kom
   fram i appen (I1–I3). Varselet forsvinner fra panelet etterpå (I4).
 
-  **Dette punktet var ØDELAGT, og runden er det som fant det.** Pekeren parkeres
-  i det pluginen leverer trykket — før appen vet hvem som er innlogget — og
-  innloggingen nullstilte den rett etterpå. Et trykk på et varsel åpnet derfor
-  ingenting på en kaldstart. Rettet i samme endring, med regresjonstester
-  (`tests/notif-channels.test.js` 3d–3e leverer trykket FØR innloggingen er
-  ferdig). Begrunnelsen står i [`varsler.md`](varsler.md);
+  **Dette punktet VAR ødelagt, og feilen ble funnet mens runden ble bygget.**
+  Pekeren parkeres i det pluginen leverer trykket — før appen vet hvem som er
+  innlogget — og innloggingen nullstilte den rett etterpå. Et trykk på et varsel
+  åpnet derfor ingenting på en kaldstart. Rettet, og bevist BEGGE veier av
+  `tests/notif-channels.test.js` 3d–3e, som leverer trykket FØR innloggingen er
+  ferdig: uten rettelsen åpnes ingenting, med den åpnes riktig objekt.
+  Begrunnelsen står i [`varsler.md`](varsler.md). Merk hva som IKKE er beviset:
+  den første emulatorrunden felte også dette punktet, men den kjørte en annen
+  web-bundle enn den som ble bygget (se pinningen over), så dens FAIL kan ikke
+  tilskrives feilen. Regresjonstesten er beviset;
 - et TIDSSONEBYTTE MENS APPEN ER HELT LUKKET — punktet som før krevde seks
   manuelle steg. Runden bytter sone med AlarmManagers egen skallkommando, som
   kringkaster `TIMEZONE_CHANGED` slik et ekte bytte gjør, og måler at alarmene

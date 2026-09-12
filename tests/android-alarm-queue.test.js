@@ -37,6 +37,9 @@
      9. Dokumentasjonen skiller maskinelt bevist fra det et øye må se — og
         opprydningen melder seg aldri ferdig uten å ha VERIFISERT at riggens
         alarmer er borte.
+    10. Runden måler den bundelen som ble bygget: radioen er av før appen
+        starter, identiteten leses av siden og sammenlignes, og en drift
+        STOPPER runden i stedet for å bli tolket som en feil i koden.
 
   Kjør:
     node tests/android-alarm-queue.test.js
@@ -374,7 +377,7 @@ check('7c nøkkelen registreres FØR innloggingssjekken (ellers er en kaldstart 
   [kropp.indexOf('notifChannelTapped.add(key)'), kropp.indexOf('if (!authUser')]);
 check('7d harnesset leser nøyaktig de to',
   /notifPendingTarget/.test(harness) && /notifChannelTapped/.test(harness));
-/* FEILEN enhetsrunden fant: `cloudStart()` kjører på hver innlogging — også den
+/* FEILEN som kom fram mens enhetsrunden ble bygget: `cloudStart()` kjører på hver innlogging — også den
    bufrede ved kaldstart — og `resetNotifications()` nullstilte pekeren fra
    varseltrykket FØR `flushNotifPendingTarget()` kunne bruke den. Et trykk åpnet
    derfor ingenting på en kaldstart. Oppførselen er dekket kjørende av
@@ -495,6 +498,58 @@ check('9d de tre øyepunktene står i harnessets egen sluttrapport',
   /HEADS-UP\./.test(harness) && /LÅSESKJERM\./.test(harness) && /FINGEREN\./.test(harness));
 check('9e tester/CLAUDE.md nevner enhetsrunden, så den ikke blir en glemt fil',
   /android-device\.js/.test(les('tests', 'CLAUDE.md')));
+
+/* ---- 10. Runden måler den bundelen som ble bygget ----
+
+   Dette er den vakten som mangler mest: en emulatorrunde bygde én bundle inn i
+   APK-en og kjørte en ANNEN i WebView-en, fordi appen spør etter en
+   OTA-oppdatering ved oppstart og fant main sin. Runden målte da main, og felte
+   et punkt på kode som ikke fantes i den bundelen. To lag skal hindre det —
+   radioen av før appen starter i det hele tatt, og en identitet som leses av
+   siden og sammenlignes — og et tredje skal hindre at en drift blir tolket:
+   runden STOPPER. */
+check('10a identiteten leses av SIDEN, ikke av noe harnesset selv har skrevet',
+  /meta\[name=/.test(harness) && /huskis-build/.test(harness) &&
+  /huskis-release/.test(harness));
+check('10b den forventede builden kommer fra --expect-build eller dist/version.json',
+  /--expect-build/.test(harness) && /dist['"], ['"]version\.json/.test(harness));
+/* Og sammenligningen MÅ være mellom to størrelser som er den samme når alt er
+   riktig: `build.js` stempler samme id inn i `<meta name="huskis-build">` og i
+   `version.json`. Gjorde den ikke det, ville vakten feilet på hver runde. */
+check('10c build.js stempler samme id i meta-taggen og i version.json',
+  /stampMeta\(stripped, 'huskis-build', ids\.buildId\)/.test(les('build.js')) &&
+  /\n\s*buildId,\n/.test(les('build.js')));
+check('10d radioen slås av FØR appen starter første gang',
+  /settFlymodus\(true\);\n\n  await appenOpp\(\);/.test(harness));
+check('10e vakten kjøres før målingene, og EN GANG TIL etter den ekte omstarten',
+  /vaktBundle\('A4', ventet\)/.test(harness) && /vaktBundle\('A4b', ventet\)/.test(harness) &&
+  harness.indexOf("vaktBundle('A4', ventet)") <
+    harness.indexOf('D1 pluginens lagring') &&
+  harness.indexOf("vaktBundle('A4b', ventet)") >
+    harness.indexOf('G1 enheten var FAKTISK nede'));
+check('10f en drift STOPPER runden i stedet for å måle videre i feil kode',
+  (harness.match(/ANNEN web-bundle/g) || []).length >= 2 &&
+  /if \(!\(await vaktBundle\('A4', ventet\)\)\) \{/.test(harness) &&
+  /if \(!\(await vaktBundle\('A4b', ventet\)\)\) \{/.test(harness));
+check('10g … og forsøket på å rette den slår av radioen først, ellers laster appen ' +
+  'den samme bundelen ned igjen',
+  /otaMistillit = true;\n  if \(!flymodus\(\)\) settFlymodus\(true\);/.test(harness) &&
+  /LiveUpdate/.test(harness) && /lu\.reset\(\)/.test(harness));
+check('10h RIGG kjører offline hele runden — bare LIVE settes tilbake på nett',
+  /if \(live && !otaMistillit\) settFlymodus\(false\);/.test(harness) &&
+  /if \(live && !otaMistillit\) \{\n\s*settFlymodus\(false\);/.test(harness));
+check('10i CI pinner bundelen eksplisitt med --expect-build', /--expect-build/.test(wf));
+/* Og rapporten skal kunne LESES: `getCurrentBundle()` sier om appen kjører den
+   innebygde APK-bundelen eller en nedlastet. Det var nettopp den linjen i
+   artifactet som avslørte driften. */
+check('10k rapporten sier hvilken bundle LiveUpdate mener appen kjører',
+  /getCurrentBundle/.test(harness) && /innebygd/.test(harness) &&
+  /liveUpdate: id\.bundle/.test(harness));
+/* Et eiermerke betyr at alarmene på enheten tilhører en konto, og da skal
+   `force-stop` ikke komme på tale. Runden starter uten nett, og en økt som må
+   fornyes rekker ikke alltid å svare da — derfor merket ved siden av økten. */
+check('10j «tilhører en konto» leses av økten ELLER eiermerket',
+  /authUser;'\)\) \|\| !!eier;/.test(harness));
 
 const feil = results.filter((r) => !r).length;
 console.log('\n' + (results.length - feil) + ' passed, ' + feil + ' failed');

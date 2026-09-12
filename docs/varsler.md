@@ -1207,6 +1207,20 @@ på. `force-stop` er siste
 utvei når broen ikke er å nå, brukes bare uten en innlogget bruker, og bare når
 alarmkøen faktisk ble tom etterpå.
 
+**Runden måler den bundelen som ble bygget — ellers måler den ingenting.**
+Appen spør etter en OTA-oppdatering ved oppstart, og finner den en nyere bundle
+bytter den web-koden under føttene på runden. Det har skjedd: en emulatorrunde
+bygde én bundle inn i APK-en og kjørte en HELT annen i WebView-en, og felte et
+punkt på kode som ikke fantes i den bundelen. To lag hindrer det nå. Radioen slås
+AV før appen starter første gang, og i RIGG-modus blir den stående av hele runden
+— ingenting som måles der trenger nett, så ingen manifesthenting kan skje. Og
+identiteten LESES: harnesset henter `<meta name="huskis-build">` fra den kjørende
+siden og sammenligner med builden APK-en ble bygget av, før en eneste måling og
+en gang til etter den ekte omstarten. Driver den, forsøkes OTA-en tilbakestilt til
+den innebygde bundelen; står driften, STOPPER runden med «kjører feil bundle». En
+måling i feil kode er verre enn ingen måling, for da ser plattformen ut til å
+svare på et spørsmål den ikke har fått.
+
 **Tapp-intenten er pluginens, ikke vår.** `contentIntent` er en
 `PendingIntent.getActivity` over MAIN/LAUNCHER mot MainActivity, med
 SINGLE_TOP|CLEAR_TOP og tre extras — varsel-ID-en, handlingen og hele varselet

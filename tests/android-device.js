@@ -56,6 +56,7 @@
 
 const { execFileSync } = require('child_process');
 const http = require('http');
+const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
@@ -666,6 +667,85 @@ async function appenOpp() {
   return bro;
 }
 
+/* ------------------------------------------------------- hvilken bundle kjører */
+
+/* OTA-en kan BYTTE web-koden under føttene på runden.
+
+   Appen henter ett manifest per oppstart fra produksjonsadressen, og i en
+   emulator med nett betyr det at den kan laste ned og stille opp main sin
+   bundle — og så måler runden main, ikke endringen. Det har skjedd: en kjøring
+   bygde `9bf8511d446c` inn i APK-en og kjørte `13130ccde176` i WebView-en, og
+   felte et punkt på kode som ikke fantes i den bundelen.
+
+   Identiteten leses derfor av SIDEN (`meta[name=huskis-build]`), og
+   sammenlignes med den builden APK-en ble bygget av. Driver den, forsøkes OTA-en
+   tilbakestilt til den innebygde bundelen; virker ikke det, FEILER runden med én
+   gang — å måle videre i feil kode er verre enn ikke å måle. */
+const identitet = () => bro.evalJs(
+  'const m = (n) => { const e = document.querySelector(\'meta[name="\' + n + \'"]\');' +
+  ' return e ? String(e.getAttribute(\'content\') || \'\').trim() : \'\'; };' +
+  /* … OG hvilken bundle LiveUpdate mener appen kjører. `null` er den INNEBYGDE,
+     altså den som ble pakket i APK-en; alt annet er noe appen har lastet ned. Det
+     er evidensen som forklarer en drift, og som gjør den lesbar i rapporten. */
+  'let bundle = \'?\';' +
+  'try {' +
+  '  const lu = window.Capacitor.Plugins.LiveUpdate;' +
+  '  const r = lu && lu.getCurrentBundle ? await lu.getCurrentBundle() : null;' +
+  '  bundle = r ? (r.bundleId === null ? \'innebygd\' : String(r.bundleId)) : \'ingen plugin\';' +
+  '} catch (e) { bundle = \'ulesbar\'; }' +
+  'return { build: m(\'huskis-build\'), release: m(\'huskis-release\'), bundle };');
+
+function ventetBuild(args) {
+  const i = args.indexOf('--expect-build');
+  if (i >= 0 && args[i + 1]) return { id: args[i + 1], kilde: '--expect-build' };
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(ROOT, 'dist', 'version.json'), 'utf8'));
+    if (v && v.buildId) return { id: String(v.buildId), kilde: 'dist/version.json' };
+  } catch (e) { /* ingen build i arbeidskopien */ }
+  return null;
+}
+
+/* Har OTA-en ALT byttet bundelen én gang i denne runden, kan den gjøre det igjen.
+   Da blir radioen stående av resten av runden — en måling på nett etter en slik
+   drift er ikke til å stole på. */
+let otaMistillit = false;
+
+async function vaktBundle(navn, ventet) {
+  if (!ventet) {
+    const id = await identitet();
+    skip(navn + ' kjører bundelen vi installerte',
+      'ingen forventet build å sammenligne med (kjører ' + (id.build || '?') + ')');
+    return true;
+  }
+  let id = await identitet();
+  if (id.build === ventet.id) {
+    check(navn + ' kjører bundelen vi installerte', true,
+      id.build + ' (LiveUpdate: ' + id.bundle + ')');
+    return true;
+  }
+  /* Drift. Tilbakestill OTA-en til den innebygde bundelen og les på nytt — det er
+     den ene handlingen som kan rette det, og den er pluginens egen.
+
+     RADIOEN AV først: er den på, kan appen laste ned den samme bundelen igjen i
+     det den starter, og da retter tilbakestillingen ingenting. Den blir stående
+     av resten av runden. */
+  otaMistillit = true;
+  if (!flymodus()) settFlymodus(true);
+  let nullstilt = false;
+  try {
+    nullstilt = await bro.evalJs(
+      'const lu = window.Capacitor.Plugins.LiveUpdate;' +
+      'if (!lu || !lu.reset) return false;' +
+      'try { await lu.reset(); return true; } catch (e) { return false; }');
+  } catch (e) { /* broen svarte ikke */ }
+  if (nullstilt) { await drepApp(); await appenOpp(); id = await identitet(); }
+  const ok = id.build === ventet.id;
+  check(navn + ' kjører bundelen vi installerte', ok,
+    { kjører: id.build, ventet: ventet.id, kilde: ventet.kilde,
+      liveUpdate: id.bundle, otaNullstilt: nullstilt });
+  return ok;
+}
+
 /* --------------------------------------------------------------------- planen */
 
 /* Appens EGEN plan framover, som adapteren ville speilet den. Uten en innlogget
@@ -712,7 +792,8 @@ const pluginPending = () => bro.evalJs(
 function planUtskrift() {
   console.log(`Runden, i rekkefølge (ingenting kjøres med --plan):
 
-  A  oppsett: adb, én enhet, riktig pakke, varseltillatelse, DevTools-broen
+  A  oppsett: adb, én enhet, riktig pakke, varseltillatelse, DevTools-broen — og
+     at appen kjører NØYAKTIG den web-bundelen som ble bygget (igjen etter G)
   B  kanalen: huskis-notif-v1 finnes på enheten, med HØY viktighet og vibrasjon
   C  subjektet: enhetens egen plan (LIVE) eller tre riggalarmer (RIGG)
   D  alarmene ligger i Androids kø — én per terskel, på riktig tidspunkt,
@@ -736,6 +817,7 @@ async function main() {
   if (args.includes('--plan')) { planUtskrift(); return 0; }
   const utenReboot = args.includes('--no-reboot');
   const apkFlagg = args.indexOf('--install');
+  const ventet = ventetBuild(args);
 
   console.log('════════ Huskis — Android-varslene på enhet ════════');
   console.log('pluginen formene er lest av: @capacitor/local-notifications ' +
@@ -784,6 +866,19 @@ async function main() {
     sh('pm grant ' + PKG + ' android.permission.POST_NOTIFICATIONS', { tillatFeil: true });
   }
 
+  /* RADIOEN AV FØR APPEN STARTER FØRSTE GANG, og det er ikke en detalj: appen
+     spør etter en OTA-oppdatering ved oppstart, og finner den en nyere bundle
+     laster den den ned og bytter web-koden. Da måler runden en annen kode enn den
+     som nettopp ble bygget. Uten nett kan ikke det skje i det hele tatt.
+
+     I RIGG blir radioen stående av hele runden: ingenting som måles der trenger
+     nett. I LIVE settes den tilbake så snart modusen er avgjort (C).
+
+     Appen drepes først, for radioen hjelper ikke mot en prosess som alt kjører
+     med en nedlastet bundle: den FØRSTE oppstarten i runden skal være uten nett. */
+  await drepApp();
+  settFlymodus(true);
+
   await appenOpp();
   const tillatelse = await bro.evalJs('return await window.__huskis.androidChannel.state();');
   const tillatt = tillatelse === 'on' || tillatelse === 'off';
@@ -794,6 +889,16 @@ async function main() {
     return 1;
   }
 
+  /* A4: KJØRER VI KODEN VI TROR? Før en eneste måling. En runde som måler en
+     annen bundle enn den som ble bygget, svarer på et annet spørsmål — og svaret
+     ser ut som en feil i endringen. */
+  if (!(await vaktBundle('A4', ventet))) {
+    console.log('\nAppen kjører en ANNEN web-bundle enn den som ble bygget. ' +
+      'Runden stopper her: målinger i feil kode er verre enn ingen målinger. ' +
+      'Installer debug-APK-en på nytt (--install) og kjør igjen.');
+    return 1;
+  }
+
   /* --------------------------- C. Subjektet --------------------------- */
   const eier = await bro.evalJs('return window.__huskis.nativePlanOwner() || null;');
   /* «Innlogget» og «LIVE» er IKKE det samme, og forskjellen avgjør hva en
@@ -801,11 +906,30 @@ async function main() {
      framover ikke er tom — en innlogget bruker uten kommende varsler kjører altså
      RIGG. Der ville en `force-stop` ved avbrudd tatt hennes app inn i Androids
      «stopped state» for ingenting. Økten leses derfor av `authUser`, for seg. */
-  const harØkt = !!(await bro.evalJs('return !!window.__huskis.authUser;'));
+  /* … og «tilhører en konto» er bredere enn «har en levende økt»: et eiermerke
+     betyr at alarmene på enheten er en konto sine, og da skal en `force-stop`
+     ikke komme på tale. Runden starter dessuten UTEN nett (A), og en økt som må
+     fornyes rekker ikke alltid å svare da — merket gjør vurderingen uavhengig av
+     det. */
+  const harØkt = !!(await bro.evalJs('return !!window.__huskis.authUser;')) || !!eier;
   åGjenopprette.harØkt = harØkt;
   let plan = await bro.evalJs(PLAN_JS);
   const live = tillatelse === 'on' && !!eier && plan.length > 0;
   let rigg = null;
+
+  /* Radioen: i LIVE tilbake nå — eierens telefon skal ikke stå uten nett i tolv
+     minutter for vår skyld, og der brukes flymodus bare i det korte vinduet i H.
+     I RIGG står den av resten av runden, og da kan ingen OTA-oppdatering bytte
+     web-bundelen mens vi måler. */
+  if (live && !otaMistillit) {
+    settFlymodus(false);
+    sier('nett tilbake — flymodus brukes bare i det korte vinduet i H');
+  } else {
+    sier(otaMistillit
+      ? 'flymodus står på resten av runden: OTA-en byttet bundelen én gang alt'
+      : 'flymodus står på resten av runden: ingenting i RIGG trenger nett, ' +
+        'og da kan ingen OTA-oppdatering bytte web-bundelen under målingene');
+  }
   if (live) {
     check('C1 LIVE: enheten har en innlogget bruker med en plan framover', true,
       plan.length + ' terskler, eier ' + eier.slice(0, 8));
@@ -1008,6 +1132,16 @@ async function main() {
 
   /* ----------------- H. En alarm som forfaller blir POSTET ----------------- */
   await appenOpp();
+
+  /* Og vakten EN GANG TIL: enheten har vært gjennom en ekte omstart siden A4, og
+     en oppstart er nettopp der appen spør etter en OTA-oppdatering. Driver
+     identiteten nå, er målingene under målt i feil kode. */
+  if (!(await vaktBundle('A4b', ventet))) {
+    console.log('\nAppen kjører en ANNEN web-bundle enn den som ble bygget, etter ' +
+      'omstarten. Runden stopper her.');
+    return 1;
+  }
+
   const nå = await bro.evalJs('return Date.now();');
   const snart = {
     key: 'hk-rig:snart@' + nå,
@@ -1021,7 +1155,8 @@ async function main() {
      varselet har kommet. Da er både «offline når fristen settes» og «offline ved
      tidspunktet» prøvd i ett — kanalen er lokal, og ingen server er involvert i
      noen av leddene. */
-  sier('slår på flymodus mens alarmen planlegges og leveres, og av igjen etterpå');
+  sier(flymodus() ? 'radioen er alt av — alarmen planlegges og leveres uten nett'
+    : 'slår på flymodus mens alarmen planlegges og leveres');
   const offline = settFlymodus(true);
   /* HELE planen, ikke bare den nye raden: `sync` er en diff mot det telefonen
      har, så en plan uten de andre alarmene ville avlyst dem. */
@@ -1067,7 +1202,9 @@ async function main() {
     skip('H4 planlagt og levert med radioen av',
       'fikk ikke slått på flymodus herfra — runden gikk med nett');
   }
-  settFlymodus(false);
+  /* … og bare i LIVE tilbake på nett. I RIGG er resten av runden like lokal som
+     dette punktet, og radioen står av til opprydningen slår den på igjen. */
+  if (live && !otaMistillit) settFlymodus(false);
 
   /* --------------------- I. Trykk fra KALDSTART --------------------- */
   /* Prosessen drepes på nytt her, og det er ikke overflødig: selve alarmen

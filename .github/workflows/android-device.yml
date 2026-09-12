@@ -216,8 +216,21 @@ jobs:
       # Selve runden. `--install` tar APK-en inn, og harnesset gjør resten —
       # inkludert en EKTE omstart av emulatoren (punkt G), som er grunnen til at
       # jobben har romslig tid.
+      #
+      # `--expect-build` PINNER hvilken web-bundle runden har lov til å måle på.
+      # Den er ikke pynt: appen spør etter en OTA-oppdatering ved oppstart, og en
+      # kjøring har alt bygget én bundle inn i APK-en og kjørt en HELT annen i
+      # WebView-en. Da måler runden main i stedet for endringen, og en feil ser ut
+      # som en feil i koden her. Harnesset slår derfor av radioen før appen
+      # starter, OG sammenligner det appen faktisk kjører med id-en under.
       - name: Kjør varselrunden på enheten
-        run: node tests/android-device.js --install android/app/build/outputs/apk/debug/app-debug.apk
+        run: |
+          set -euo pipefail
+          build="$(node -e "process.stdout.write(require('./dist/version.json').buildId)")"
+          echo "Bundelen runden skal måle: $build"
+          node tests/android-device.js \
+            --install android/app/build/outputs/apk/debug/app-debug.apk \
+            --expect-build "$build"
 
       # Når runden feiler er loggene hele forklaringen: hva emulatoren gjorde,
       # og hva appen sa over broen.
