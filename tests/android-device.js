@@ -171,8 +171,8 @@ async function ventTil(fn, ms, intervall = 1000) {
    former leses, og svaret er alltid et absolutt millisekund på ENHETENS klokke.
    Lar tiden seg ikke lese, står den som 0 — da måles antallet, og rapporten
    sier hvorfor. */
-function alarmKø(txt, nå) {
-  if (txt == null) { nå = enhetNå(); txt = sh('dumpsys alarm'); }
+function alarmKø(txt, nå, sone) {
+  if (txt == null) { nå = enhetNå(); sone = sonen(); txt = sh('dumpsys alarm'); }
   /* Statistikkseksjonene nevner pakken OG pluginens klasse på samme form som en
      armert alarm. De kuttes vekk før noe telles — ellers leses historikk som
      framtid. */
@@ -184,7 +184,9 @@ function alarmKø(txt, nå) {
   const ut = [];
   for (let i = 0; i < linjer.length; i++) {
     if (!tagRe.test(linjer[i])) continue;
-    ut.push({ at: lesTid(linjer, i, nå), type: lesType(linjer, i), blokk: blokk(linjer, i) });
+    ut.push({
+      at: lesTid(linjer, i, nå, sone), type: lesType(linjer, i), blokk: blokk(linjer, i),
+    });
   }
   return ut;
 }
@@ -205,9 +207,28 @@ function lesType(linjer, i) {
   return '';
 }
 
+/* En formatert dato fra `dumpsys` er ENHETENS lokale veggtid — og vertsmaskinen
+   står i sin egen sone (UTC i CI, Oslo på en utviklermaskin). `Date.parse()`
+   ville tolket den i VERTENS sone og gitt et tidspunkt forskjøvet med
+   soneforskjellen: D3 og hver sammenligning før/etter ville målt feil.
+
+   Den regnes derfor om i enhetens sone, med samme to-rundersmetode som
+   `HuskisWallClock` på Java-siden: avviket avhenger av øyeblikket, og øyeblikket
+   av avviket. Kjenner vi ikke enhetens sone, svarer vi 0 — «uleselig» — i stedet
+   for å gjette. Rapporten sier da at tidspunktene ikke ble lest, og sjekken
+   hoppes over i stedet for å bestå på et galt tall. */
+function veggtidTilMs(tekst, sone) {
+  const m = tekst.match(/(\d{4})-(\d\d)-(\d\d)[ T](\d\d):(\d\d):(\d\d)/);
+  if (!m || !sone) return 0;
+  const utc = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+  let t = utc;
+  for (let i = 0; i < 2; i++) t = utc - soneAvvik(sone, t);
+  return t;
+}
+
 /* Tidspunktet for alarmen `tag=`-linja hører til. Blokka er noen få linjer, og
    feltet heter `when` eller `origWhen` — i én av tre former. */
-function lesTid(linjer, i, nå) {
+function lesTid(linjer, i, nå, sone) {
   for (let j = Math.max(0, i - 1); j < Math.min(linjer.length, i + 9); j++) {
     const l = linjer[j];
     const rel = l.match(/\b(?:when|origWhen)=([+-])(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?(?:(\d+)ms)?\b/);
@@ -220,10 +241,7 @@ function lesTid(linjer, i, nå) {
     const abs = l.match(/\b(?:when|origWhen)=(\d{12,})\b/);
     if (abs) return Number(abs[1]);
     const dato = l.match(/\b(?:when|origWhen)=(\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d)/);
-    if (dato) {
-      const t = Date.parse(dato[1].replace(' ', 'T'));
-      if (!isNaN(t)) return t;
-    }
+    if (dato) return veggtidTilMs(dato[1], sone);
   }
   return 0;
 }
@@ -297,9 +315,13 @@ function broKall() {
 const flymodus = () => sh('settings get global airplane_mode_on', { tillatFeil: true }).trim() === '1';
 function settFlymodus(på) {
   sh('cmd connectivity airplane-mode ' + (på ? 'enable' : 'disable'), { tillatFeil: true });
-  const ble = flymodus() === på;
-  åGjenopprette.flymodus = på && ble;
-  return ble;
+  /* Flagget leses av tilstanden, ikke av hva vi BA om: et «slå av» som ikke tok
+     (kommandoen feilet, eller innstillingen henger etter) skal fortsatt stå som
+     noe å rydde, ellers slutter opprydningen å prøve og telefonen blir stående i
+     flymodus. */
+  const nå = flymodus();
+  åGjenopprette.flymodus = nå;
+  return nå === på;
 }
 
 /* Enhetens tidssone, og et bytte av den. `cmd alarm set-timezone` er
@@ -973,6 +995,17 @@ module.exports = {
 };
 
 if (require.main === module) {
+  /* Ctrl-C er den vanligste måten en manuell runde ender på, og den går ikke
+     gjennom noen av grenene under: løftet blir aldri oppgjort, og telefonen står
+     igjen i flymodus eller på en annen tidssone. Signalene får derfor samme
+     opprydning, og avslutter med signalets egen kode (128 + nummer). */
+  for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+    process.on(sig, () => {
+      console.error('\n✗ Avbrutt (' + sig + ') — rydder enheten før jeg går.');
+      ryddEnheten();
+      process.exit(sig === 'SIGINT' ? 130 : 143);
+    });
+  }
   main().then((kode) => { ryddEnheten(); process.exit(kode); }).catch((e) => {
     console.error('\n✗ Runden stoppet: ' + ((e && e.message) || e));
     // Telefonen skal ikke bli stående i flymodus eller på en annen tidssone fordi

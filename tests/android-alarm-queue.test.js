@@ -20,8 +20,9 @@
   dokumentasjonen skiller maskinelt bevist fra fysisk observert.
 
   Dekker:
-     1. `dumpsys alarm` leses riktig i alle tre tidsformene, og
-        statistikkseksjonene telles ikke med.
+     1. `dumpsys alarm` leses riktig i alle tre tidsformene — og den formaterte
+        datoen i ENHETENS sone, ikke vertens — mens statistikkseksjonene ikke
+        telles med.
      2. En annen apps alarmer telles ikke, og en tom kø er tom — ikke «uendret».
      3. Sammenligningen av to tidssett: rekkefølge betyr ikke noe, slingringen
         er i minutter, og ulik lengde er aldri likt.
@@ -147,9 +148,28 @@ Batch{1 num=1}:
     type=RTC_WAKEUP whenElapsed=+1h0m0s0ms when=2026-09-12 09:00:00
     window=0 repeatInterval=0 count=0
 `;
-check('1h en formatert dato leses som LOKAL tid (de eldste Android-versjonene)',
-  H.alarmKø(DATO, NÅ).map((a) => a.at).join() ===
-    String(new Date(2026, 8, 12, 9, 0, 0).getTime()),
+/* En formatert dato er ENHETENS veggtid. Verten står i sin egen sone — UTC i CI,
+   Oslo på en utviklermaskin — så en `Date.parse()` her ville gitt et tidspunkt
+   forskjøvet med soneforskjellen. Forventningen regnes derfor av sonen, ikke av
+   vertens klokke: det er nettopp det som gjør at testen KAN se feilen. */
+const vent = (sone, Y, M, D, h, m) => {
+  const utc = Date.UTC(Y, M - 1, D, h, m, 0);
+  let t = utc;
+  for (let i = 0; i < 2; i++) t = utc - H.soneAvvik(sone, t);
+  return t;
+};
+check('1h en formatert dato leses i ENHETENS sone (de eldste Android-versjonene)',
+  H.alarmKø(DATO, NÅ, 'Europe/Oslo')[0].at === vent('Europe/Oslo', 2026, 9, 12, 9, 0),
+  [H.alarmKø(DATO, NÅ, 'Europe/Oslo')[0].at, vent('Europe/Oslo', 2026, 9, 12, 9, 0)]);
+check('1i … og den SAMME dumpen gir et annet tidspunkt i en annen sone',
+  H.alarmKø(DATO, NÅ, 'Pacific/Honolulu')[0].at ===
+    vent('Pacific/Honolulu', 2026, 9, 12, 9, 0) &&
+  H.alarmKø(DATO, NÅ, 'Pacific/Honolulu')[0].at -
+    H.alarmKø(DATO, NÅ, 'Europe/Oslo')[0].at === 12 * 3600000,
+  (H.alarmKø(DATO, NÅ, 'Pacific/Honolulu')[0].at -
+    H.alarmKø(DATO, NÅ, 'Europe/Oslo')[0].at) / 3600000 + ' t forskjell');
+check('1j uten kjent sone er tiden ULESELIG (0), ikke en gjetning i vertens sone',
+  H.alarmKø(DATO, NÅ).map((a) => a.at).join() === '0',
   H.alarmKø(DATO, NÅ).map((a) => a.at));
 
 /* ---- 2. Det som IKKE skal telles ---- */
@@ -280,9 +300,15 @@ check('6k en omstart er bevist med OPPETIDEN, ikke med at adb svarte',
 check('6l offline prøves med ekte flymodus, og en runde som gikk på nett sier det',
   /cmd connectivity airplane-mode/.test(harness) &&
   /airplane_mode_on/.test(harness) && /H4 planlagt og levert med radioen av/.test(harness));
+check('6m1 flymodus-flagget leses av VERIFISERT tilstand, ikke av hva vi ba om',
+  /const nå = flymodus\(\);\s*\n\s*åGjenopprette\.flymodus = nå;/.test(harness),
+  'et «slå av» som ikke tok skal fortsatt stå som noe å rydde');
+check('6m2 Ctrl-C og SIGTERM rydder enheten før de avslutter',
+  /process\.on\(sig/.test(harness) && /SIGINT/.test(harness) && /SIGTERM/.test(harness) &&
+  /process\.on\(sig, \(\) => \{[\s\S]{0,300}ryddEnheten\(\);/.test(harness));
 check('6m flymodus og tidssone settes TILBAKE uansett hvordan runden ender',
   /function ryddEnheten/.test(harness) &&
-  (harness.match(/ryddEnheten\(\);/g) || []).length >= 3 &&
+  (harness.match(/ryddEnheten\(\);/g) || []).length >= 4 &&
   /\.catch\(\(e\) => \{[\s\S]{0,400}ryddEnheten\(\);/.test(harness),
   (harness.match(/ryddEnheten\(\);/g) || []).length + ' kall');
 
