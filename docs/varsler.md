@@ -1110,10 +1110,17 @@ telefonens alarmer sist ble speilet for.
   broen, står merket igjen og sier fortsatt «en annens» — og neste oppstart
   prøver på nytt. Den er dessuten uavhengig av kanalen: den går selv om
   tillatelsen er trukket og ingen speilingsrunde kan kjøre.
-- **En runde utstedt før byttet krever ikke eierskap.** Identiteten bæres av
-  `notifEpoch` (se «Et svar som lander for sent gjelder ikke lenger»): har den
-  endret seg mens runden var i broen, skriver runden ikke merket, og
-  nedriggingen som står i kø bak den får rydde alarmene den la inn.
+- **En runde utstedt FØR byttet speiler ikke i det hele tatt.** En speiling
+  regner ut planen sin først og går så over broen (`state()`, og køen foran
+  `sync()`), så en utlogging imellom gjør planen til en annen brukers.
+  Identiteten leses derfor der planen ble regnet ut, og på nytt rett før broen
+  røres — `notifEpoch`, den samme epoken som verner om de andre svarene som kan
+  lande for sent (se «Et svar som lander for sent gjelder ikke lenger»). Har den
+  endret seg, faller runden bort med signaturen urørt, og den nye brukerens egen
+  runde gjør hele jobben. Uten det ville nedriggingen avlyst alarmene, og runden
+  bak den lagt den utloggede brukerens alarmer inn igjen — med objektnavnene
+  hennes, og uten en økt til å rydde dem. Merket skrives tilsvarende ikke av en
+  runde som ble utstedt før byttet.
 
 **Merket er nødvendig fordi en opprydning ikke kan gjøres blind.** Speilte
 opprydningen bare en TOM plan inn i kanalen, ville diffen avlyst alt den fant — og
@@ -1134,9 +1141,11 @@ nettopp la inn: den nye brukeren ville stått uten alarmer, mens signaturen sa
 
 Låst av `tests/notif-channels.test.js` 14: en vanlig omstart som verken avlyser
 eller planlegger noe, et reelt brukerbytte som rydder selv uten tillatelse, og de
-tre kantene — en runde som feiler i broen og beholder de tidligere gyldige
-alarmene, en opprydning som feiler og blir prøvd på nytt ved neste oppstart, og
-en treg nedrigging som ikke kan ta den nye brukerens nye alarmer.
+fem kantene — en runde som feiler i broen og beholder de tidligere gyldige
+alarmene, en opprydning som feiler og blir prøvd på nytt ved neste oppstart, en
+treg nedrigging som ikke kan ta den nye brukerens nye alarmer, en enhet uten
+merket som starter uten nett og likevel får planen tilbake, og en speiling som
+ble utstedt før utloggingen og derfor ikke får planlegge noe.
 
 Ikonene står under «Ikonene i et systemvarsel».
 
@@ -1348,7 +1357,10 @@ ting gjør et svar foreldet, og de er ikke det samme:
 | **viljen** | brukeren trykket «slå på» | et `revoked` utstedt før trykket river ned det hun nettopp slo på |
 
 Begge bumper den samme epoken (`notifEpoch`), som leses FØR kallet og
-sammenlignes når svaret lander. Den andre halvdelen er ikke en detalj: uten den
+sammenlignes når svaret lander. Speilingen av den lokale planen leser den også:
+planen regnes ut for ÉN bruker, og en utlogging mens runden står i broen skal
+ikke kunne legge den brukerens alarmer inn igjen etter nedriggingen (se
+«Oppstart og brukerbytte»). Den andre halvdelen er ikke en detalj: uten den
 holder det med et raskt AV/PÅ for at en gammel runde skal overstyre valget.
 Epoken bumpes derfor i det bryteren trykkes — før tillatelsesdialogen, som kan
 stå oppe en stund — og web push-fornyelsen leser den samme epoken. En nedrigging
@@ -1851,8 +1863,10 @@ De to henger sammen på nøyaktig ett punkt, og ellers ikke:
   tillatelsen trukket, så ingen speilingsrunde kan gjøre det for oss — at en
   runde som feiler i broen beholder de tidligere gyldige alarmene i stedet for å
   etterlate telefonen tom, at en opprydning som feiler blir prøvd på nytt ved
-  neste oppstart, og at en treg nedrigging ikke kan avlyse alarmene den nye
-  brukerens runde nettopp la inn.
+  neste oppstart, at en treg nedrigging ikke kan avlyse alarmene den nye
+  brukerens runde nettopp la inn, at en enhet uten merket får planen tilbake selv
+  uten nett, og at en speiling som ble utstedt før utloggingen ikke får legge den
+  utloggede brukerens alarmer inn igjen.
 - `tests/push-crypto.test.js` — VAPID-signaturen og RFC 8291-krypteringen, mot
   et fast vektor fra `http_ece` og med signaturen faktisk verifisert.
 - `tests/notif-modal.test.js` — knappen og badgen, modalen, nyeste øverst,

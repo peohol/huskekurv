@@ -14167,6 +14167,17 @@
        alarmene sine AVLYST og stått uten dem til dempingen løp ut — opptil
        seks timer uten varsler, som straff for å ha reist. */
     const plan = planNotifications(state, notifNow(now), notifPrefs);
+    /* HVEM PLANEN TILHØRER, lest i det den ble regnet ut. Runden går over broen
+       etterpå (`state()`, og køen foran `sync()`), og en utlogging eller et
+       kontobytte imellom gjør planen til en ANNEN brukers. Speilte vi den
+       likevel, ville nedriggingen — som står foran oss i køen — ha avlyst
+       alarmene, og vi lagt den utloggede brukerens alarmer inn igjen etterpå,
+       med objektnavnene hennes og uten en økt til å rydde dem.
+
+       Epoken er den samme som verner om de andre svarene som kan lande for
+       sent (docs/varsler.md, «Et svar som lander for sent gjelder ikke
+       lenger»), og den må leses HER: inne i runden er den allerede den nye. */
+    const epoke = notifEpoch;
     /* KANALEN avgjør selv om runden er verdt noe: `sig(plan)` er det den sist
        ble speilet med, og `null` betyr «spør meg hver gang». Signaturen bærer
        kanal-id-en i tillegg, så et bytte av kanal aldri kan leses som
@@ -14178,6 +14189,11 @@
     if (signatur() !== null && signatur() === notifChSig) return;
     try {
       if (await ch.state() !== 'on') return;
+      // Identiteten på nytt, rett før broen røres: planen over er ikke
+      // gjeldende brukers lenger om noen logget ut mens vi spurte om
+      // tillatelsen. Signaturen står urørt, så den nye brukerens egen runde
+      // gjør hele jobben.
+      if (notifEpoch !== epoke) return;
       await ch.sync(plan);
       /* Signaturen leses PÅ NYTT etter speilingen, ikke før: runden kan ha
          endret det den hviler på. Kanalmigreringen gjør nettopp det — den

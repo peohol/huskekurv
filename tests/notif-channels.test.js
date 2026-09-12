@@ -67,11 +67,12 @@
     14. Oppstart, og HVEM alarmene tilhører: en vanlig omstart for samme bruker
         rører ikke en armert alarm — verken avlysning eller planlegging — mens en
         ANNEN bruker som overtar enheten fortsatt får forrige brukers alarmer
-        ryddet bort, også når ingen speilingsrunde kan kjøre. Og de tre kantene:
+        ryddet bort, også når ingen speilingsrunde kan kjøre. Og de fem kantene:
         en runde som feiler i broen beholder de tidligere gyldige alarmene, en
-        opprydning som feiler blir prøvd på nytt ved neste oppstart, og en treg
+        opprydning som feiler blir prøvd på nytt ved neste oppstart, en treg
         nedrigging kan ikke avlyse alarmene den nye brukerens runde nettopp la
-        inn.
+        inn, en enhet uten merket får planen tilbake selv uten nett, og en
+        speiling utstedt før utloggingen får ikke planlegge noe.
 
   Kjør:
     python3 -m http.server 8000                        # fra repo-roten, i egen terminal
@@ -1724,8 +1725,8 @@ async function run() {
      Det som skiller tilfellene er merket over eierskapet
      (`hk-notif-android-user`). Her prøves begge veier, og de fire kantene rundt
      dem: en runde som feiler i broen, en opprydning som feiler i broen, et
-     brukerbytte der broen svarer for sent, og en enhet uten merket som starter
-     uten nett. Sikkerhetsregelen står uendret — overtar en ANNEN bruker enheten,
+     brukerbytte der broen svarer for sent, en enhet uten merket som starter uten
+     nett, og en speiling som ble utstedt før utloggingen. Sikkerhetsregelen står uendret — overtar en ANNEN bruker enheten,
      ryddes alarmene bort før den nye planen gjelder, også når ingen
      speilingsrunde kan kjøre. */
   const ctxO = await nyKontekst(browser);
@@ -1965,6 +1966,57 @@ async function run() {
   log('14m: utlogging tar fortsatt planen ned — ingen tar over enheten',
     utlogget.bruker === null && utlogget.alarmer.length === 0 && utlogget.eier === null,
     JSON.stringify({ armert: utlogget.alarmer.length, eier: utlogget.eier }));
+
+  /* ---------- 14n) EN RUNDE SOM BLE UTSTEDT FØR UTLOGGINGEN ----------
+     En speiling regner ut planen sin FØRST og går så over broen — `state()`, og
+     køen foran `sync()`. Skjer utloggingen mens den står der, er planen den
+     bærer forrige brukers, og køen slipper den inn ETTER nedriggingen. Fikk den
+     planlegge, sto telefonen igjen med den utloggede brukerens alarmer, med
+     objektnavnene hennes, og uten en innlogget økt til å rydde dem.
+
+     Her holdes broen igjen i `checkPermissions` — nøyaktig der `state()` venter
+     — mens utloggingen skjer. Tiden settes rett i `state`, uten `save()`, så
+     ingen debounce kan komme og gjøre jobben for runden. */
+  await po.goto(OURL);
+  await po.waitForFunction(() => !!window.__huskis, null, { timeout: 15000, polling: 100 });
+  await loggInn('k@x.no', uid);
+  await po.waitForFunction(() => window.__kanal.alarmer.length > 0,
+    null, { timeout: 15000, polling: 100 });
+  await po.waitForTimeout(600);
+  await nullstillLogg();
+  await po.evaluate(() => {
+    const ln = window.Capacitor.Plugins.LocalNotifications;
+    const ekte = ln.checkPermissions;
+    ln.checkPermissions = function () {
+      const args = arguments;
+      if (!window.__kanal.tregPerm) return ekte.apply(ln, args);
+      return new Promise((ok) => setTimeout(() => ok(ekte.apply(ln, args)), 900));
+    };
+  });
+  const førUt = await bilde();
+  await po.evaluate((lid) => {
+    const H = window.__huskis;
+    let kort = null;
+    for (const u of H.state.universes) for (const g of (u.groups || []))
+      for (const c of (g.cards || [])) if (c.id === lid) kort = c;
+    const to = (x) => String(x).padStart(2, '0');
+    const d = new Date(Date.now() + 9 * 86400000);
+    // Rett i tilstanden: en ny plan, uten en `save()` som ville køet en runde.
+    kort.due = d.getFullYear() + '-' + to(d.getMonth() + 1) + '-' + to(d.getDate()) + 'T16:30';
+    window.__kanal.tregPerm = true;
+    H.syncNotifChannel();      // ikke ventet på: den står nå i broen
+  }, id.LA);
+  await po.waitForTimeout(200);
+  await po.evaluate(() => window.__client.auth.signOut({ scope: 'local' }));
+  await po.waitForFunction(() => !window.__huskis.authUser,
+    null, { timeout: 10000, polling: 100 });
+  await po.waitForTimeout(2600);            // godt forbi de 900 ms i broen
+  const stale = await bilde();
+  log('14n: en speiling utstedt FØR utloggingen får ikke legge den utloggede brukerens alarmer',
+    førUt.alarmer.length > 0 && stale.bruker === null && stale.alarmer.length === 0 &&
+    stale.lagt.length === 0 && stale.eier === null,
+    JSON.stringify({ før: førUt.alarmer.length, armert: stale.alarmer.length,
+      lagt: stale.lagt.length, eier: stale.eier }));
 
   await ctxO.close();
 
