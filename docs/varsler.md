@@ -802,6 +802,21 @@ Pekeren i varselet (`{ objType, objId }`) er nettopp en peker — **aldri et
 bevis**. Trykket kaller `navigateToObject()`, som slår id-en opp i gjeldende
 tilstand; en id vi ikke har tilgang til finnes ikke der, og fører ingen steder.
 
+**Og pekeren OVERLEVER innloggingen.** En kaldstart fra et varsel parkerer
+pekeren i det pluginen leverer trykket — det skjer før `getSession()` har svart,
+altså før appen vet hvem som er innlogget. `resetNotifications()` nullstiller
+varseltilstanden ved hver innlogging, men pekeren og de trykkede nøklene står
+igjen: de hører til enhetens siste HANDLING, ikke til kontoens historikk. Nulles
+de der, er pekeren borte før `flushNotifPendingTarget()` kan bruke den, og et
+trykk på varselet åpner ingenting i det hele tatt.
+
+Å beholde pekeren over et brukerbytte er trygt, og det er ikke en
+bekvemmelighet: `navigateToObject` slår den opp i gjeldende tilstand, så en id
+den nye brukeren ikke har tilgang til finnes ikke og fører ingen steder — og
+pekeren var allerede på enheten. Låst av `tests/notif-channels.test.js` 3d–3e,
+som leverer trykket FØR innloggingen er ferdig, og av
+`tests/android-alarm-queue.test.js` 7e–7f.
+
 ### Android: lokale varsler
 
 Adapteren speiler planen ut på enheten som en **diff** mot `getPending()`:
@@ -1146,6 +1161,126 @@ alarmene, en opprydning som feiler og blir prøvd på nytt ved neste oppstart, e
 treg nedrigging som ikke kan ta den nye brukerens nye alarmer, en enhet uten
 merket som starter uten nett og likevel får planen tilbake, og en speiling som
 ble utstedt før utloggingen og derfor ikke får planlegge noe.
+
+#### Hva en ENHET har svart, og hva bare et øye kan svare på
+
+Alt over er dekket av `tests/notif-channels.test.js` mot en fake pluginbro, og
+omregningen av veggtid av `HuskisWallClockTest` på JVM-en. Ingen av dem ser
+ANDROID. Det gjør `tests/android-device.js`: den maskinelle runden mot en ekte
+telefon eller en emulator, kjørt av
+`.github/workflows/android-device.yml` på hver PR som rører Android-siden.
+
+Harnesset snakker DevTools-protokoll med appens egen WebView over `adb forward`.
+Det planlegger ingenting selv — det ber ADAPTEREN om runden og leser svaret ut
+av Androids egne dumper. Er enheten innlogget med varsler PÅ, er subjektet
+brukerens EGEN plan; ellers planlegges tre syntetiske alarmer gjennom den samme
+adapteren, og punktene som krever en økt rapporteres som hoppet over, med
+grunnen.
+
+Dette er MÅLT på enhet:
+
+| Det som måles | Hvordan |
+|---|---|
+| planen ligger i Androids alarmkø | `dumpsys alarm`: én armert alarm per terskel, på tidspunktet planen sier |
+| alarmene er upresise og vekkende | alarmens egen `type=RTC_WAKEUP`, og ingen SCHEDULE_EXACT_ALARM i den INSTALLERTE APK-en (`dumpsys package`) |
+| kanalen finnes, med høy viktighet | pluginens `listChannels()` leser Androids egen NotificationManager |
+| en vanlig appomstart rører dem ikke | samme kø før og etter, OG ingen `cancel`/`schedule` over pluginbroen (Capacitors egen logg) |
+| prosessen fjernet | `am kill` — og køen står |
+| telefonen restartet | `adb reboot`, og alarmene er tilbake på de samme tidspunktene |
+| varselet blir levert med appen borte | `dumpsys notification`: postet på `huskis-notif-v1`, rangert HIGH |
+| trykket bærer pekeren inn, også fra kaldstart | pluginens egen tapp-intent, sendt med `am start` mot en død prosess |
+| brukerbyttet rydder | enhetens eiermerke settes til en annen uid, og oppstarten rigger ned |
+
+**`am kill`, ikke `force-stop`.** De to ser like ut og er helt ulike: en
+`force-stop` AVLYSER appens alarmer og setter appen i «stopped state», der den
+ikke får kringkastinger i det hele tatt. Da prøver man Androids regel for en app
+brukeren har stoppet — ikke Huskis' kode, og ikke det en sveip i Recents gjør. Avbrytes runden
+med syntetiske alarmer armert, avlyses NØYAKTIG de id-ene riggen la inn, gjennom
+pluginen — brukerens egen plan står ikke i listen og røres ikke. Å vente på
+«neste speilingsrunde» duger ikke: alarmen som skal få forfalle ligger sekunder
+fram. Og opprydningen melder seg aldri ferdig på et kall som bare ble SENDT:
+fraværet leses tilbake (`getAll` med `SCHEDULED`, pluss varselpanelet), og et
+svar som ikke lar seg lese regnes som at alt står igjen — et uleselig panel er
+ikke et tomt panel. Systeminnstillingene får samme behandling: de leses tilbake,
+og prøves på nytt innen et vindu i stedet for å etterlate et flagg ingen handler
+på. `force-stop` er siste
+utvei når broen ikke er å nå, brukes bare uten en innlogget bruker, og bare når
+alarmkøen faktisk ble tom etterpå.
+
+**Runden måler den bundelen som ble bygget — ellers måler den ingenting.**
+Appen spør etter en oppdatering ved oppstart, og finner den en nyere bundle bytter
+den web-koden under føttene på runden. Det har skjedd: en emulatorrunde bygde én
+bundle inn i APK-en og kjørte en HELT annen i WebView-en, og felte et punkt på
+kode som ikke fantes i den bundelen.
+
+To lag hindrer det, og de må begge til. **Nettet er AV fra før den første
+oppstarten til opprydningen**, i begge modi: ingenting runden måler trenger nett,
+og uten nett kan verken manifestet nås eller `update-check.js` finne en nyere
+build å laste om til. Det siste er grunnen til at noen få faste sjekkpunkter ikke
+ville holdt — motoren kan laste appen om MIDT i en økt, ikke bare ved oppstart.
+
+Og «uten nett» er en MÅLT egenskap, ikke en innstilling. `airplane_mode_on=1`
+betyr ikke «ingen nett»: Wi-Fi er en egen radio som kan stå PÅ i flymodus, og
+nyere Android husker at den skal. Runden slår derfor av flymodus, Wi-Fi og
+mobildata hver for seg — og SPØR APPEN om den kommer fram, mot nøyaktig den
+adressen `fetchOtaBundle()` bruker. Et hvilket som helst svar teller som «nådde
+fram», også en 404: da er serveren der, og en nedlasting kunne skjedd. Appens egen
+`otaFetch`-tilstand står ved siden av som evidens. Det måles to ganger — ved
+oppsettet (A5) og på nytt etter den ekte omstarten (A5b), fordi en omstart er
+nettopp der en radio kan komme tilbake av seg selv.
+
+Og rekkefølgen rundt omstarten er låst, for den er hele forskjellen: **nettet slås
+av IGJEN før appen får starte én gang**, deretter kommer appen opp, og deretter
+verifiseres identiteten. Kom radioen tilbake av omstarten og appen startet først,
+kunne oppdateringsmotoren byttet bundelen i den FØRSTE økten etterpå — før vakten
+rakk å se noe, og midt i en økt der ingen oppstartsvakt treffer.
+
+En manglende offline-forutsetning er dessuten en FEIL i RIGG, ikke noe å hoppe
+over: et SKIP teller ikke som rødt, og en regresjon der nettet kommer tilbake
+etter omstarten kunne ellers gitt en grønn runde der nettopp det punktet aldri ble
+prøvd. På eierens egen telefon, der plattformen kan nekte testoppsettet, er det et
+SKIP med grunnen — og et SKIP teller ikke som bestått noe sted.
+**Og identiteten voktes ved HVER oppstart**: de to funksjonene som kan skaffe
+runden en app å måle på (`appenOpp()` og `ventPåBro()`) leser
+`<meta name="huskis-build">` fra den kjørende siden og sammenligner med builden
+APK-en ble bygget av, før de svarer. Hver oppstart sier HVOR den er i runden, så
+en drift har en adresse.
+
+Den første sjekken (A4) får forsøke å rette en drift ved å tilbakestille OTA-en
+til den innebygde bundelen. Etter den er vakten streng: en drift — eller en
+identitet som ikke lar seg lese — STOPPER runden med «kjører feil bundle». En
+måling i feil kode er verre enn ingen måling, for da ser plattformen ut til å
+svare på et spørsmål den ikke har fått. Kommer appen fram til serveren, rapporteres runden
+RØD (A5): vakten står fortsatt, men da kan ingen love at koden sto stille mellom
+to av dem.
+
+**Og telefonen settes tilbake til SIN EGEN tilstand, ikke til en antatt
+normaltilstand.** Runden endrer fire ting som er telefonens, ikke Huskis': nettet,
+tidssonen, «hold skjermen våken», og på en rein enhet varseltillatelsen. Av hver
+av dem tas et øyeblikksbilde FØR første endring, og opprydningen fører enheten
+tilbake til nøyaktig det, verifisert og med nye forsøk innen et vindu. En telefon
+som alt sto i flymodus står i flymodus etterpå. En bruker som hadde slått AV
+systemvarsler har dem av: tillatelsen gis bare når den mangler, og tas tilbake.
+En innstilling hvis opprinnelige verdi ikke lot seg lese, røres ikke — det vi ikke
+kan sette tilbake, endrer vi ikke. Regelen gjelder alle fire, også hovedbryteren
+for flymodus: kan den ikke leses, slås den ikke på, og runden sier hvorfor. Og
+tillatelsen leses TRI-STATE — gitt, ikke gitt, eller uleselig — for et boolsk svar
+ville lest et endret dumpformat som «ikke gitt» og dermed gitt og tatt tilbake en
+tillatelse uten å vite hva den var.
+
+**Tapp-intenten er pluginens, ikke vår.** `contentIntent` er en
+`PendingIntent.getActivity` over MAIN/LAUNCHER mot MainActivity, med
+SINGLE_TOP|CLEAR_TOP og tre extras — varsel-ID-en, handlingen og hele varselet
+som JSON. `am start` med nøyaktig de samme extras leverer altså det samme som et
+trykk. Det ADB ikke kan, er fingeren: at varselet er SYNLIG og trykkbart er et
+øyepunkt. Formene er lest ut av en pinnet pluginversjon, og
+`tests/android-alarm-queue.test.js` feller et versjonsløft som ikke har vært
+innom dem.
+
+Og det enheten IKKE kan svare på maskinelt er presentasjonen, fordi Android eier
+den: **heads-up-banneret, lyden/vibrasjonen og låseskjermen**. Harnesset skriver
+dem ut som tre spørsmål til slutt, og de er de eneste som står igjen for et
+menneske (`docs/mobilapp-plan.md`).
 
 Ikonene står under «Ikonene i et systemvarsel».
 
@@ -1906,6 +2041,24 @@ De to henger sammen på nøyaktig ett punkt, og ellers ikke:
   Tokyo gir nytt absolutt tidspunkt og samme veggtid, ID og tekst er urørt, en
   alarm som alt har ringt røres ikke, uendret sone gir ingen skriving, og
   sommertid tas av kalenderen.
+- `tests/android-device.js` — den MASKINELLE runden mot en ekte enhet, kjørt av
+  `.github/workflows/android-device.yml` på en emulator: at planen ligger i
+  Androids alarmkø på riktig tidspunkt, at alarmene er vekkende og upresise og at
+  den INSTALLERTE APK-en ikke ber om SCHEDULE_EXACT_ALARM, at kanalen finnes med
+  høy viktighet, at en vanlig appomstart verken avlyser eller planlegger noe
+  (lest av Capacitors egen broLOGG, ikke bare av køen), at alarmene står når
+  prosessen er drept og kommer tilbake etter en ekte omstart, at et varsel
+  leveres med appen borte — på Huskis-kanalen, rangert HIGH — at pluginens egen
+  tapp-intent bærer pekeren inn i appen fra en KALDSTART, og at et brukerbytte
+  rydder forrige brukers alarmer.
+- `tests/android-alarm-queue.test.js` — de delene av enhetsrunden som kan prøves
+  uten en enhet, og som ville gjort en grønn runde verdiløs om de var feil:
+  lesingen av `dumpsys alarm` i alle tidsformene Android bruker (og at
+  statistikkseksjonene ikke telles som framtid), sammenligningen av to tidssett,
+  formen på tapp-intenten med pluginens egne nøkler, at harnesset er pinnet til
+  pluginversjonen formene er lest av, at det bruker `am kill` og aldri
+  `force-stop`, at appen eksponerer de to observatørene runden leser — og at CI
+  faktisk kjører runden.
 - `tests/push-auth.test.js` — headerne, KJØRT: en ny secret key havner kun på
   `apikey` og ingen andre steder, en legacy-nøkkel får fortsatt begge, og en
   `sb_secret_…` på `Authorization` slipper ikke inn. Testen feiler hvis noen
