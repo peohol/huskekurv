@@ -370,28 +370,63 @@ function ryddEnheten() {
 async function ryddRiggAlarmer() {
   const ider = åGjenopprette.riggIder.slice();
   if (!ider.length) return;
-  const liste = JSON.stringify(ider);
-  try {
+
+  /* Ett forsøk: avlys, fjern fra panelet, og LES ETTERPÅ hva som står igjen.
+     Svaret er det som fortsatt er PLANLAGT (`getAll` med `SCHEDULED`) pluss det
+     som fortsatt ligger i varselpanelet. Lar noe av det seg ikke lese, regnes ALT
+     som igjen — en opprydning som ikke kan verifiseres er ikke utført. */
+  const forsøk = async () => {
     const b = await appenOpp();
-    await b.evalJs(
+    const svar = await b.evalJs(
       'const ln = window.Capacitor.Plugins.LocalNotifications;' +
-      'const ider = ' + liste + ';' +
-      'try { await ln.cancel({ notifications: ider.map((id) => ({ id })) }); } catch (e) {}' +
-      'try { await ln.removeDeliveredNotificationsById({ ids: ider }); } catch (e) {}' +
-      'return true;');
+      'const ider = ' + JSON.stringify(ider) + ';' +
+      'const feil = [];' +
+      'try { await ln.cancel({ notifications: ider.map((id) => ({ id })) }); }' +
+      'catch (e) { feil.push("cancel: " + ((e && e.message) || e)); }' +
+      'try { await ln.removeDeliveredNotificationsById({ ids: ider }); }' +
+      'catch (e) { feil.push("remove: " + ((e && e.message) || e)); }' +
+      'let igjen = ider;' +
+      'try {' +
+      '  const r = await ln.getAll({ state: "SCHEDULED" });' +
+      '  const står = ((r && r.notifications) || []).map((n) => Number(n.id));' +
+      '  igjen = ider.filter((id) => står.includes(id));' +
+      '} catch (e) { feil.push("getAll: " + ((e && e.message) || e)); }' +
+      'return { feil, igjen };');
+    const panel = varselDump();
+    const iPanelet = ider.filter((id) => new RegExp('\\bid=' + id + '\\b').test(panel));
+    return { feil: svar.feil, igjen: svar.igjen.concat(iPanelet.filter((id) => !svar.igjen.includes(id))) };
+  };
+
+  let sist = { feil: ['broen var ikke å nå'], igjen: ider };
+  for (let i = 0; i < 2; i++) {           // én omgang, og ett nytt forsøk
+    try { sist = await forsøk(); } catch (e) { sist = { feil: [String((e && e.message) || e)], igjen: ider }; }
+    if (!sist.igjen.length) break;
+  }
+
+  if (!sist.igjen.length) {
     åGjenopprette.riggIder = [];
-    console.error('     · riggalarmene ' + liste + ' er avlyst; brukerens egen plan er urørt');
-  } catch (e) {
-    if (!åGjenopprette.harØkt) {
-      sh('am force-stop ' + PKG, { tillatFeil: true });
+    console.error('     · riggalarmene ' + JSON.stringify(ider) +
+      ' er avlyst og VERIFISERT borte; brukerens egen plan er urørt' +
+      (sist.feil.length ? '  (merk: ' + sist.feil.join('; ') + ')' : ''));
+    return;
+  }
+
+  /* Ikke verifisert. Flagget blir stående — det er nettopp nå det betyr noe — og
+     siste utvei er `force-stop`, som avlyser ALLE appens alarmer. Den brukes bare
+     uten en innlogget bruker, og bare når køen faktisk ble tom etterpå. */
+  if (!åGjenopprette.harØkt) {
+    sh('am force-stop ' + PKG, { tillatFeil: true });
+    if (alarmKø().length === 0) {
       åGjenopprette.riggIder = [];
-      console.error('     · broen var ikke å nå — riggalarmene avlyst med force-stop ' +
-        '(ingen innlogget bruker, så køen var riggens egen)');
-    } else {
-      console.error('     · FIKK IKKE avlyst riggalarmene ' + liste + ': de kan ringe én gang. ' +
-        'Din egen plan er urørt — åpne Huskis, så rydder diffen resten.');
+      console.error('     · fikk ikke avlyst ' + JSON.stringify(sist.igjen) +
+        ' gjennom broen — alarmkøen er tømt med force-stop i stedet (ingen innlogget bruker)' +
+        (sist.feil.length ? '  [' + sist.feil.join('; ') + ']' : ''));
+      return;
     }
   }
+  console.error('     · FIKK IKKE ryddet riggalarmene ' + JSON.stringify(sist.igjen) +
+    ': de kan ringe én gang. Din egen plan er urørt — åpne Huskis, så avlyser diffen resten.' +
+    (sist.feil.length ? '  [' + sist.feil.join('; ') + ']' : ''));
 }
 
 async function settSone(id) {

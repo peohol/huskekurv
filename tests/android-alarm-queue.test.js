@@ -34,7 +34,9 @@
         innloggingssjekken (ellers er en kaldstart ikke observerbar).
      8. CI kjører runden på en emulator, med en ekte APK — og på app.js, der
         adapteren runden prøver faktisk bor.
-     9. Dokumentasjonen skiller maskinelt bevist fra det et øye må se.
+     9. Dokumentasjonen skiller maskinelt bevist fra det et øye må se — og
+        opprydningen melder seg aldri ferdig uten å ha VERIFISERT at riggens
+        alarmer er borte.
 
   Kjør:
     node tests/android-alarm-queue.test.js
@@ -391,6 +393,29 @@ check('8o … og emulatoren får RAM og kjerner eksplisitt',
    minutters venting. */
 check('8p akselerasjonen sjekkes FØR oppstarten, og kreves',
   /emulator -accel-check/.test(wf) && /-accel on/.test(wf));
+check('8q emulatorloggen skrives ut etter 20 s, uansett utfall',
+  /tail -40 emulator\.log/.test(wf) && /pgrep -af qemu-system/.test(wf));
+check('8r … og hvert adb-kall i loggsamlingen har tak (uten enhet kan de henge)',
+  (wf.match(/timeout 60 adb/g) || []).length === 3);
+check('8s systembibliotekene emulatoren lenker mot installeres, og får ikke felle jobben',
+  /libpulse0/.test(wf) && /apt-get install/.test(wf) &&
+  /timeout 180 apt-get update/.test(wf));
+
+/* Opprydningen får IKKE melde seg ferdig på et kall som feilet: fraværet må
+   verifiseres, ellers mister vi recovery-tilstanden og en syntetisk alarm står
+   igjen. */
+check('9f opprydningen VERIFISERER at riggalarmene er borte før flagget nulles',
+  /getAll\(\{ state: "SCHEDULED" \}\)/.test(harness) &&
+  /if \(!sist\.igjen\.length\) \{\s*\n\s*åGjenopprette\.riggIder = \[\];/.test(harness));
+check('9g … og en feil i cancel/remove kan ikke leses som suksess',
+  /feil\.push\("cancel: /.test(harness) && /feil\.push\("remove: /.test(harness) &&
+  /let igjen = ider;/.test(harness));
+check('9h … og et uleselig svar regner ALT som igjen',
+  /catch \(e\) \{ feil\.push\("getAll: /.test(harness));
+check('9i varselpanelet sjekkes også — en levert rad er ikke borte av en cancel',
+  /const iPanelet = ider\.filter/.test(harness));
+check('9j force-stop brukes bare hvis køen FAKTISK ble tom etterpå',
+  /am force-stop[\s\S]{0,120}if \(alarmKø\(\)\.length === 0\)/.test(harness));
 
 /* ---- 9. Dokumentasjonen skiller bevist fra observert ---- */
 const plan = les('docs', 'mobilapp-plan.md');

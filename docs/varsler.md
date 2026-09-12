@@ -1183,8 +1183,11 @@ brukeren har stoppet — ikke Huskis' kode, og ikke det en sveip i Recents gjør
 med syntetiske alarmer armert, avlyses NØYAKTIG de id-ene riggen la inn, gjennom
 pluginen — brukerens egen plan står ikke i listen og røres ikke. Å vente på
 «neste speilingsrunde» duger ikke: alarmen som skal få forfalle ligger sekunder
-fram. `force-stop` er siste utvei når broen ikke er å nå, og brukes bare når
-enheten ikke har en innlogget bruker; da er køen riggens egen.
+fram. Og opprydningen melder seg aldri ferdig på et kall som bare ble SENDT:
+fraværet leses tilbake (`getAll` med `SCHEDULED`, pluss varselpanelet), og et
+svar som ikke lar seg lese regnes som at alt står igjen. `force-stop` er siste
+utvei når broen ikke er å nå, brukes bare uten en innlogget bruker, og bare når
+alarmkøen faktisk ble tom etterpå.
 
 **Tapp-intenten er pluginens, ikke vår.** `contentIntent` er en
 `PendingIntent.getActivity` over MAIN/LAUNCHER mot MainActivity, med
