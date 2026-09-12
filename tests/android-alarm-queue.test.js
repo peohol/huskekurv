@@ -43,6 +43,9 @@
         stedet for å bli tolket som en feil i koden.
     11. «Offline» er MÅLT, ikke lest av et flagg — og hver telefoninnstilling
         runden endrer, settes tilbake til den verdien enheten HADDE.
+    12. Rekkefølgen etter en ekte omstart (nettet av FØR appen starter), at
+        ingenting røres når originaltilstanden er ULESELIG, og at en manglende
+        offline-forutsetning FELLER runden i RIGG i stedet for å hoppes over.
 
   Kjør:
     node tests/android-alarm-queue.test.js
@@ -324,7 +327,7 @@ check('6m1 gjenopprettingen nulles først når tilstanden er LEST TILBAKE som ri
   /const nå = nettTilstand\(\);\s*\n\s*const likt = \(k\) =>/.test(harness) &&
   /if \(likt\('flymodus'\) && likt\('wifi'\) && likt\('data'\)\) åGjenopprette\.nett = null;/.test(harness) &&
   /if \(gi\('stay_on_while_plugged_in'\) === åGjenopprette\.stayon\)/.test(harness) &&
-  /if \(!varselTillatelseGitt\(\)\) åGjenopprette\.varselTillatelse = null;/.test(harness),
+  /if \(varselTillatelseGitt\(\) === false\) åGjenopprette\.varselTillatelse = null;/.test(harness),
   'et «sett tilbake» som ikke tok skal fortsatt stå som noe å rydde');
 check('6m2 Ctrl-C og SIGTERM rydder enheten før de avslutter',
   /process\.on\(sig/.test(harness) && /SIGINT/.test(harness) && /SIGTERM/.test(harness) &&
@@ -622,9 +625,9 @@ check('11a2 … og A5 krever at den IKKE kom fram — ikke bare at et flagg stå
 check('11a3 … og appens EGEN dom over manifesthentingen står som evidens',
   /const otaDom = \(\) => bro\.evalJs\(/.test(harness) &&
   /otaFetch: ota/.test(harness));
-check('11a4 H måler offline PÅ NYTT etter omstarten, i stedet for å anta A5',
+check('11a4 offline MÅLES på nytt etter omstarten, i stedet for å anta A5',
   /const nåddeNå = await nåddeNettet\(\);/.test(harness) &&
-  /const offline = radioerAvNå && !nåddeNå;/.test(harness) &&
+  /const offline = radioerAvEtterOmstart && !nåddeNå;/.test(harness) &&
   harness.indexOf('const nåddeNå = await nåddeNettet();') <
     harness.indexOf("await drepApp();                 // varselet skal komme med appen BORTE"));
 check('11b Wi-Fi og mobildata slås av for seg — flymodus alene er ikke nok',
@@ -643,7 +646,7 @@ check('11d «hold skjermen våken» settes tilbake til den opprinnelige bitmaske
   /settings put global stay_on_while_plugged_in ' \+ åGjenopprette\.stayon/.test(harness) &&
   !/sh\('svc power stayon false'/.test(harness));
 check('11e varseltillatelsen gis BARE når den mangler, og tas tilbake etterpå',
-  /if \(sdk >= 33 && !varselTillatelseGitt\(\)\)/.test(harness) &&
+  /if \(sdk >= 33 && varselTillatelseGitt\(\) === false\)/.test(harness) &&
   /åGjenopprette\.varselTillatelse = 'revoke'/.test(harness) &&
   /pm revoke ' \+ PKG \+ ' android\.permission\.POST_NOTIFICATIONS/.test(harness));
 check('11f alt fire meldes eksplisitt hvis det IKKE lot seg sette tilbake',
@@ -656,6 +659,45 @@ check('11f alt fire meldes eksplisitt hvis det IKKE lot seg sette tilbake',
    runde som brøt sammen eller ble avbrutt med Ctrl-C. */
 check('11g gjenopprettingen kjøres både fra avslutningen og fra signalene',
   (harness.match(/await ryddEnheten\(\); await ryddRiggAlarmer\(\);/g) || []).length === 2);
+
+/* ---- 12. Omstarten, det uleselige, og et SKIP som ikke får skjule noe ----
+
+   1. En omstart er nettopp der en radio kan komme tilbake av seg selv. Skjer det,
+      kan oppdateringsmotoren bytte bundelen i den FØRSTE økten etter omstarten —
+      før bundelvakten rakk å se noe, og midt i en WebView-økt der ingen
+      oppstartsvakt treffer. Rekkefølgen må derfor være låst.
+   2. «Det vi ikke kan sette tilbake, endrer vi ikke» må gjelde ALLE
+      innstillingene, også hovedbryteren og de to som ikke er radioer.
+   3. Et SKIP teller ikke som en feil, så en manglende offline-forutsetning kunne
+      gjort hele jobben grønn samtidig som punktet aldri ble prøvd. */
+const iHarness = (t) => harness.indexOf(t);
+check('12a rekkefølgen etter omstarten er låst: nettet av FØR appen starter',
+  iHarness("adb(['reboot']") < iHarness('const radioerAvEtterOmstart = nettAv();') &&
+  iHarness('const radioerAvEtterOmstart = nettAv();') < iHarness("appenOpp('H etter omstart')") &&
+  iHarness("appenOpp('H etter omstart')") < iHarness("vaktBundle('A4b', ventet)"),
+  'reboot → nettAv → appenOpp → bundlevakt');
+check('12a2 … og offline MÅLES på nytt etter omstarten, før målingene i H',
+  /check\('A5b appen kan fortsatt ikke nå serveren etter omstarten'/.test(harness) &&
+  iHarness("vaktBundle('A4b', ventet)") < iHarness('const nåddeNå = await nåddeNettet();') &&
+  iHarness('const nåddeNå = await nåddeNettet();') < iHarness('H1 alarmen ble levert'));
+check('12b hovedbryteren røres BARE når den opprinnelige verdien lot seg lese',
+  /if \(før\.flymodus !== null\) sh\('cmd connectivity airplane-mode enable'/.test(harness) &&
+  /return før\.flymodus !== null && nettTilstand\(\)\.flymodus === 1;/.test(harness));
+check('12c «hold skjermen våken» røres bare når snapshotet lot seg lese — begge steder',
+  (harness.match(/if \(åGjenopprette\.stayon !== null\) sh\('svc power stayon true'/g) || []).length === 2 &&
+  !/^\s*sh\('svc power stayon true'/m.test(harness));
+check('12d varseltillatelsen leses TRI-STATE, og en uleselig dump rører ingenting',
+  /return m \? m\[1\] === 'true' : null;/.test(harness) &&
+  /if \(sdk >= 33 && varselTillatelseGitt\(\) === false\)/.test(harness) &&
+  /if \(varselTillatelseGitt\(\) === true\) åGjenopprette\.varselTillatelse = 'revoke';/.test(harness) &&
+  /if \(varselTillatelseGitt\(\) === false\) åGjenopprette\.varselTillatelse = null;/.test(harness));
+check('12e en manglende offline-forutsetning FELLER runden i RIGG, ikke hopper over den',
+  /\} else if \(!live\) \{/.test(harness) &&
+  /check\('H4 … planlagt OG levert UTEN at appen kunne nå noen server', false,/.test(harness) &&
+  /forutsetningen for punktet mangler/.test(harness));
+check('12e2 … og SKIP-en finnes bare for LIVE, der plattformen kan nekte oppsettet',
+  (harness.match(/skip\('H4 planlagt og levert uten at appen kunne nå noen server'/g) || []).length === 1 &&
+  /plattformen nektet testoppsettet/.test(harness));
 
 const feil = results.filter((r) => !r).length;
 console.log('\n' + (results.length - feil) + ' passed, ' + feil + ' failed');

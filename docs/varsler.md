@@ -1226,8 +1226,20 @@ mobildata hver for seg — og SPØR APPEN om den kommer fram, mot nøyaktig den
 adressen `fetchOtaBundle()` bruker. Et hvilket som helst svar teller som «nådde
 fram», også en 404: da er serveren der, og en nedlasting kunne skjedd. Appens egen
 `otaFetch`-tilstand står ved siden av som evidens. Det måles to ganger — ved
-oppsettet (A5) og på nytt i H, fordi en omstart er nettopp der en radio kan komme
-tilbake av seg selv.
+oppsettet (A5) og på nytt etter den ekte omstarten (A5b), fordi en omstart er
+nettopp der en radio kan komme tilbake av seg selv.
+
+Og rekkefølgen rundt omstarten er låst, for den er hele forskjellen: **nettet slås
+av IGJEN før appen får starte én gang**, deretter kommer appen opp, og deretter
+verifiseres identiteten. Kom radioen tilbake av omstarten og appen startet først,
+kunne oppdateringsmotoren byttet bundelen i den FØRSTE økten etterpå — før vakten
+rakk å se noe, og midt i en økt der ingen oppstartsvakt treffer.
+
+En manglende offline-forutsetning er dessuten en FEIL i RIGG, ikke noe å hoppe
+over: et SKIP teller ikke som rødt, og en regresjon der nettet kommer tilbake
+etter omstarten kunne ellers gitt en grønn runde der nettopp det punktet aldri ble
+prøvd. På eierens egen telefon, der plattformen kan nekte testoppsettet, er det et
+SKIP med grunnen — og et SKIP teller ikke som bestått noe sted.
 **Og identiteten voktes ved HVER oppstart**: de to funksjonene som kan skaffe
 runden en app å måle på (`appenOpp()` og `ventPåBro()`) leser
 `<meta name="huskis-build">` fra den kjørende siden og sammenligner med builden
@@ -1249,8 +1261,12 @@ av dem tas et øyeblikksbilde FØR første endring, og opprydningen fører enhet
 tilbake til nøyaktig det, verifisert og med nye forsøk innen et vindu. En telefon
 som alt sto i flymodus står i flymodus etterpå. En bruker som hadde slått AV
 systemvarsler har dem av: tillatelsen gis bare når den mangler, og tas tilbake.
-En radio hvis opprinnelige verdi ikke lot seg lese, røres ikke — det vi ikke kan
-sette tilbake, endrer vi ikke.
+En innstilling hvis opprinnelige verdi ikke lot seg lese, røres ikke — det vi ikke
+kan sette tilbake, endrer vi ikke. Regelen gjelder alle fire, også hovedbryteren
+for flymodus: kan den ikke leses, slås den ikke på, og runden sier hvorfor. Og
+tillatelsen leses TRI-STATE — gitt, ikke gitt, eller uleselig — for et boolsk svar
+ville lest et endret dumpformat som «ikke gitt» og dermed gitt og tatt tilbake en
+tillatelse uten å vite hva den var.
 
 **Tapp-intenten er pluginens, ikke vår.** `contentIntent` er en
 `PendingIntent.getActivity` over MAIN/LAUNCHER mot MainActivity, med

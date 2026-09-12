@@ -373,7 +373,11 @@ const nettTilstand = () => ({
 function nettAv() {
   if (!åGjenopprette.nett) åGjenopprette.nett = nettTilstand();
   const før = åGjenopprette.nett;
-  sh('cmd connectivity airplane-mode enable', { tillatFeil: true });
+  /* HVER av de tre røres BARE når den opprinnelige verdien lot seg lese. Regelen
+     gjelder også hovedbryteren: en flymodus vi ikke kan sette tilbake, skal vi
+     ikke slå på. Da svarer `nettAv()` nei, A5 blir rød, og runden sier hvorfor —
+     i stedet for å etterlate en innstilling på en telefon vi ikke kjenner. */
+  if (før.flymodus !== null) sh('cmd connectivity airplane-mode enable', { tillatFeil: true });
   if (før.wifi !== null) sh('svc wifi disable', { tillatFeil: true });
   if (før.data !== null) sh('svc data disable', { tillatFeil: true });
   /* Svaret er om HOVEDBRYTEREN tok. Wi-Fi og mobildata er beste forsøk: en
@@ -381,7 +385,7 @@ function nettAv() {
      felle runden når appen likevel er målt uten nett. Hele tilstanden følger med
      i rapporten, så en leser ser hvilke radioer som faktisk er av — og BEVISET er
      `nåddeNettet()`, ikke denne lesingen. */
-  return nettTilstand().flymodus === 1;
+  return før.flymodus !== null && nettTilstand().flymodus === 1;
 }
 
 /* … og «offline» som en MÅLT egenskap, ikke som en innstilling. Det runden
@@ -408,9 +412,17 @@ const otaDom = () => bro.evalJs(
   'return { state: String(f.state || "?"), detail: String(f.detail == null ? "" : f.detail).slice(0, 120) };');
 
 /* VARSELTILLATELSEN er brukerens valg, ikke vårt. Den leses derfor før den
-   eventuelt gis, og gis BARE når den mangler — og tas tilbake etterpå. */
-const varselTillatelseGitt = () =>
-  /POST_NOTIFICATIONS:\s*granted=true/.test(sh('dumpsys package ' + PKG, { tillatFeil: true }));
+   eventuelt gis, og gis BARE når den mangler — og tas tilbake etterpå.
+
+   Svaret er TRI-STATE: true, false, eller null når linjen ikke står i dumpen i
+   det hele tatt. Et boolsk svar ville lest et endret dumpformat som «ikke gitt»,
+   og da kunne harnesset gitt og tatt tilbake en tillatelse uten å vite hva den
+   var. Null betyr: rør den ikke. */
+const varselTillatelseGitt = () => {
+  const m = /POST_NOTIFICATIONS:\s*granted=(true|false)/
+    .exec(sh('dumpsys package ' + PKG, { tillatFeil: true }));
+  return m ? m[1] === 'true' : null;
+};
 
 /* Enhetens tidssone, og et bytte av den. `cmd alarm set-timezone` er
    AlarmManagerService sin egen skallkommando, og den kringkaster
@@ -472,7 +484,7 @@ async function ryddEnheten() {
       /* VARSELTILLATELSEN tas tilbake bare hvis runden selv ga den. */
       if (åGjenopprette.varselTillatelse === 'revoke') {
         sh('pm revoke ' + PKG + ' android.permission.POST_NOTIFICATIONS', kort);
-        if (!varselTillatelseGitt()) åGjenopprette.varselTillatelse = null;
+        if (varselTillatelseGitt() === false) åGjenopprette.varselTillatelse = null;
       }
     } catch (e) { /* opprydningen skal ikke skjule feilen den rydder etter */ }
     if (!igjen().length) break;
@@ -916,7 +928,9 @@ function planUtskrift() {
      upresise og vekkende, og uten SCHEDULE_EXACT_ALARM i den installerte APK-en
   E  en vanlig appomstart rører dem ikke: samme kø, og ingen cancel/schedule
   F  prosessen fjernet (am kill, ikke force-stop): køen står
-  G  telefonen restartet: pluginens oppstartsmottaker stiller dem opp igjen
+  G  telefonen restartet: pluginens oppstartsmottaker stiller dem opp igjen — og
+     nettet slås av IGJEN før appen får starte, så en radio som kom tilbake av
+     omstarten ikke kan slippe en oppdatering inn (A5b)
   L  tidssonebytte MENS APPEN ER LUKKET: alarmene flytter seg til samme veggtid,
      de gamle tidspunktene er borte, og sonen tilbake gir dem tilbake
   H  en alarm som forfaller blir POSTET på Huskis-kanalen, rangert HIGH —
@@ -976,7 +990,9 @@ async function main() {
      eier, og en bruker som hadde «hold skjermen våken» på skal ha den på etterpå.
      `svc power stayon false` ville satt den til 0 for alle. */
   åGjenopprette.stayon = gi('stay_on_while_plugged_in');
-  sh('svc power stayon true', { tillatFeil: true });
+  // … og den røres BARE hvis den lot seg lese: ellers har opprydningen ingen
+  // verdi å sette tilbake, og en endring vi ikke kan angre er ikke vår å gjøre.
+  if (åGjenopprette.stayon !== null) sh('svc power stayon true', { tillatFeil: true });
   sh('input keyevent 224', { tillatFeil: true });      // KEYCODE_WAKEUP
 
   /* POST_NOTIFICATIONS er en kjøretidstillatelse fra Android 13. Dialogen hører
@@ -987,9 +1003,9 @@ async function main() {
      Men BARE når den mangler, og da tas den tilbake etterpå: en bruker som har
      slått AV systemvarsler har valgt det, og en testrunde skal ikke omgjøre
      valget hennes. */
-  if (sdk >= 33 && !varselTillatelseGitt()) {
+  if (sdk >= 33 && varselTillatelseGitt() === false) {
     sh('pm grant ' + PKG + ' android.permission.POST_NOTIFICATIONS', { tillatFeil: true });
-    if (varselTillatelseGitt()) åGjenopprette.varselTillatelse = 'revoke';
+    if (varselTillatelseGitt() === true) åGjenopprette.varselTillatelse = 'revoke';
   }
 
   /* RADIOEN AV FØR APPEN STARTER FØRSTE GANG, og det er ikke en detalj: appen
@@ -1201,7 +1217,7 @@ async function main() {
       { før: Math.round(oppetidFør) + 's', etter: oppe ? Math.round(oppe) + 's' : '?' });
     if (oppe) {
       sh('input keyevent 82', { tillatFeil: true });   // lås opp en enhet uten PIN
-      sh('svc power stayon true', { tillatFeil: true });
+      if (åGjenopprette.stayon !== null) sh('svc power stayon true', { tillatFeil: true });
       /* Alarmene er tilbake når pluginens mottaker har kjørt. Er enheten
          kryptert og låst, venter den på opplåsingen — derfor en lang frist, og
          en beskjed i stedet for et nederlag. */
@@ -1215,6 +1231,14 @@ async function main() {
           alarmKø().length + ' alarmer — lås opp telefonen om den har PIN');
     }
   }
+
+  /* NETTET AV IGJEN, og HER — før appen har startet én gang etter omstarten.
+     En omstart er nettopp der en radio kan komme tilbake av seg selv, og ville
+     den det, kunne `update-check.js` nå serveren og bytte bundelen i den FØRSTE
+     økten etter omstarten — altså før A4b rakk å se noe, og midt i en WebView-økt
+     der ingen oppstartsvakt treffer. Rekkefølgen er derfor låst:
+     omstart → nettet av → appen opp → bundelvakten. */
+  const radioerAvEtterOmstart = nettAv();
 
   /* ------------- L. Tidssonebytte MENS APPEN ER HELT LUKKET ------------- */
   /* Det vanskeligste punktet i den fysiske runden, og det eneste som krever et
@@ -1282,6 +1306,14 @@ async function main() {
     return 1;
   }
 
+  /* MÅLT på nytt, så snart det finnes en bro å måle gjennom: at radioene er av
+     etter omstarten (over) er en lesing, og det som betyr noe er om appen kommer
+     FRAM. Dette er det samme spørsmålet som A5, stilt etter omstarten. */
+  const nåddeNå = await nåddeNettet();
+  const offline = radioerAvEtterOmstart && !nåddeNå;
+  check('A5b appen kan fortsatt ikke nå serveren etter omstarten', offline,
+    { radioerAv: radioerAvEtterOmstart, nåddeServeren: nåddeNå, nett: nettTilstand() });
+
   const nå = await bro.evalJs('return Date.now();');
   const snart = {
     key: 'hk-rig:snart@' + nå,
@@ -1295,13 +1327,6 @@ async function main() {
      varselet har kommet. Da er både «offline når fristen settes» og «offline ved
      tidspunktet» prøvd i ett — kanalen er lokal, og ingen server er involvert i
      noen av leddene. */
-  const radioerAvNå = nettAv();
-  /* MÅLT på nytt her, ikke antatt fra A5: mellom A5 og nå har enheten vært
-     gjennom en ekte omstart, og en omstart er nettopp der en radio kan komme
-     tilbake av seg selv. Probe-en må gjøres FØR appen drepes — den går gjennom
-     appens egen fetch. */
-  const nåddeNå = await nåddeNettet();
-  const offline = radioerAvNå && !nåddeNå;
   sier(offline ? 'appen er målt uten nett — alarmen planlegges og leveres lokalt'
     : 'appen NÅDDE serveren: «offline» kan ikke påstås for dette punktet');
   /* HELE planen, ikke bare den nye raden: `sync` er en diff mot det telefonen
@@ -1344,10 +1369,22 @@ async function main() {
   if (offline) {
     check('H4 … planlagt OG levert UTEN at appen kunne nå noen server',
       !!postet && nettTilstand().flymodus === 1,
-      { radioerAvFørst: radioerAvNå, nåddeServeren: nåddeNå, nett: nettTilstand() });
+      { radioerAvFørst: radioerAvEtterOmstart, nåddeServeren: nåddeNå, nett: nettTilstand() });
+  } else if (!live) {
+    /* I RIGG — emulatoren i CI — er en manglende offline-forutsetning en FEIL, ikke
+       noe å hoppe over. Et SKIP her ville gjort hele jobben grønn samtidig som
+       nøyaktig det punktet PR-en skal bevise aldri ble prøvd: en regresjon der
+       nettet kommer tilbake etter omstarten ville sett ut som en bestått runde.
+       Enheten er dessuten disponibel her, så det finnes ingen unnskyldning. */
+    check('H4 … planlagt OG levert UTEN at appen kunne nå noen server', false,
+      { grunn: 'fikk ikke etablert offline — forutsetningen for punktet mangler',
+        radioerAv: radioerAvEtterOmstart, nåddeServeren: nåddeNå, nett: nettTilstand() });
   } else {
+    /* På eierens EGEN telefon kan plattformen nekte testoppsettet, og det er noe
+       annet enn en feil i Huskis. Det rapporteres som hoppet over — og et SKIP
+       teller ikke som bestått noe sted. */
     skip('H4 planlagt og levert uten at appen kunne nå noen server',
-      'appen er ikke målt offline her — runden kan ha gått med nett');
+      'plattformen nektet testoppsettet: appen er ikke målt offline på denne enheten');
   }
   /* Nettet blir stående av. Resten av runden er like lokal som dette punktet, og
      opprydningen er den som fører enheten tilbake — til den tilstanden den HADDE,

@@ -2837,7 +2837,13 @@ Det er mer enn forsiktighet — oppdateringsmotoren kan laste appen om MIDT i en
 økt, så faste sjekkpunkter alene ville ikke sett byttet. Og «uten nett» er MÅLT,
 ikke lest av en innstilling: flymodus sier ingenting om Wi-Fi, som kan stå på i
 flymodus, så runden slår av alle tre radioene hver for seg og spør APPEN om den
-kommer fram til adressen OTA-en bruker (A5, og på nytt i H etter omstarten).
+kommer fram til adressen OTA-en bruker (A5, og på nytt etter omstarten som A5b).
+
+Rekkefølgen rundt omstarten er låst, for den er hele forskjellen: nettet slås av
+IGJEN før appen får starte én gang, så kommer appen opp, så verifiseres
+identiteten. Og i RIGG er en manglende offline-forutsetning en FEIL, ikke noe å
+hoppe over — ellers kunne en regresjon der nettet kommer tilbake etter omstarten
+gitt en grønn runde der nettopp det punktet aldri ble prøvd.
 
 Og identiteten voktes ved HVER oppstart: de to funksjonene som kan skaffe runden
 en app å måle på leser `huskis-build` fra den kjørende siden og sammenligner med
@@ -2861,7 +2867,8 @@ opprydningen fører enheten tilbake til nøyaktig det, verifisert og med nye for
 innen et vindu — også når runden blir avbrutt med Ctrl-C eller bryter sammen. En
 telefon som alt sto i flymodus står i flymodus etterpå, og en bruker som hadde
 slått AV systemvarsler har dem av: tillatelsen gis bare når den mangler, og tas
-tilbake. En innstilling hvis opprinnelige verdi ikke lot seg lese, røres ikke. Blir den avbrutt med RIGGENS alarmer armert, avlyses nøyaktig de
+tilbake. En innstilling hvis opprinnelige verdi ikke lot seg lese, røres ikke —
+det gjelder alle fire, og tillatelsen leses tri-state (gitt, ikke gitt, uleselig). Blir den avbrutt med RIGGENS alarmer armert, avlyses nøyaktig de
 id-ene riggen la inn: «Huskis-rigg forfaller» skal ikke ringe på noens telefon,
 og brukerens egen plan står ikke i listen og røres ikke. Å vente på neste
 speilingsrunde duger ikke — alarmen som skal få forfalle ligger sekunder fram.
