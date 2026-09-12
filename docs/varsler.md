@@ -1208,18 +1208,29 @@ utvei når broen ikke er å nå, brukes bare uten en innlogget bruker, og bare n
 alarmkøen faktisk ble tom etterpå.
 
 **Runden måler den bundelen som ble bygget — ellers måler den ingenting.**
-Appen spør etter en OTA-oppdatering ved oppstart, og finner den en nyere bundle
-bytter den web-koden under føttene på runden. Det har skjedd: en emulatorrunde
-bygde én bundle inn i APK-en og kjørte en HELT annen i WebView-en, og felte et
-punkt på kode som ikke fantes i den bundelen. To lag hindrer det nå. Radioen slås
-AV før appen starter første gang, og i RIGG-modus blir den stående av hele runden
-— ingenting som måles der trenger nett, så ingen manifesthenting kan skje. Og
-identiteten LESES: harnesset henter `<meta name="huskis-build">` fra den kjørende
-siden og sammenligner med builden APK-en ble bygget av, før en eneste måling og
-en gang til etter den ekte omstarten. Driver den, forsøkes OTA-en tilbakestilt til
-den innebygde bundelen; står driften, STOPPER runden med «kjører feil bundle». En
+Appen spør etter en oppdatering ved oppstart, og finner den en nyere bundle bytter
+den web-koden under føttene på runden. Det har skjedd: en emulatorrunde bygde én
+bundle inn i APK-en og kjørte en HELT annen i WebView-en, og felte et punkt på
+kode som ikke fantes i den bundelen.
+
+To lag hindrer det, og de må begge til. **Radioen er AV fra før den første
+oppstarten til opprydningen**, i begge modi: ingenting runden måler trenger nett,
+og uten nett kan verken manifestet nås eller `update-check.js` finne en nyere
+build å laste om til. Det siste er grunnen til at noen få faste sjekkpunkter ikke
+ville holdt — motoren kan laste appen om MIDT i en økt, ikke bare ved oppstart.
+**Og identiteten voktes ved HVER oppstart**: de to funksjonene som kan skaffe
+runden en app å måle på (`appenOpp()` og `ventPåBro()`) leser
+`<meta name="huskis-build">` fra den kjørende siden og sammenligner med builden
+APK-en ble bygget av, før de svarer. Hver oppstart sier HVOR den er i runden, så
+en drift har en adresse.
+
+Den første sjekken (A4) får forsøke å rette en drift ved å tilbakestille OTA-en
+til den innebygde bundelen. Etter den er vakten streng: en drift — eller en
+identitet som ikke lar seg lese — STOPPER runden med «kjører feil bundle». En
 måling i feil kode er verre enn ingen måling, for da ser plattformen ut til å
-svare på et spørsmål den ikke har fått.
+svare på et spørsmål den ikke har fått. Lykkes det ikke å slå av radioen,
+rapporteres runden RØD (A5): vakten står fortsatt, men da kan ingen love at koden
+sto stille mellom to av dem.
 
 **Tapp-intenten er pluginens, ikke vår.** `contentIntent` er en
 `PendingIntent.getActivity` over MAIN/LAUNCHER mot MainActivity, med

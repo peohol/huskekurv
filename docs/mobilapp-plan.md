@@ -2826,16 +2826,29 @@ adapteren er selvhelende, og harnesset MÅLER at planen er tilbake til slutt.
 noe. `--no-reboot` hopper over omstarten av enheten og prøver pluginens
 oppstartsmottaker direkte i stedet.
 
-**Runden er PINNET til den bundelen som ble bygget.** Appen spør etter en
-OTA-oppdatering ved oppstart, og finner den en nyere bundle bytter den web-koden
-mens runden står på — da måler runden en annen kode enn endringen, og en feil ser
-ut som en feil i koden her. Derfor slås radioen av FØR appen starter første gang,
-og i RIGG blir den stående av hele runden (ingenting som måles der trenger nett).
-I tillegg leser harnesset hvilken build siden faktisk kjører, og sammenligner med
-den som ble bygget — før målingene (A4) og en gang til etter den ekte omstarten
-(A4b). Driver identiteten, forsøkes OTA-en tilbakestilt til den innebygde
-bundelen, og står driften STOPPER runden. CI pinner id-en eksplisitt med
-`--expect-build`.
+**Runden er PINNET til den bundelen som ble bygget, hele veien.** Appen spør
+etter en oppdatering ved oppstart, og finner den en nyere bundle bytter den
+web-koden mens runden står på — da måler runden en annen kode enn endringen, og en
+feil ser ut som en feil i koden her.
+
+To lag, og de må begge til. Radioen slås AV før den første oppstarten og blir
+stående av til opprydningen, i begge modi: ingenting runden måler trenger nett.
+Det er mer enn forsiktighet — oppdateringsmotoren kan laste appen om MIDT i en
+økt, så faste sjekkpunkter alene ville ikke sett byttet. Og identiteten voktes ved
+HVER oppstart: de to funksjonene som kan skaffe runden en app å måle på leser
+`huskis-build` fra den kjørende siden og sammenligner med den builden som ble
+bygget, før de svarer. Appen starter mange ganger i runden (E, G, H, I, J, K), og
+hver av dem sier hvor den er, så en drift har en adresse.
+
+A4 er den første sjekken, og den får forsøke å rette en drift ved å tilbakestille
+OTA-en til den innebygde bundelen; A4b gjentar den etter den ekte omstarten. Etter
+A4 er vakten streng: en drift, eller en identitet som ikke lar seg lese, STOPPER
+runden. Fikk harnesset ikke slått av radioen, rapporteres runden rød (A5). CI
+pinner id-en eksplisitt med `--expect-build`.
+
+Merk at telefonen er UTEN NETT så lenge runden står på (se pinningen over), og at
+den får nettet tilbake når runden er over. Det er med vilje, og det koster
+ingenting: ingenting runden måler trenger nett.
 
 Runden skrur på tre ting som ikke er appens egne — alarmkøen, flymodus og
 tidssonen — og setter alle tilbake, også når den blir avbrutt med Ctrl-C eller

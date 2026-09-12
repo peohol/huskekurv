@@ -37,9 +37,10 @@
      9. Dokumentasjonen skiller maskinelt bevist fra det et øye må se — og
         opprydningen melder seg aldri ferdig uten å ha VERIFISERT at riggens
         alarmer er borte.
-    10. Runden måler den bundelen som ble bygget: radioen er av før appen
-        starter, identiteten leses av siden og sammenlignes, og en drift
-        STOPPER runden i stedet for å bli tolket som en feil i koden.
+    10. Runden måler den bundelen som ble bygget, HELE veien: radioen er av fra
+        før den første oppstarten til opprydningen, hver oppstart vokter
+        identiteten mot den builden som ble bygget, og en drift STOPPER runden i
+        stedet for å bli tolket som en feil i koden.
 
   Kjør:
     node tests/android-alarm-queue.test.js
@@ -343,7 +344,7 @@ check('6m5 hele opprydningen har ett samlet tak, så et avbrudd ikke kan henge',
    og gjorde JS noe med den? Uten oppdelingen er et FAIL bare et nederlag. */
 check('6n trykket måles på en app som ble startet AV trykket, uten en ny intent',
   /async function ventPåBro/.test(harness) &&
-  /const fraTrykket = !!\(await ventPåBro\(60000\)\);/.test(harness));
+  /const fraTrykket = !!\(await ventPåBro\(60000, '[^']+'\)\);/.test(harness));
 check('6o … og sporet plugin → JS leses av Androids egen logg, USTERT',
   /function trykkSpor/.test(harness) && /LocalNotification received/.test(harness) &&
   /tilPlugin:/.test(harness) && /tilJs:/.test(harness) &&
@@ -520,7 +521,20 @@ check('10c build.js stempler samme id i meta-taggen og i version.json',
   /stampMeta\(stripped, 'huskis-build', ids\.buildId\)/.test(les('build.js')) &&
   /\n\s*buildId,\n/.test(les('build.js')));
 check('10d radioen slås av FØR appen starter første gang',
-  /settFlymodus\(true\);\n\n  await appenOpp\(\);/.test(harness));
+  /const radioenAv = settFlymodus\(true\);\n\n  await appenOpp\(/.test(harness));
+/* … og den blir stående av. Det er forutsetningen for at ÉN vakt per oppstart er
+   nok: `update-check.js` kan laste appen om midt i en økt når den finner en nyere
+   build, og da ville to faste vakter ikke sett byttet. Uten nett kan det ikke
+   skje. Derfor skal ingen del av runden slå nettet på igjen — bare
+   opprydningen, som gjør det gjennom `cmd connectivity`, ikke gjennom
+   `settFlymodus(false)`. */
+check('10d2 ingen del av runden slår nettet på igjen underveis',
+  !/settFlymodus\(false\)/.test(harness) &&
+  /airplane-mode disable/.test(harness));
+check('10d3 … og returverdien fra «slå av» blir RAPPORTERT, ikke ignorert',
+  /const radioenAv = settFlymodus\(true\)/.test(harness) &&
+  /check\('A5 radioen er AV/.test(harness) &&
+  /radioenAv, \{ flymodus: flymodus\(\) \}/.test(harness));
 check('10e vakten kjøres før målingene, og EN GANG TIL etter den ekte omstarten',
   /vaktBundle\('A4', ventet\)/.test(harness) && /vaktBundle\('A4b', ventet\)/.test(harness) &&
   harness.indexOf("vaktBundle('A4', ventet)") <
@@ -533,11 +547,36 @@ check('10f en drift STOPPER runden i stedet for å måle videre i feil kode',
   /if \(!\(await vaktBundle\('A4b', ventet\)\)\) \{/.test(harness));
 check('10g … og forsøket på å rette den slår av radioen først, ellers laster appen ' +
   'den samme bundelen ned igjen',
-  /otaMistillit = true;\n  if \(!flymodus\(\)\) settFlymodus\(true\);/.test(harness) &&
+  /if \(!flymodus\(\)\) settFlymodus\(true\);/.test(harness) &&
   /LiveUpdate/.test(harness) && /lu\.reset\(\)/.test(harness));
-check('10h RIGG kjører offline hele runden — bare LIVE settes tilbake på nett',
-  /if \(live && !otaMistillit\) settFlymodus\(false\);/.test(harness) &&
-  /if \(live && !otaMistillit\) \{\n\s*settFlymodus\(false\);/.test(harness));
+/* DEN SENTRALE VAKTEN, og det er den som gjør pinningen sann gjennom HELE runden:
+   appen starter mange ganger (E, G, H, I, J, K), og en OTA tas i bruk ved
+   oppstart. To faste vakter ville bare målt to øyeblikk. Derfor sitter vakten i
+   de to — og bare de to — funksjonene som kan skaffe runden en app å måle på.
+   Låses strukturelt: hver funksjon som knytter broen (`bro = await ventTil(`)
+   skal kalle `krevRiktigBundle` før den svarer. */
+const broFester = harness.split('bro = await ventTil(').slice(1);
+check('10h hver funksjon som knytter broen vokter bundelen før den svarer',
+  broFester.length === 2 &&
+  broFester.every((etter) => {
+    const slutt = etter.indexOf('\n}');
+    return slutt > 0 && /await krevRiktigBundle\(/.test(etter.slice(0, slutt));
+  }), broFester.length + ' steder fester broen');
+check('10h2 … og hver oppstart i runden sier HVOR, så en drift har adresse',
+  (harness.match(/appenOpp\('[^']+'\)/g) || []).length >= 6 &&
+  /ventPåBro\(60000, 'I kaldstart/.test(harness));
+check('10h3 vakten KASTER — den rapporterer ikke bare og måler videre',
+  /throw new Error\('kjører feil bundle ved/.test(harness));
+check('10h4 … og en identitet som ikke lar seg lese er ikke en som stemmer',
+  /if \(id && id\.build === ventetBundle\.id\) return;/.test(harness) &&
+  /identiteten lot seg ikke lese/.test(harness));
+check('10h5 vakten armeres FØRST når A4 har godkjent, så A4 får rette en drift',
+  /ventetBundle = ventet;/.test(harness) &&
+  harness.indexOf("vaktBundle('A4', ventet)") < harness.indexOf('ventetBundle = ventet;') &&
+  harness.indexOf('ventetBundle = ventet;') < harness.indexOf('D1 pluginens lagring'));
+check('10h6 … og opprydningen kan ikke blokkeres av den',
+  /vaktAv = true;/.test(harness) &&
+  /Opprydningen skal kjøre UANSETT hvilken bundle/.test(harness));
 check('10i CI pinner bundelen eksplisitt med --expect-build', /--expect-build/.test(wf));
 /* Og rapporten skal kunne LESES: `getCurrentBundle()` sier om appen kjører den
    innebygde APK-bundelen eller en nedlastet. Det var nettopp den linjen i

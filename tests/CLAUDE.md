@@ -58,11 +58,11 @@ det er appens egen adapter som planlegger — harnesset leser bare svaret ut av
 (LIVE); ellers planlegges tre syntetiske alarmer gjennom den samme adapteren
 (RIGG), og punktene som krever en økt rapporteres som SKIP med grunnen.
 
-Runden er PINNET til den bundelen som ble bygget: radioen slås av før appen
-starter (og blir stående av i RIGG), og harnesset sammenligner `huskis-build` på
-den kjørende siden med `dist/version.json` — eller med `--expect-build <id>`.
-Driver identiteten, stopper runden. Uten det kan appens egen OTA-oppdatering
-bytte web-koden midt i runden, og da måles en annen commit enn den som testes.
+Runden er PINNET til den bundelen som ble bygget: radioen er av fra før den
+første oppstarten til opprydningen, og HVER oppstart sammenligner `huskis-build`
+på den kjørende siden med `dist/version.json` — eller med `--expect-build <id>`.
+Driver identiteten, stopper runden. Uten det kan appens egen oppdatering bytte
+web-koden midt i runden, og da måles en annen commit enn den som testes.
 
 `.github/workflows/android-device.yml` kjører den på en emulator, så runden ikke
 bare er en fil noen kan kjøre. Det som IKKE kan automatiseres — heads-up,

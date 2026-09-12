@@ -426,13 +426,17 @@ async function ryddEnheten() {
 async function ryddRiggAlarmer() {
   const ider = åGjenopprette.riggIder.slice();
   if (!ider.length) return;
+  /* Opprydningen skal kjøre UANSETT hvilken bundle appen endte opp med: det er
+     riggens alarmer som skal bort, og de er Androids, ikke web-kodens. En vakt
+     som kastet her ville etterlatt dem armert. */
+  vaktAv = true;
 
   /* Ett forsøk: avlys, fjern fra panelet, og LES ETTERPÅ hva som står igjen.
      Svaret er det som fortsatt er PLANLAGT (`getAll` med `SCHEDULED`) pluss det
      som fortsatt ligger i varselpanelet. Lar noe av det seg ikke lese, regnes ALT
      som igjen — en opprydning som ikke kan verifiseres er ikke utført. */
   const forsøk = async () => {
-    const b = await appenOpp();
+    const b = await appenOpp('opprydning');
     const svar = await b.evalJs(
       'const ln = window.Capacitor.Plugins.LocalNotifications;' +
       'const ider = ' + JSON.stringify(ider) + ';' +
@@ -635,7 +639,7 @@ let bro = null;
    Det er nødvendig for punkt I: appen skal være startet av TRYKKET, og et
    `am start` oppå det er en ny intent inn i den samme aktiviteten. Måler vi
    pekeren etterpå, vil vi ikke ha rørt den på vei dit. */
-async function ventPåBro(ms = 90000) {
+async function ventPåBro(ms = 90000, hvor = 'bro') {
   if (bro) { bro.lukk(); bro = null; }
   bro = await ventTil(async () => {
     let b = null;
@@ -646,10 +650,11 @@ async function ventPåBro(ms = 90000) {
     if (b) b.lukk();
     return null;
   }, ms, 1500);
+  await krevRiktigBundle(hvor);
   return bro;
 }
 
-async function appenOpp() {
+async function appenOpp(hvor = 'oppstart') {
   if (bro) { bro.lukk(); bro = null; }
   bro = await ventTil(async () => {
     let b = null;
@@ -664,6 +669,7 @@ async function appenOpp() {
     return null;
   }, 120000, 2000);
   if (!bro) throw new Error('appen kom ikke opp med window.__huskis innen 120 s');
+  await krevRiktigBundle(hvor);
   return bro;
 }
 
@@ -705,10 +711,36 @@ function ventetBuild(args) {
   return null;
 }
 
-/* Har OTA-en ALT byttet bundelen én gang i denne runden, kan den gjøre det igjen.
-   Da blir radioen stående av resten av runden — en måling på nett etter en slik
-   drift er ikke til å stole på. */
-let otaMistillit = false;
+/* DEN SENTRALE VAKTEN. Den er ikke noen få håndplasserte sjekker: ENHVER
+   oppstart i runden går gjennom `appenOpp()` eller `ventPåBro()`, og ingen av dem
+   slipper videre til en måling før appen kjører bundelen vi bygget. To punkter
+   ville ikke holdt — appen starter mange ganger i runden (E, G, H, I, J, K), og
+   en OTA-oppdatering tas i bruk ved oppstart.
+
+   `ventetBundle` armeres FØRST når A4 har godkjent identiteten, slik at A4 selv
+   får forsøke å rette en drift før vakten begynner å felle. `vaktAv` slår den av
+   der den ville stått i veien: under A4 sin egen retting, og under opprydningen,
+   som skal kjøre uansett hva appen kjører. */
+let ventetBundle = null;
+let vaktAv = false;
+
+async function krevRiktigBundle(hvor) {
+  if (vaktAv || !ventetBundle || !bro) return;
+  /* Ett nytt forsøk, og så FAIL CLOSED: en identitet som ikke lar seg lese er
+     ikke en identitet som stemmer. Å måle videre da ville vært å gjette på
+     hvilken kode som svarte. */
+  let id = null;
+  for (let i = 0; i < 2 && !id; i++) {
+    try { id = await identitet(); } catch (e) { if (i === 0) await sov(1500); }
+  }
+  if (id && id.build === ventetBundle.id) return;
+  check('BUNDLE ' + hvor + ': appen kjører bundelen vi installerte', false,
+    { kjører: id ? (id.build || '?') : 'identiteten lot seg ikke lese',
+      ventet: ventetBundle.id, liveUpdate: id ? id.bundle : '?' });
+  throw new Error('kjører feil bundle ved «' + hvor + '»: ' +
+    (id ? (id.build || '?') : 'uleselig') + ' (ventet ' + ventetBundle.id +
+    '). Runden stopper — en måling i feil kode er verre enn ingen måling.');
+}
 
 async function vaktBundle(navn, ventet) {
   if (!ventet) {
@@ -727,9 +759,7 @@ async function vaktBundle(navn, ventet) {
      den ene handlingen som kan rette det, og den er pluginens egen.
 
      RADIOEN AV først: er den på, kan appen laste ned den samme bundelen igjen i
-     det den starter, og da retter tilbakestillingen ingenting. Den blir stående
-     av resten av runden. */
-  otaMistillit = true;
+     det den starter, og da retter tilbakestillingen ingenting. */
   if (!flymodus()) settFlymodus(true);
   let nullstilt = false;
   try {
@@ -738,7 +768,13 @@ async function vaktBundle(navn, ventet) {
       'if (!lu || !lu.reset) return false;' +
       'try { await lu.reset(); return true; } catch (e) { return false; }');
   } catch (e) { /* broen svarte ikke */ }
-  if (nullstilt) { await drepApp(); await appenOpp(); id = await identitet(); }
+  if (nullstilt) {
+    /* Vakten av under rettingen: den leser det samme, og et kast her ville tatt
+       fra oss sjekken som nettopp skal rapportere utfallet. */
+    vaktAv = true;
+    try { await drepApp(); await appenOpp('A4-retting'); id = await identitet(); }
+    finally { vaktAv = false; }
+  }
   const ok = id.build === ventet.id;
   check(navn + ' kjører bundelen vi installerte', ok,
     { kjører: id.build, ventet: ventet.id, kilde: ventet.kilde,
@@ -793,7 +829,9 @@ function planUtskrift() {
   console.log(`Runden, i rekkefølge (ingenting kjøres med --plan):
 
   A  oppsett: adb, én enhet, riktig pakke, varseltillatelse, DevTools-broen — og
-     at appen kjører NØYAKTIG den web-bundelen som ble bygget (igjen etter G)
+     at appen kjører NØYAKTIG den web-bundelen som ble bygget (A4). Radioen slås
+     AV for hele runden (A5), og HVER oppstart etterpå voktes: driver identiteten,
+     stopper runden der og da
   B  kanalen: huskis-notif-v1 finnes på enheten, med HØY viktighet og vibrasjon
   C  subjektet: enhetens egen plan (LIVE) eller tre riggalarmer (RIGG)
   D  alarmene ligger i Androids kø — én per terskel, på riktig tidspunkt,
@@ -871,15 +909,18 @@ async function main() {
      laster den den ned og bytter web-koden. Da måler runden en annen kode enn den
      som nettopp ble bygget. Uten nett kan ikke det skje i det hele tatt.
 
-     I RIGG blir radioen stående av hele runden: ingenting som måles der trenger
-     nett. I LIVE settes den tilbake så snart modusen er avgjort (C).
+     Den blir stående av HELE runden, i begge modi. Det er ikke forsiktighet for
+     sin egen skyld: appen kan bytte bundle ved en senere oppstart (E, G, H, I, J,
+     K), og motoren i `update-check.js` kan til og med laste den om MIDT i en økt
+     når den finner en nyere. Uten nett kan ingen av dem skje. Telefonen får
+     nettet tilbake når runden er over — verifisert, også når den blir avbrutt.
 
      Appen drepes først, for radioen hjelper ikke mot en prosess som alt kjører
      med en nedlastet bundle: den FØRSTE oppstarten i runden skal være uten nett. */
   await drepApp();
-  settFlymodus(true);
+  const radioenAv = settFlymodus(true);
 
-  await appenOpp();
+  await appenOpp('A oppsett');
   const tillatelse = await bro.evalJs('return await window.__huskis.androidChannel.state();');
   const tillatt = tillatelse === 'on' || tillatelse === 'off';
   check('A3 DevTools-broen svarer, og varsler er tillatt på enheten', tillatt, tillatelse);
@@ -897,6 +938,21 @@ async function main() {
       'Runden stopper her: målinger i feil kode er verre enn ingen målinger. ' +
       'Installer debug-APK-en på nytt (--install) og kjør igjen.');
     return 1;
+  }
+  /* … og FRA NÅ voktes hver enkelt oppstart. `ventetBundle` er det som armerer
+     `krevRiktigBundle()`, og den sitter i `appenOpp()`/`ventPåBro()` — altså i
+     hvert eneste sted runden kan få en app i hendene. */
+  ventetBundle = ventet;
+
+  /* A5 er forutsetningen for at én vakt per oppstart er NOK: uten nett kan ikke
+     bundelen byttes mellom dem heller. Fikk vi ikke slått av radioen, er runden
+     rød — da kan vi ikke love at koden sto stille, og det skal synes. Runden
+     fortsetter likevel, for vakten ved hver oppstart er fortsatt et net. */
+  check('A5 radioen er AV, så ingen oppdatering kan bytte koden under runden',
+    radioenAv, { flymodus: flymodus() });
+  if (!radioenAv) {
+    sier('FIKK IKKE slått av radioen herfra. Vakten ved hver oppstart står, men ' +
+      'en oppdatering kan fortsatt komme mellom to av dem — runden rapporteres rød.');
   }
 
   /* --------------------------- C. Subjektet --------------------------- */
@@ -917,19 +973,8 @@ async function main() {
   const live = tillatelse === 'on' && !!eier && plan.length > 0;
   let rigg = null;
 
-  /* Radioen: i LIVE tilbake nå — eierens telefon skal ikke stå uten nett i tolv
-     minutter for vår skyld, og der brukes flymodus bare i det korte vinduet i H.
-     I RIGG står den av resten av runden, og da kan ingen OTA-oppdatering bytte
-     web-bundelen mens vi måler. */
-  if (live && !otaMistillit) {
-    settFlymodus(false);
-    sier('nett tilbake — flymodus brukes bare i det korte vinduet i H');
-  } else {
-    sier(otaMistillit
-      ? 'flymodus står på resten av runden: OTA-en byttet bundelen én gang alt'
-      : 'flymodus står på resten av runden: ingenting i RIGG trenger nett, ' +
-        'og da kan ingen OTA-oppdatering bytte web-bundelen under målingene');
-  }
+  sier('flymodus står på hele runden: ingenting som måles trenger nett, og da kan ' +
+    'ingen oppdatering bytte web-bundelen mellom målingene');
   if (live) {
     check('C1 LIVE: enheten har en innlogget bruker med en plan framover', true,
       plan.length + ' terskler, eier ' + eier.slice(0, 8));
@@ -1005,7 +1050,7 @@ async function main() {
 
   /* ----------------------- E. En vanlig appomstart ----------------------- */
   tømLogg();
-  await appenOpp();
+  await appenOpp('E appomstart');
   await sov(8000);                 // la oppstarten få gjøre det den gjør
   const kall = broKall();
   await drepApp();
@@ -1131,7 +1176,7 @@ async function main() {
   }
 
   /* ----------------- H. En alarm som forfaller blir POSTET ----------------- */
-  await appenOpp();
+  await appenOpp('H etter omstart');
 
   /* Og vakten EN GANG TIL: enheten har vært gjennom en ekte omstart siden A4, og
      en oppstart er nettopp der appen spør etter en OTA-oppdatering. Driver
@@ -1202,9 +1247,8 @@ async function main() {
     skip('H4 planlagt og levert med radioen av',
       'fikk ikke slått på flymodus herfra — runden gikk med nett');
   }
-  /* … og bare i LIVE tilbake på nett. I RIGG er resten av runden like lokal som
-     dette punktet, og radioen står av til opprydningen slår den på igjen. */
-  if (live && !otaMistillit) settFlymodus(false);
+  /* Radioen blir stående av. Resten av runden er like lokal som dette punktet, og
+     opprydningen er den som slår den på igjen — verifisert. */
 
   /* --------------------- I. Trykk fra KALDSTART --------------------- */
   /* Prosessen drepes på nytt her, og det er ikke overflødig: selve alarmen
@@ -1224,8 +1268,8 @@ async function main() {
      intent — et `am start` oppå dette ville vært en ny intent inn i den samme
      aktiviteten, og da måler vi ikke lenger trykket. Kommer appen likevel ikke
      opp, er DET funnet, og `appenOpp` er bare siste utvei for å få lest noe. */
-  const fraTrykket = !!(await ventPåBro(60000));
-  if (!fraTrykket) await appenOpp();
+  const fraTrykket = !!(await ventPåBro(60000, 'I kaldstart fra trykket'));
+  if (!fraTrykket) await appenOpp('I siste utvei');
   const truffet = await ventTil(async () => {
     const svar = await bro.evalJs(
       'const H = window.__huskis;' +
@@ -1297,7 +1341,7 @@ async function main() {
     await bro.evalJs('localStorage.setItem(window.__huskis.NATIVE_OWNER_KEY, ' +
       JSON.stringify('00000000-0000-4000-8000-ffffffffffff') + '); return true;');
     await drepApp();
-    await appenOpp();
+    await appenOpp('J brukerbytte');
     await sov(10000);
     const etter = broKall();
     const nyEier = await bro.evalJs('return window.__huskis.nativePlanOwner() || null;');
@@ -1314,7 +1358,7 @@ async function main() {
     await sync([], true);
     await drepApp();
     const tom = alarmKø();
-    await appenOpp();
+    await appenOpp('J nedrigging');
     const merke = await bro.evalJs('return window.__huskis.nativePlanOwner() || null;');
     check('J1 nedriggingen tømmer Androids alarmkø', tom.length === 0, tom.length + ' alarmer');
     check('J2 … og enheten står igjen uten eier', merke === null, merke);
