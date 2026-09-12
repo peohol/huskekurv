@@ -318,13 +318,22 @@ check('6m1 flymodus-flagget leses av VERIFISERT tilstand, ikke av hva vi ba om',
   'et «slå av» som ikke tok skal fortsatt stå som noe å rydde');
 check('6m2 Ctrl-C og SIGTERM rydder enheten før de avslutter',
   /process\.on\(sig/.test(harness) && /SIGINT/.test(harness) && /SIGTERM/.test(harness) &&
-  /process\.on\(sig, \(\) => \{[\s\S]{0,300}ryddEnheten\(\);/.test(harness));
+  /process\.on\(sig, \(\) => \{[\s\S]{0,600}await ryddEnheten\(\);/.test(harness));
 check('6m flymodus og tidssone settes TILBAKE uansett hvordan runden ender',
-  /function ryddEnheten/.test(harness) &&
-  /const avslutt = async \(kode\) => \{\s*\n\s*ryddEnheten\(\);/.test(harness) &&
+  /async function ryddEnheten/.test(harness) &&
   /main\(\)\.then\(avslutt\)\.catch\([\s\S]{0,400}avslutt\(1\);/.test(harness) &&
-  (harness.match(/ryddEnheten\(\);/g) || []).length >= 3,
-  (harness.match(/ryddEnheten\(\);/g) || []).length + ' kall');
+  (harness.match(/await ryddEnheten\(\);/g) || []).length >= 3,
+  (harness.match(/await ryddEnheten\(\);/g) || []).length + ' kall');
+/* Ett forsøk er ikke nok: et «slå av flymodus» som feiler eller henger etter må
+   prøves på nytt FØR prosessen går, ikke bare etterlate et flagg. */
+check('6m3 systemopprydningen prøver på nytt til tilstanden er lest tilbake',
+  /const frist = Date\.now\(\) \+ RYDD_SYS_MS;/.test(harness) &&
+  /if \(!åGjenopprette\.flymodus && !åGjenopprette\.sone\) break;/.test(harness) &&
+  /await sov\(1500\);/.test(harness));
+check('6m4 … og sier det tydelig hvis vinduet gikk ut',
+  /FIKK IKKE satt tilbake/.test(harness) && /FLYMODUS STÅR PÅ/.test(harness));
+check('6m5 hele opprydningen har ett samlet tak, så et avbrudd ikke kan henge',
+  (harness.match(/sov\(RYDD_SYS_MS \+ RYDD_MS\)/g) || []).length === 2);
 
 /* ---- 7. Observatørene appen må eksponere ----
    Pekeren fra et varsel er ikke synlig i DOM-en på en kaldstart: objektet den
@@ -379,9 +388,8 @@ check('8l økten leses av `authUser`, ikke av LIVE-vilkåret',
   /window\.__huskis\.authUser/.test(harness) &&
   /åGjenopprette\.harØkt = harØkt/.test(harness) &&
   !/åGjenopprette\.live/.test(harness));
-check('8m avbrudd rydder BÅDE innstillingene og alarmene, med et tak',
-  /ryddEnheten\(\);\s*\/\/ systeminnstillingene med én gang/.test(harness) &&
-  /Promise\.race\(\[ryddRiggAlarmer\(\), sov\(RYDD_MS\)\]\)/.test(harness) &&
+check('8m avbrudd rydder BÅDE innstillingene og alarmene, i den rekkefølgen',
+  /await ryddEnheten\(\); await ryddRiggAlarmer\(\);/.test(harness) &&
   /if \(rydder\) process\.exit\(130\);/.test(harness));
 check('8n emulatorjobben har tak på BEGGE ventingene, og skriver loggen ved feil',
   /timeout 300 adb wait-for-device/.test(wf) && /timeout 600 bash -c/.test(wf) &&
@@ -421,9 +429,22 @@ check('9g … og en feil i cancel/remove kan ikke leses som suksess',
 check('9h … og et uleselig svar regner ALT som igjen',
   /catch \(e\) \{ feil\.push\("getAll: /.test(harness));
 check('9i varselpanelet sjekkes også — en levert rad er ikke borte av en cancel',
-  /const iPanelet = ider\.filter/.test(harness));
-check('9j force-stop brukes bare hvis køen FAKTISK ble tom etterpå',
-  /am force-stop[\s\S]{0,120}if \(alarmKø\(\)\.length === 0\)/.test(harness));
+  /const iPanelet = panel === null/.test(harness));
+/* Et ULESELIG panel er ikke «tomt». Med `tillatFeil` kommer en lesefeil ut som
+   tekst, og uten vakten ville den blitt lest som at riggens varsel var borte. */
+check('9i2 `varselDump()` svarer null når dumpen ikke lot seg lese',
+  /const gyldig = \(t\) =>/.test(harness) &&
+  /return null;\n\}/.test(harness) &&
+  /Current Notification Manager state\|NotificationRecord/.test(harness));
+check('9i3 … og et uleselig panel regner ALLE id-ene som igjen',
+  /panel === null\s*\n\s*\? ider/.test(harness) &&
+  /varselpanelet lot seg ikke lese/.test(harness));
+check('9i4 H venter videre på et uleselig panel i stedet for å lese det som «kom ikke»',
+  /if \(d === null\) return null;/.test(harness));
+check('9j force-stop-fallbacken verifiserer BÅDE køen og panelet før flagget nulles',
+  /const tomKø = alarmKø\(\)\.length === 0;/.test(harness) &&
+  /const tomtPanel = panel !== null &&/.test(harness) &&
+  /if \(tomKø && tomtPanel\) \{/.test(harness));
 
 /* ---- 9. Dokumentasjonen skiller bevist fra observert ---- */
 const plan = les('docs', 'mobilapp-plan.md');

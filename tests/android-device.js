@@ -102,6 +102,7 @@ const RIG_AHEAD_MIN = [180, 240, 300];
 const SOON_S = 25;               // alarmen som skal få forfalle i runden
 const TOL_MS = 150000;           // slingring når to tidssett sammenlignes
 const RYDD_MS = 45000;           // taket på opprydningen av riggens alarmer
+const RYDD_SYS_MS = 25000;       // … og på å få systeminnstillingene tilbake
 
 /* ---------------------------------------------------------------- rapporten */
 
@@ -337,21 +338,43 @@ const sonen = () => sh('getprop persist.sys.timezone', { tillatFeil: true }).tri
    `ryddEnheten()` kjøres både på veien ut og fra feilgrenen. */
 const åGjenopprette = { sone: null, flymodus: false, riggIder: [], harØkt: false };
 
-/* SYSTEMINNSTILLINGENE tilbake. Synkron med vilje: den må virke selv når broen
-   er død, og den skal være ferdig før prosessen får lov til å gå. */
-function ryddEnheten() {
+/* SYSTEMINNSTILLINGENE tilbake — VERIFISERT, og med nye forsøk innen et vindu.
+
+   Ett forsøk er ikke nok: `cmd connectivity airplane-mode disable` kan feile
+   eller henge etter, og et flagg som bare BLIR STÅENDE hjelper ikke når
+   prosessen avsluttes rett etterpå. Løkken prøver derfor på nytt til tilstanden
+   er lest tilbake som riktig, eller til vinduet er ute — og sier det da, i
+   stedet for å gå stille.
+
+   Kallene har kort tak: en `adb` som henger skal ikke spise hele vinduet. */
+async function ryddEnheten() {
+  const frist = Date.now() + RYDD_SYS_MS;
+  const kort = { tillatFeil: true, timeout: 15000 };
+  for (;;) {
+    try {
+      if (åGjenopprette.flymodus) {
+        sh('cmd connectivity airplane-mode disable', kort);
+        åGjenopprette.flymodus = flymodus();
+      }
+      if (åGjenopprette.sone) {
+        sh('cmd alarm set-timezone ' + åGjenopprette.sone, kort);
+        if (sonen() === åGjenopprette.sone) åGjenopprette.sone = null;
+      }
+    } catch (e) { /* opprydningen skal ikke skjule feilen den rydder etter */ }
+    if (!åGjenopprette.flymodus && !åGjenopprette.sone) break;
+    if (Date.now() >= frist) {
+      console.error('     · FIKK IKKE satt tilbake: ' + [
+        åGjenopprette.flymodus ? 'FLYMODUS STÅR PÅ' : null,
+        åGjenopprette.sone ? 'tidssonen er ikke tilbake til ' + åGjenopprette.sone : null,
+      ].filter(Boolean).join(', ') + ' — rett det i telefonens innstillinger.');
+      break;
+    }
+    await sov(1500);
+  }
   try {
-    if (åGjenopprette.flymodus) {
-      sh('cmd connectivity airplane-mode disable', { tillatFeil: true });
-      åGjenopprette.flymodus = flymodus();
-    }
-    if (åGjenopprette.sone) {
-      sh('cmd alarm set-timezone ' + åGjenopprette.sone, { tillatFeil: true });
-      if (sonen() === åGjenopprette.sone) åGjenopprette.sone = null;
-    }
-    sh('svc power stayon false', { tillatFeil: true });
-    adb(['forward', '--remove', 'tcp:' + CDP_PORT], { tillatFeil: true });
-  } catch (e) { /* opprydningen skal ikke kunne skjule feilen den rydder etter */ }
+    sh('svc power stayon false', kort);
+    adb(['forward', '--remove', 'tcp:' + CDP_PORT], kort);
+  } catch (e) { /* uviktig */ }
 }
 
 /* … OG RIGGENS EGNE ALARMER, når runden blir avbrutt med dem armert.
@@ -392,8 +415,14 @@ async function ryddRiggAlarmer() {
       '  igjen = ider.filter((id) => står.includes(id));' +
       '} catch (e) { feil.push("getAll: " + ((e && e.message) || e)); }' +
       'return { feil, igjen };');
+    /* Panelet leses av Android selv, og et ULESELIG svar er ikke «tomt»: kunne vi
+       ikke lese det, er ingen levert rad verifisert borte. Da regnes alle id-ene
+       som igjen — samme regel som for `getAll`. */
     const panel = varselDump();
-    const iPanelet = ider.filter((id) => new RegExp('\\bid=' + id + '\\b').test(panel));
+    const iPanelet = panel === null
+      ? ider
+      : ider.filter((id) => new RegExp('\\bid=' + id + '\\b').test(panel));
+    if (panel === null) svar.feil.push('varselpanelet lot seg ikke lese');
     return { feil: svar.feil, igjen: svar.igjen.concat(iPanelet.filter((id) => !svar.igjen.includes(id))) };
   };
 
@@ -416,13 +445,21 @@ async function ryddRiggAlarmer() {
      uten en innlogget bruker, og bare når køen faktisk ble tom etterpå. */
   if (!åGjenopprette.harØkt) {
     sh('am force-stop ' + PKG, { tillatFeil: true });
-    if (alarmKø().length === 0) {
+    /* Og VERIFISER begge sidene: en tom alarmkø (ingenting kan ringe) OG et
+       lesbart panel uten id-ene (ingenting kan ses). Et uleselig panel teller
+       ikke som bevis. */
+    const panel = varselDump();
+    const tomKø = alarmKø().length === 0;
+    const tomtPanel = panel !== null &&
+      !ider.some((id) => new RegExp('\\bid=' + id + '\\b').test(panel));
+    if (tomKø && tomtPanel) {
       åGjenopprette.riggIder = [];
       console.error('     · fikk ikke avlyst ' + JSON.stringify(sist.igjen) +
-        ' gjennom broen — alarmkøen er tømt med force-stop i stedet (ingen innlogget bruker)' +
-        (sist.feil.length ? '  [' + sist.feil.join('; ') + ']' : ''));
+        ' gjennom broen — alarmkøen og panelet er tømt med force-stop i stedet ' +
+        '(ingen innlogget bruker)' + (sist.feil.length ? '  [' + sist.feil.join('; ') + ']' : ''));
       return;
     }
+    sist.feil.push('force-stop: kø tom=' + tomKø + ', panel tomt=' + tomtPanel);
   }
   console.error('     · FIKK IKKE ryddet riggalarmene ' + JSON.stringify(sist.igjen) +
     ': de kan ringe én gang. Din egen plan er urørt — åpne Huskis, så avlyser diffen resten.' +
@@ -448,10 +485,22 @@ function soneAvvik(id, atMs) {
   return (m[1] === '-' ? -min : min) * 60000;
 }
 
+/* Varselpanelet, eller `null` når det ikke LOT SEG LESE.
+
+   Forskjellen er hele poenget: et gyldig svar uten våre id-er betyr «ingenting
+   ligger i panelet», mens en lesefeil ikke betyr noe som helst. Med `tillatFeil`
+   kommer begge ut som tekst, og uten denne vaktlinjen ville en feilet dump blitt
+   lest som at riggens varsel var borte. Svaret må derfor SE UT som dumpen den
+   later som den er. */
 function varselDump() {
-  const full = sh('dumpsys notification --noredact', { tillatFeil: true });
-  if (full.includes('pkg=') || full.includes('NotificationRecord')) return full;
-  return sh('dumpsys notification', { tillatFeil: true });
+  const gyldig = (t) => !!t && (
+    /Current Notification Manager state|NotificationRecord|mNotificationList/.test(t) ||
+    (t.length > 500 && /otification/.test(t)));
+  for (const cmd of ['dumpsys notification --noredact', 'dumpsys notification']) {
+    const t = sh(cmd, { tillatFeil: true });
+    if (gyldig(t)) return t;
+  }
+  return null;
 }
 
 /* -------------------------------------------------------------- DevTools-broen */
@@ -929,6 +978,7 @@ async function main() {
      bestått før alarmen i det hele tatt fyrte. Derfor id-en. */
   const postet = await ventTil(() => {
     const d = varselDump();
+    if (d === null) return null;            // uleselig dump er ikke et svar
     const idRe = new RegExp('\\bid=' + snartId + '\\b');
     const poster = d.split('NotificationRecord(');
     const min = poster.find((b) => b.includes('pkg=' + PKG) && idRe.test(b));
@@ -991,11 +1041,13 @@ async function main() {
     skip('I3 den parkerte pekeren peker på riktig objekt',
       'pekeren ble tatt med én gang — appen var innlogget og synket');
   }
-  if (postet) {
+  const panelEtter = postet ? varselDump() : null;
+  if (postet && panelEtter !== null) {
     check('I4 varselet er borte fra panelet etter trykket',
-      !new RegExp('\\bid=' + snartId + '\\b').test(varselDump()), 'autoCancel');
+      !new RegExp('\\bid=' + snartId + '\\b').test(panelEtter), 'autoCancel');
   } else {
-    skip('I4 varselet er borte fra panelet etter trykket', 'H1 leverte ingen varsel å trykke på');
+    skip('I4 varselet er borte fra panelet etter trykket',
+      postet ? 'varselpanelet lot seg ikke lese' : 'H1 leverte ingen varsel å trykke på');
   }
 
   /* --------------------------- J. Brukerbytte --------------------------- */
@@ -1053,7 +1105,7 @@ async function main() {
     check('K1 riggen er ryddet bort — enheten er som før runden', tom);
   }
   if (bro) { bro.lukk(); bro = null; }
-  ryddEnheten();
+  await ryddEnheten();
 
   /* ---------------------------- rapporten ---------------------------- */
   const feil = results.filter((r) => r.ok === false);
@@ -1102,15 +1154,20 @@ if (require.main === module) {
       if (rydder) process.exit(130);
       rydder = true;
       console.error('\n✗ Avbrutt (' + sig + ') — rydder enheten før jeg går.');
-      ryddEnheten();                    // systeminnstillingene med én gang
-      Promise.race([ryddRiggAlarmer(), sov(RYDD_MS)])
-        .catch(() => {})
-        .then(() => process.exit(sig === 'SIGINT' ? 130 : 143));
+      // Systeminnstillingene FØRST, og de prøves på nytt til de er lest tilbake
+      // som riktige. Så alarmene. Hele opprydningen har ett samlet tak, så et
+      // avbrudd ikke kan bli hengende.
+      Promise.race([
+        (async () => { await ryddEnheten(); await ryddRiggAlarmer(); })(),
+        sov(RYDD_SYS_MS + RYDD_MS),
+      ]).catch(() => {}).then(() => process.exit(sig === 'SIGINT' ? 130 : 143));
     });
   }
   const avslutt = async (kode) => {
-    ryddEnheten();
-    await Promise.race([ryddRiggAlarmer(), sov(RYDD_MS)]).catch(() => {});
+    await Promise.race([
+      (async () => { await ryddEnheten(); await ryddRiggAlarmer(); })(),
+      sov(RYDD_SYS_MS + RYDD_MS),
+    ]).catch(() => {});
     process.exit(kode);
   };
   main().then(avslutt).catch((e) => {

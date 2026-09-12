@@ -1185,7 +1185,10 @@ pluginen — brukerens egen plan står ikke i listen og røres ikke. Å vente p�
 «neste speilingsrunde» duger ikke: alarmen som skal få forfalle ligger sekunder
 fram. Og opprydningen melder seg aldri ferdig på et kall som bare ble SENDT:
 fraværet leses tilbake (`getAll` med `SCHEDULED`, pluss varselpanelet), og et
-svar som ikke lar seg lese regnes som at alt står igjen. `force-stop` er siste
+svar som ikke lar seg lese regnes som at alt står igjen — et uleselig panel er
+ikke et tomt panel. Systeminnstillingene får samme behandling: de leses tilbake,
+og prøves på nytt innen et vindu i stedet for å etterlate et flagg ingen handler
+på. `force-stop` er siste
 utvei når broen ikke er å nå, brukes bare uten en innlogget bruker, og bare når
 alarmkøen faktisk ble tom etterpå.
 
