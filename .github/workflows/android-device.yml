@@ -14,7 +14,7 @@ name: Android enhetsrunde
 #
 # Uten dette steget er harnesset bare en fil. MED det er alt i den fysiske
 # runden som ikke krever et øye, maskinelt bevist på hver PR som rører
-# Android-siden (docs/mobilapp-plan.md, «Det som MÅ prøves på telefon»).
+# Android-siden (docs/mobilapp-plan.md, «Det runden MÅLER»).
 #
 # Trigger: manuelt, og på de pull requestene som kan gjøre runden ugyldig.
 # Vanlige Huskis-PR-er skal ikke betale for en emulator.
@@ -103,14 +103,27 @@ jobs:
           echo "EMU_IMAGE=$img" >> "$GITHUB_ENV"
           echo "Systembilde: $img"
 
+      # `adb` ligger IKKE på PATH på runneren, og harnesset kaller den direkte.
+      # Uten dette steget feiler runden med «adb: command not found» — og
+      # loggsamlingen etterpå gjør det samme, så man ser ikke hvorfor.
+      - name: Legg Android-verktøyene på PATH
+        run: |
+          set -euo pipefail
+          for d in platform-tools emulator cmdline-tools/latest/bin; do
+            echo "$ANDROID_HOME/$d" >> "$GITHUB_PATH"
+          done
+
       - name: Lag og start emulatoren
         run: |
           set -euo pipefail
-          echo no | "$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager" \
-            create avd -n huskis -k "$EMU_IMAGE" --force
-          # Nok datapartisjon til en APK og en runde med dumper.
-          echo 'disk.dataPartition.size=6144M' >> "$HOME/.android/avd/huskis.avd/config.ini"
-          nohup "$ANDROID_HOME/emulator/emulator" -avd huskis \
+          adb --version
+          echo no | avdmanager create avd -n huskis -k "$EMU_IMAGE" --force
+          # HVOR AVD-en havnet er ikke gitt: nyere SDK-verktøy følger
+          # ANDROID_USER_HOME (ofte ~/.config/.android på runneren), ikke
+          # ~/.android. Den skrives ut i stedet for å antas — et steg som
+          # skriver til en gjettet sti feiler uten å si hvorfor.
+          avdmanager list avd
+          nohup emulator -avd huskis \
             -no-window -no-audio -no-boot-anim -no-snapshot \
             -gpu swiftshader_indirect -camera-back none -camera-front none \
             > emulator.log 2>&1 &
