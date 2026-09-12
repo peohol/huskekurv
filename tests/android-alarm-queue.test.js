@@ -335,6 +335,24 @@ check('6m4 … og sier det tydelig hvis vinduet gikk ut',
 check('6m5 hele opprydningen har ett samlet tak, så et avbrudd ikke kan henge',
   (harness.match(/sov\(RYDD_SYS_MS \+ RYDD_MS\)/g) || []).length === 2);
 
+/* ---- 6n–6q. Sporet fra trykk til peker ----
+   «Ingen peker» må ha en ADRESSE: fikk pluginen intenten, sendte den den til JS,
+   og gjorde JS noe med den? Uten oppdelingen er et FAIL bare et nederlag. */
+check('6n trykket måles på en app som ble startet AV trykket, uten en ny intent',
+  /async function ventPåBro/.test(harness) &&
+  /const fraTrykket = !!\(await ventPåBro\(60000\)\);/.test(harness));
+check('6o … og sporet plugin → JS leses av Androids egen logg',
+  /function trykkSpor/.test(harness) && /LocalNotification received/.test(harness) &&
+  /tilPlugin:/.test(harness) && /tilJs:/.test(harness));
+check('6p en varm intent skiller kaldstart-hullet fra koblingen plugin → JS',
+  /I2b … og den kommer fram når appen ALT kjører/.test(harness));
+check('6q viktigheten leses både som ord OG som tall (API 36 skriver 4)',
+  /importance=\(HIGH\|MAX\|4\|5\)/.test(harness));
+check('6r kanalen sjekkes ETTER første speilingsrunde, som er den som lager den',
+  harness.indexOf('C1 RIGG: tre syntetiske alarmer') <
+    harness.indexOf('B1 kanalen ' ) &&
+  /ikke ved oppstart/.test(harness));
+
 /* ---- 7. Observatørene appen må eksponere ----
    Pekeren fra et varsel er ikke synlig i DOM-en på en kaldstart: objektet den
    viser til er ikke lastet ennå. Uten disse to er trykket det ene punktet bare

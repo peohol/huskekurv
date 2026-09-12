@@ -304,6 +304,24 @@ const tapKommando = (id, kildeJson) =>
   " --es " + TAP.obj + " '" + kildeJson + "'";
 const tømLogg = () => adb(['logcat', '-c'], { tillatFeil: true });
 
+/* HVOR kjeden fra et trykk brøt, lest av Androids egen logg. Tre ledd, og hvert
+   av dem har sin egen linje:
+
+     · pluginen fikk intenten      → «LocalNotification received» (tagg Capacitor/LN)
+     · pluginen sendte den til JS  → «localNotificationActionPerformed» i brologgen
+     · JS-en gjorde noe med den    → observatørene i `window.__huskis`
+
+   Uten denne oppdelingen er «ingen peker» bare et nederlag uten adresse. */
+function trykkSpor() {
+  const txt = adb(['logcat', '-d', '-s', 'Capacitor:V', LOG_TAG + ':V', 'Capacitor/LN:V',
+    'chromium:E'], { tillatFeil: true });
+  return {
+    tilPlugin: /LocalNotification received/.test(txt),
+    tilJs: /localNotificationActionPerformed/.test(txt),
+    jsFeil: (txt.match(/\[INFO:CONSOLE[^\n]*|Uncaught[^\n]*/g) || []).slice(0, 3),
+  };
+}
+
 function broKall() {
   const txt = adb(['logcat', '-d', '-s', LOG_TAG + ':V'], { tillatFeil: true });
   return (txt.match(/pluginId: LocalNotifications, methodName: \w+/g) || [])
@@ -596,6 +614,26 @@ async function koble() {
    FORRIGE forbindelsen lukkes: en prosess som er drept etterlater en død
    socket, og `adb forward` skal ikke peke på den. */
 let bro = null;
+
+/* Vent på en app som ALLEREDE kjører, uten å sende en eneste intent.
+
+   Det er nødvendig for punkt I: appen skal være startet av TRYKKET, og et
+   `am start` oppå det er en ny intent inn i den samme aktiviteten. Måler vi
+   pekeren etterpå, vil vi ikke ha rørt den på vei dit. */
+async function ventPåBro(ms = 90000) {
+  if (bro) { bro.lukk(); bro = null; }
+  bro = await ventTil(async () => {
+    let b = null;
+    try {
+      b = await koble();
+      if (await b.evalJs('return !!(window.__huskis && window.__huskis.androidChannel);')) return b;
+    } catch (e) { /* prøv igjen */ }
+    if (b) b.lukk();
+    return null;
+  }, ms, 1500);
+  return bro;
+}
+
 async function appenOpp() {
   if (bro) { bro.lukk(); bro = null; }
   bro = await ventTil(async () => {
@@ -742,24 +780,6 @@ async function main() {
     return 1;
   }
 
-  /* ---------------------------- B. Kanalen ---------------------------- */
-  const kanalId = await bro.evalJs('return window.__huskis.NATIVE_CH_ID;');
-  const kanaler = await bro.evalJs(
-    'const ln = window.Capacitor.Plugins.LocalNotifications;' +
-    'if (!ln.listChannels) return null;' +
-    'try { const r = await ln.listChannels(); return (r && r.channels) || []; }' +
-    'catch (e) { return null; }');
-  if (sdk < 26 || kanaler === null) {
-    skip('B1 kanalen finnes på enheten', 'Android uten kanaler (API ' + sdk + ')');
-  } else {
-    const k = kanaler.find((c) => c.id === kanalId);
-    check('B1 kanalen ' + kanalId + ' finnes på enheten', !!k,
-      kanaler.map((c) => c.id).join(', ') || 'ingen');
-    check('B2 … med HØY viktighet (4) og vibrasjon',
-      !!k && Number(k.importance) === 4 && k.vibration !== false,
-      k ? { importance: k.importance, vibration: k.vibration, name: k.name } : '-');
-  }
-
   /* --------------------------- C. Subjektet --------------------------- */
   const eier = await bro.evalJs('return window.__huskis.nativePlanOwner() || null;');
   /* «Innlogget» og «LIVE» er IKKE det samme, og forskjellen avgjør hva en
@@ -788,6 +808,30 @@ async function main() {
     sier(harØkt ? 'innlogget, men ingen plan framover — brukerbyttet (J3) kan ikke prøves her'
       : 'ingen innlogget bruker — brukerbyttet (J3) kan ikke prøves her');
   }
+
+  /* ---------------------------- B. Kanalen ----------------------------
+     ETTER subjektet, og det er ikke en detalj: kanalen opprettes av adapterens
+     FØRSTE speilingsrunde (`ensureNativeChannel`), ikke ved oppstart. Spør man
+     før den runden har gått, svarer enheten med pluginens egen `default` — og
+     det ville sett ut som en manglende kanal i stedet for en sjekk som kom for
+     tidlig. */
+  const kanalId = await bro.evalJs('return window.__huskis.NATIVE_CH_ID;');
+  const kanaler = await bro.evalJs(
+    'const ln = window.Capacitor.Plugins.LocalNotifications;' +
+    'if (!ln.listChannels) return null;' +
+    'try { const r = await ln.listChannels(); return (r && r.channels) || []; }' +
+    'catch (e) { return null; }');
+  if (sdk < 26 || kanaler === null) {
+    skip('B1 kanalen finnes på enheten', 'Android uten kanaler (API ' + sdk + ')');
+  } else {
+    const k = kanaler.find((c) => c.id === kanalId);
+    check('B1 kanalen ' + kanalId + ' finnes på enheten', !!k,
+      kanaler.map((c) => c.id).join(', ') || 'ingen');
+    check('B2 … med HØY viktighet (4) og vibrasjon',
+      !!k && Number(k.importance) === 4 && k.vibration !== false,
+      k ? { importance: k.importance, vibration: k.vibration, name: k.name } : '-');
+  }
+
 
   /* ------------------- D. Alarmene ligger i Androids kø ------------------- */
   const pending = await pluginPending();
@@ -994,8 +1038,12 @@ async function main() {
   if (postet) {
     check('H2 … på Huskis-kanalen', postet.includes('channel=' + kanalId),
       (postet.match(/channel=[\w-]+/) || ['?'])[0]);
+    /* Android skriver rangeringen enten som ORD (`importance=HIGH`) eller som
+       TALL (`importance=4`) — API 36 gjør det siste. 4 ER IMPORTANCE_HIGH og 5
+       IMPORTANCE_MAX, så begge formene må leses; ellers feller sjekken et varsel
+       som faktisk ble rangert høyt. */
     check('H3 … og rangert HIGH av Android (forutsetningen for heads-up)',
-      /importance=(HIGH|MAX)/.test(postet),
+      /importance=(HIGH|MAX|4|5)\b/.test(postet),
       (postet.match(/importance=\w+/g) || ['leste ingen importance']).join(' '));
   }
   if (offline) {
@@ -1019,20 +1067,29 @@ async function main() {
     extra: { objType: snart.obj_type, objId: snart.obj_id, key: snart.key },
   });
   if (bro) { bro.lukk(); bro = null; }
+  tømLogg();
   sh(tapKommando(snartId, kilde), { tillatFeil: true });
-  await appenOpp();
+  /* TRYKKET skal være det som starter appen. `ventPåBro` sender derfor ingen
+     intent — et `am start` oppå dette ville vært en ny intent inn i den samme
+     aktiviteten, og da måler vi ikke lenger trykket. Kommer appen likevel ikke
+     opp, er DET funnet, og `appenOpp` er bare siste utvei for å få lest noe. */
+  const fraTrykket = !!(await ventPåBro(60000));
+  if (!fraTrykket) await appenOpp();
   const truffet = await ventTil(async () => {
     const svar = await bro.evalJs(
       'const H = window.__huskis;' +
       'return { tapped: [...(H.notifChannelTapped || [])], peker: H.notifPendingTarget || null };');
     return (svar.tapped.length || svar.peker) ? svar : null;
   }, 30000, 1000);
-  check('I1 appen ble startet av trykket (kaldstart)', kaldt,
-    kaldt ? 'prosessen var borte' : 'appen kjørte allerede');
+  check('I1 appen ble startet av trykket (kaldstart)', kaldt && fraTrykket,
+    { prosessenVarBorte: kaldt, komOppAvTrykket: fraTrykket });
+  /* Og HVOR kjeden brøt, hvis den brøt: pluginen → JS → appen. Uten sporet er
+     «ingen peker» et nederlag uten adresse. */
+  const spor = trykkSpor();
   check('I2 pekeren fra varselet kom fram i appen',
     !!truffet && (truffet.tapped.includes(snart.key) ||
       !!(truffet.peker && truffet.peker.id === snart.obj_id)),
-    truffet || 'ingen peker');
+    truffet || { pekerIkkeSett: true, sporet: spor });
   if (truffet && truffet.peker) {
     check('I3 … og den PARKERTE pekeren peker på riktig objekt',
       truffet.peker.type === snart.obj_type && truffet.peker.id === snart.obj_id,
@@ -1041,6 +1098,25 @@ async function main() {
     skip('I3 den parkerte pekeren peker på riktig objekt',
       'pekeren ble tatt med én gang — appen var innlogget og synket');
   }
+  /* … og den VARME veien, som skiller to helt ulike funn fra hverandre: kommer
+     pekeren fram når appen ALT kjører, men ikke fra en kaldstart, er det
+     kaldstarten som er hullet (den retainede hendelsen fra pluginen). Kommer den
+     ikke fram noen av veiene, er det selve koblingen plugin → JS. */
+  if (!truffet) {
+    tømLogg();
+    sh(tapKommando(snartId, kilde), { tillatFeil: true });
+    const varmt = await ventTil(async () => {
+      const svar = await bro.evalJs(
+        'const H = window.__huskis;' +
+        'return { tapped: [...(H.notifChannelTapped || [])], peker: H.notifPendingTarget || null };');
+      return (svar.tapped.length || svar.peker) ? svar : null;
+    }, 20000, 1000);
+    check('I2b … og den kommer fram når appen ALT kjører (varm intent)',
+      !!varmt && (varmt.tapped.includes(snart.key) ||
+        !!(varmt.peker && varmt.peker.id === snart.obj_id)),
+      varmt || { pekerIkkeSett: true, sporet: trykkSpor() });
+  }
+
   const panelEtter = postet ? varselDump() : null;
   if (postet && panelEtter !== null) {
     check('I4 varselet er borte fra panelet etter trykket',
