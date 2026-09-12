@@ -13328,6 +13328,60 @@
     try { localStorage.setItem(NATIVE_CH_KEY, NATIVE_CH_ID); } catch (e) { /* privat modus */ }
   }
 
+  /* HVEM alarmene på telefonen tilhører.
+
+     Alarmene ligger i operativsystemets egen alarmkø. De overlever både
+     prosessen og en appoppgradering — og de bærer objektNAVN, som er ÉN
+     brukers. Etter en omstart er merket derfor det eneste som kan svare på
+     spørsmålet opprydningen ved innlogging stiller: er alarmene som ligger her
+     denne brukerens egne, eller er de noen andres?
+
+     Uten svaret måtte opprydningen gjette, og den gjettet «noen andres»: hver
+     oppstart speilet en TOM plan inn i kanalen, så den samme brukerens egne
+     alarmer ble avlyst og lagt inn igjen en runde senere. Vinduet imellom er
+     kort, men ekte — dør prosessen der, eller feiler runden som skal legge dem
+     inn igjen, står telefonen uten alarmer til appen åpnes neste gang. Og
+     kanalen er lokal nettopp for at telefonen ikke skal trenge appen.
+
+     Merket skrives først NÅR speilingen har vært gjennom broen, og fjernes når
+     planen er tatt ned. Et merke som mangler betyr derfor «ukjent», og ukjent
+     behandles som en annens: da ryddes alarmene. Det er den trygge veien rundt
+     de to tilfellene som ikke kan skilles fra hverandre — en installasjon som
+     er eldre enn merket, og en opprydning som feilet i broen. Prisen er en
+     ekstra opprydning; motsatt vei ville prisen vært forrige brukers
+     påminnelser på en ny brukers telefon. */
+  const NATIVE_OWNER_KEY = 'hk-notif-android-user';
+
+  function nativePlanOwner() {
+    try { return localStorage.getItem(NATIVE_OWNER_KEY); } catch (e) { return null; }
+  }
+  function setNativePlanOwner(uid) {
+    try {
+      if (uid) localStorage.setItem(NATIVE_OWNER_KEY, uid);
+      else localStorage.removeItem(NATIVE_OWNER_KEY);
+    } catch (e) { /* privat modus: merket gjelder da bare denne økten */ }
+  }
+
+  /* ALT som rører telefonens alarmkø står i ÉN kø, og den er ikke den samme som
+     `notifChSyncing`: den serialiserer SPEILINGENE mot hverandre, mens
+     nedriggingen ved et brukerbytte går rett på adapteren — uten vilje, uten
+     tillatelse og uten en plan (`resetNotifications`).
+
+     Lå de to i broen samtidig, kunne nedriggingens `cancel` — regnet ut fra et
+     `getPending()` som svarte SENT — avlyst alarmene speilingen nettopp la inn.
+     Signaturen ville da stått og sagt «speilet», og alarmene ikke kommet
+     tilbake før planen endret seg. Køen gjør rekkefølgen til den kallene kom i.
+
+     Halen fanger feilen, så en runde som feilet ikke blokkerer den neste — men
+     KALLEREN får den: `syncNotifChannelOnce` lar signaturen stå urørt nettopp
+     fordi runden kaster. */
+  let nativeQueueTail = Promise.resolve();
+  function nativeQueued(jobb) {
+    const runde = nativeQueueTail.then(jobb);
+    nativeQueueTail = runde.catch(() => {});
+    return runde;
+  }
+
   /* Kanalen skal finnes FØR en alarm planlegges: pluginen bygger hele
      `Notification`-objektet — kanalen inkludert — i det samme kallet som armerer
      alarmen, så en kanal som ikke finnes ennå gir et varsel uten kanalens
@@ -13433,10 +13487,21 @@
 
        Diffen går på ID-en, og ID-en er signaturen (se `nativeNotifSig`): et
        varsel som har flyttet seg i tid eller fått ny tekst er derfor et ANNET
-       tall, og blir avlyst og lagt inn på nytt i den samme runden. */
-    async sync(plan, nedrigging) {
+       tall, og blir avlyst og lagt inn på nytt i den samme runden.
+
+       Hver speiling står i KØ (`nativeQueued`): en nedrigging og en speiling i
+       broen samtidig kunne ellers latt den enes `cancel` ta den andres nye
+       alarmer. */
+    sync(plan, nedrigging) { return nativeQueued(() => this.mirror(plan, nedrigging)); },
+    async mirror(plan, nedrigging) {
       const ln = nativePlugins.LocalNotifications;
       if (!ln) return;
+      /* HVEM runden speiler for, lest FØR broen: planen ble regnet ut i den
+         brukerens tilstand, og et brukerbytte midt i runden skal ikke kunne
+         gjøre forrige brukers alarmer til den nyes (`notifEpoch`, som skiller
+         nettopp identitet og vilje fra hverandre). */
+      const eier = authUser && authUser.id;
+      const epoke = notifEpoch;
       /* KANALEN FØRST, hver runde og ikke bare når noe skal planlegges.
 
          Alarmen bærer kanalen med seg fra det øyeblikket den armeres, så den
@@ -13527,6 +13592,16 @@
       }));
       if (nye.length) await ln.schedule({ notifications: nye });
       if (migrer) setNativeChannelDone();
+      /* … og HVEM alarmene på telefonen nå tilhører. En NEDRIGGING tar planen
+         ned, og da tilhører de ingen.
+
+         Merket skrives til slutt, som kanalmerket: en runde som feilet i broen
+         skal ikke etterlate et krav på eierskap den ikke gjennomførte. Og en
+         runde som ble utstedt før et brukerbytte skriver ikke i det hele tatt —
+         alarmene den la inn er forrige brukers, og nedriggingen som står i kø
+         bak den skal få rydde dem. */
+      if (nedrigging) setNativePlanOwner(null);
+      else if (notifEpoch === epoke) setNativePlanOwner(eier);
     },
   };
 
@@ -14225,8 +14300,14 @@
     });
   }
 
-  // Utlogging/kontobytte: historikken hørte til den forrige brukeren.
-  function resetNotifications() {
+  /* Utlogging/kontobytte: historikken hørte til den forrige brukeren.
+
+     `nesteEier` er uid-en som TAR OVER enheten, eller `null` når ingen gjør det
+     (utlogging). Den kan ikke leses av `authUser` her: utloggingen rydder mens
+     økten fortsatt står, og innloggingen rydder etter at den nye er satt. Hvem
+     som kommer inn er nettopp det som avgjør om telefonens alarmer skal ryddes,
+     så kallstedet må si det. */
+  function resetNotifications(nesteEier) {
     notifEpoch++;
     closeNotifSnooze();
     clearNotifToasts();
@@ -14246,9 +14327,49 @@
     notifChSig = null;
     notifPendingTarget = null;
     notifChannelTapped.clear();
-    // Nedrigging (siste argument): planen tas ned, og en runde som rydder etter
-    // forrige bruker har ingen bruk for en varselkanal.
-    if (androidChannel.supported()) androidChannel.sync([], true).catch(() => {});
+    /* … OG TELEFONENS EGNE ALARMER, men BARE når de ikke er denne brukerens.
+
+       De to tilfellene ser like ut herfra og er helt ulike:
+
+         · en ANNEN bruker overtar enheten (eller ingen: en utlogging). Forrige
+           brukers alarmer ligger i operativsystemets alarmkø, bærer objektnavn,
+           og skal bort FØR den nye planen gjelder. Nedriggingen går uansett
+           tillatelse og uansett om kanalen er på — en speilingsrunde kan være
+           avskåret fra å kjøre, og opprydningen er ikke valgfri.
+         · den SAMME brukeren starter appen på nytt. En bufret økt gjenopprettes,
+           så hver oppstart ser ut som en innlogging — men alarmene på telefonen
+           er brukerens egne, og allerede riktige. Å speile en TOM plan her ville
+           avlyst dem, og runden etter lagt de samme alarmene inn igjen: et ekte
+           vindu uten alarmer, for ingenting.
+
+       Merket (`nativePlanOwner`) er det som skiller dem. Er det ukjent, eller
+       peker det på noen andre, ryddes alarmene — og feiler nedriggingen, står
+       merket igjen og sier fortsatt «en annens», så neste oppstart prøver på
+       nytt. Opprydningen kan altså ikke gå tapt, bare bli utsatt.
+
+       Diffen gjør resten: den nye brukerens første speilingsrunde avlyser
+       uansett alt som ikke står i planen dens. */
+    const nativeEier = nativePlanOwner();
+    if (androidChannel.supported() && !(nesteEier && nativeEier === nesteEier)) {
+      androidChannel.sync([], true).catch(() => {});
+      /* … og planen legges tilbake MED DET SAMME, fra enhetens egen tilstand.
+
+         Nedriggingen er den ene handlingen som med vilje etterlater telefonen
+         uten alarmer, og da skal vinduet være så kort som mulig. Å vente på en
+         speilingsrunde er i praksis å vente på en VELLYKKET pull: en kaldstart
+         har verken en `visibilitychange` eller en lokal endring å ri på, så en
+         oppstart uten nett kunne stått med en tom alarmkø til noe annet skjedde.
+         Runden her trenger ingen server — planen regnes ut av tilstanden
+         `loadCache()` leser inn rett etter — og den står i kø bak nedriggingen.
+
+         Kallet er GARANTIEN, ikke den eneste veien: den første `render()` etter
+         en innlogging kaller `save()`, som også ber om en runde. Men den veien
+         er en bieffekt av at noe males, og nedriggingen skal lukke sitt eget
+         vindu selv. Har ingen tatt over enheten (en utlogging), er det ingen økt
+         å speile for, og runden gjør ingenting — `syncNotifChannel` krever
+         `authUser`, og den er borte før timeren fyrer. */
+      scheduleNotifChannelSync();
+    }
     notifRetryAt = 0;
     notifErrorLogged = false;
     notifPurged.clear();
@@ -27031,7 +27152,9 @@
       // første pull — som kan utebli helt offline — ville forrige brukers
       // historikk og ulest-antall blitt stående synlig på en annen konto.)
       myAvatar = null; avatarPainted = null;
-      resetNotifications();
+      // Den som TAR OVER er denne brukeren: er telefonens alarmer alt hennes,
+      // skal de stå. Se `resetNotifications`.
+      resetNotifications(authUser.id);
       resetLocalSync();
       loadCache();
       loadNoteOps();   // samskrivingskøen er per konto, som resten av bufferen
@@ -27078,8 +27201,9 @@
     cloudChan = null; cloudRt = false; lastMy = null; lastViewSig = null;
     cloudStartedFor = null;
     // Varselhistorikken tilhørte den utloggede kontoen — badgen skal ikke stå
-    // igjen og telle en annen brukers uleste.
-    resetNotifications();
+    // igjen og telle en annen brukers uleste. Ingen tar over enheten her, så
+    // også telefonens egne alarmer rigges ned (`resetNotifications`).
+    resetNotifications(null);
     shareGroupCache.clear(); shareGroupLoading.clear();
     // Enhetslistene tilhørte den utloggede kontoen — og et kall som fortsatt
     // er i lufta bærer dem, så epoken bumpes med.
@@ -28846,6 +28970,11 @@
        eldre installasjon (merket peker på en annen kanal) og til å lese at
        migreringen faktisk fant sted. */
     NATIVE_CH_ID, NATIVE_CH_KEY,
+    /* … og merket som sier HVEM alarmene på telefonen tilhører. Testene rigger
+       både en enhet forrige bruker forlot alarmer på, og en vanlig omstart der
+       alarmene er brukerens egne — og leser merket for å se hvilken av de to
+       appen mente. */
+    NATIVE_OWNER_KEY, nativePlanOwner,
     get notifChState() { return notifChState; },
     get notifPlanTz() { return notifPlanTz; },
     get notifPushDevices() { return notifPushDevices; },

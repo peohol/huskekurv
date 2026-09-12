@@ -1079,6 +1079,65 @@ som prøver de tre kantene rundt den: en kanal som ikke lot seg opprette (ingen
 varsler, intet merke, og neste runde gjør jobben), et språkbytte uten en eneste
 alarm, og et Android uten kanaler i det hele tatt.
 
+#### Oppstart og brukerbytte: hvem alarmene tilhører
+
+Alarmene ligger i telefonens egen alarmkø. De overlever både prosessen og en
+appoppgradering, og de bærer **objektnavn** — som er én brukers. Når en bruker
+logger inn, er spørsmålet derfor ikke bare «hva skal planlegges?», men «hvem
+tilhører det som alt ligger her?».
+
+To tilfeller ser like ut fra klienten, og de er helt ulike:
+
+| Situasjonen | Hva som skal skje |
+|---|---|
+| Den SAMME brukeren starter appen på nytt (en bufret økt gjenopprettes) | ingenting. Alarmene er hennes egne, og allerede riktige |
+| En ANNEN bruker overtar enheten — eller ingen gjør det (utlogging) | forrige brukers alarmer rigges ned FØR den nye planen gjelder |
+
+Det som skiller dem er et merke på enheten, `hk-notif-android-user`: uid-en som
+telefonens alarmer sist ble speilet for.
+
+> Tar den samme brukeren over sin egen plan, røres den ikke. Ellers — en annen
+> bruker, eller et merke vi ikke kan lese — rigges planen ned.
+
+- **Merket skrives til slutt**, etter at speilingen har vært gjennom broen, og
+  fjernes når planen tas ned. Det er samme regel som kanalmerket: en runde som
+  feilet skal ikke etterlate et krav på eierskap den ikke gjennomførte.
+- **Ukjent regnes som en annens.** Et merke som mangler kan bety to ting — en
+  installasjon eldre enn merket, eller en opprydning som feilet — og de kan ikke
+  skilles. Prisen for å rydde er en ekstra runde; prisen for ikke å rydde ville
+  vært forrige brukers påminnelser på en ny brukers telefon.
+- **En opprydning kan ikke gå tapt, bare bli utsatt.** Feiler nedriggingen i
+  broen, står merket igjen og sier fortsatt «en annens» — og neste oppstart
+  prøver på nytt. Den er dessuten uavhengig av kanalen: den går selv om
+  tillatelsen er trukket og ingen speilingsrunde kan kjøre.
+- **En runde utstedt før byttet krever ikke eierskap.** Identiteten bæres av
+  `notifEpoch` (se «Et svar som lander for sent gjelder ikke lenger»): har den
+  endret seg mens runden var i broen, skriver runden ikke merket, og
+  nedriggingen som står i kø bak den får rydde alarmene den la inn.
+
+**Merket er nødvendig fordi en opprydning ikke kan gjøres blind.** Speilte
+opprydningen bare en TOM plan inn i kanalen, ville diffen avlyst alt den fant — og
+ved en vanlig oppstart «logger» appen inn fra den bufrede økten, så det den fant
+var den samme brukerens egne alarmer: avlyst, og lagt inn igjen en runde senere
+(`cancel:2 → schedule:2` for de samme id-ene). Vinduet imellom er kort og lukker
+seg selv mens appen kjører, men det er ekte: dør prosessen der, eller feiler
+runden som skal legge dem inn igjen, står telefonen uten alarmer til appen åpnes
+neste gang. Kanalen er lokal nettopp for at telefonen ikke skal trenge appen for
+å varsle.
+
+**Og alt som rører alarmkøen står i ÉN kø.** Nedriggingen går rett på adapteren —
+uten vilje, uten tillatelse og uten en plan — mens speilingene serialiserer seg
+selv (`notifChSyncing`). Lå de to i broen samtidig, kunne nedriggingens `cancel`,
+regnet ut fra et `getPending()` som svarte SENT, avlyst alarmene speilingen
+nettopp la inn: den nye brukeren ville stått uten alarmer, mens signaturen sa
+«speilet».
+
+Låst av `tests/notif-channels.test.js` 14: en vanlig omstart som verken avlyser
+eller planlegger noe, et reelt brukerbytte som rydder selv uten tillatelse, og de
+tre kantene — en runde som feiler i broen og beholder de tidligere gyldige
+alarmene, en opprydning som feiler og blir prøvd på nytt ved neste oppstart, og
+en treg nedrigging som ikke kan ta den nye brukerens nye alarmer.
+
 Ikonene står under «Ikonene i et systemvarsel».
 
 ### Nettleser: web push
@@ -1786,7 +1845,14 @@ De to henger sammen på nøyaktig ett punkt, og ellers ikke:
   varslene sine likevel — med et `createChannel` som FAKTISK ble forsøkt, i en
   fersk app, så grenen ikke kan være grønn av et memo — og at ingen ny
   tillatelse har sneket seg inn: ingen fullskjerm, ingen skjerm-på, ingen
-  presise alarmer.
+  presise alarmer. Og OPPSTARTEN: at en vanlig omstart for samme bruker verken
+  avlyser eller planlegger en eneste alarm, at en ANNEN bruker som overtar
+  enheten fortsatt får forrige brukers alarmer ryddet bort — også med
+  tillatelsen trukket, så ingen speilingsrunde kan gjøre det for oss — at en
+  runde som feiler i broen beholder de tidligere gyldige alarmene i stedet for å
+  etterlate telefonen tom, at en opprydning som feiler blir prøvd på nytt ved
+  neste oppstart, og at en treg nedrigging ikke kan avlyse alarmene den nye
+  brukerens runde nettopp la inn.
 - `tests/push-crypto.test.js` — VAPID-signaturen og RFC 8291-krypteringen, mot
   et fast vektor fra `http_ece` og med signaturen faktisk verifisert.
 - `tests/notif-modal.test.js` — knappen og badgen, modalen, nyeste øverst,
