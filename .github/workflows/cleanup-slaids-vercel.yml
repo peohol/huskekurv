@@ -1,0 +1,122 @@
+name: Cleanup Slaids Vercel deployments
+
+on:
+  push:
+    branches:
+      - maintenance/cleanup-slaids-vercel-20260913
+    paths:
+      - .github/workflows/cleanup-slaids-vercel.yml
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      TEAM_ID: team_G7GYYogxqT1IVh2J4W33gA8A
+      PROJECT_ID: prj_3xPamSAHEBFV4s1cl9WO780IJWWa
+      EXPECTED_KEEP_ID: dpl_39Bj6m8iWsy1aJzmgKJcNEWjg7Ww
+
+    steps:
+      - name: Validate token
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "::error::VERCEL_TOKEN is missing in this repository."
+            exit 1
+          fi
+
+      - name: Snapshot Slaids deployments and delete all except newest production
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tmp="$(mktemp)"
+          snapshot="$(mktemp)"
+          until_cursor=""
+          page=0
+
+          while :; do
+            url="https://api.vercel.com/v6/deployments?projectId=${PROJECT_ID}&teamId=${TEAM_ID}&limit=100"
+            if [ -n "$until_cursor" ]; then
+              url="${url}&until=${until_cursor}"
+            fi
+
+            body="$(curl --fail --silent --show-error --retry 5 --retry-all-errors \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              "$url")"
+
+            count="$(jq '.deployments | length' <<<"$body")"
+            if [ "$count" -eq 0 ]; then
+              break
+            fi
+
+            jq -c '.deployments[] | {
+              uid: (.uid // .id),
+              created: (.created // .createdAt),
+              target: .target,
+              state: (.state // .readyState),
+              url: .url
+            }' <<<"$body" >> "$tmp"
+
+            next_cursor="$(jq -r '.pagination.next // empty' <<<"$body")"
+            if [ -z "$next_cursor" ]; then
+              break
+            fi
+            if [ "$next_cursor" = "$until_cursor" ]; then
+              echo "::error::Vercel pagination stalled at ${next_cursor}."
+              exit 1
+            fi
+
+            until_cursor="$next_cursor"
+            page=$((page + 1))
+            if [ "$page" -gt 200 ]; then
+              echo "::error::Aborting after 200 pages; pagination looks wrong."
+              exit 1
+            fi
+          done
+
+          jq -s 'unique_by(.uid)' "$tmp" > "$snapshot"
+          total="$(jq 'length' "$snapshot")"
+          keep_id="$(jq -r '[.[] | select(.target == "production")] | sort_by(.created) | last | .uid // empty' "$snapshot")"
+
+          if [ -z "$keep_id" ]; then
+            echo "::error::No production deployment found. Nothing was deleted."
+            exit 1
+          fi
+
+          if [ "$keep_id" != "$EXPECTED_KEEP_ID" ]; then
+            echo "::error::Newest production changed. Expected ${EXPECTED_KEEP_ID}, found ${keep_id}. Nothing was deleted."
+            exit 1
+          fi
+
+          delete_count="$(jq --arg keep "$keep_id" '[.[] | select(.uid != $keep)] | length' "$snapshot")"
+          echo "Snapshot contains ${total} deployments."
+          echo "Keeping newest production: ${keep_id}"
+          echo "Deleting ${delete_count} other deployments."
+
+          failures=0
+          while IFS= read -r id; do
+            [ -z "$id" ] && continue
+            echo "Deleting ${id}"
+            if ! curl --fail --silent --show-error --retry 5 --retry-all-errors \
+              --request DELETE \
+              -H "Authorization: Bearer ${VERCEL_TOKEN}" \
+              "https://api.vercel.com/v13/deployments/${id}?teamId=${TEAM_ID}" \
+              >/dev/null; then
+              echo "::warning::Failed to delete ${id}"
+              failures=$((failures + 1))
+            fi
+            sleep 0.15
+          done < <(jq -r --arg keep "$keep_id" '.[] | select(.uid != $keep) | .uid' "$snapshot")
+
+          if [ "$failures" -ne 0 ]; then
+            echo "::error::Cleanup completed with ${failures} deletion failures."
+            exit 1
+          fi
+
+          echo "Cleanup complete. Kept only ${keep_id}."
